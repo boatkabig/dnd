@@ -1,0 +1,399 @@
+{
+    "nav": {
+        "title": "Dark Odyssey",
+        "login": "Login",
+        "register": "Register",
+        "logout": "Logout"
+    },
+    "home": {
+        "heroTitle": "Roll for Initiative",
+        "heroSubtitle": "Start your adventure in the world of Dungeons & Dragons with your friends, from anywhere.",
+        "startPlaying": "Start Playing",
+        "createCharacter": "Create Character",
+        "featuresTitle": "Features"
+    },
+    "menu": {
+        "createRoom": "Create Room",
+        "createRoomSub": "Host a Session",
+        "joinGame": "Join Game",
+        "joinGameSub": "Join Adventure",
+        "manageCharacter": "Characters",
+        "manageCharacterSub": "Character Smith"
+    },
+    "features": {
+        "diceRolling": {
+            "title": "Dice Rolling",
+            "description": "Complete dice system D4-D100 with Advantage/Disadvantage"
+        },
+        "combat": {
+            "title": "Combat System",
+            "description": "Initiative tracker, Turn order, Actions and Conditions"
+        },
+        "characterSheet": {
+            "title": "Character Sheet",
+            "description": "Online character sheet with Ability Scores, HP, AC and Equipment"
+        },
+        "dmControls": {
+            "title": "DM Controls",
+            "description": "Tools for DMs to force Saving Throws, Ability Checks and manage Combat"
+        },
+        "realtime": {
+            "title": "Real-time",
+            "description": "Play together in real-time, see dice rolls and combat updates live"
+        },
+        "i18n": {
+            "title": "Thai Language",
+            "description": "Support for Thai and English - Classes, Races, Spells translated"
+        }
+    },
+    "auth": {
+        "loginTitle": "Login",
+        "registerTitle": "Register",
+        "username": "Username",
+        "email": "Email",
+        "password": "Password",
+        "preferredLang": "Preferred Language",
+        "noAccount": "Don't have an account?",
+        "hasAccount": "Already have an account?"
+    },
+    "character": {
+        "createTitle": "Create Character",
+        "createSubtitle": "Create Your Character",
+        "back": "Back to Home",
+        "next": "Next →",
+        "previous": "← Previous",
+        "save": "✨ Save Character",
+        "edit": "← Edit",
+        "step1Title": "Character Name",
+        "step1Placeholder": "Enter your character name...",
+        "step2Title": "Select Race",
+        "step3Title": "Select Class",
+        "step4Title": "Set Ability Scores",
+        "step5Title": "📜 Character Summary",
+        "rollAbilities": "🎲 Roll 4d6kh3",
+        "resetPointBuy": "🔄 Reset Point Buy",
+        "pointsRemaining": "points remaining",
+        "modifier": "Modifier"
+    },
+    "races": {
+        "aasimar": {
+            "name": "Aasimar",
+            "description": "Aasimar are mortals who carry a spark of the Upper Planes within their souls. They can use that power to wield light, healing energy, and heavenly fury.",
+            "traits": {
+                "celestial_resistance": "Celestial Resistance: Resistance to necrotic and radiant damage",
+                "healing_hands": "Healing Hands: Touch to heal, roll d4 equal to proficiency bonus",
+                "light_bearer": "Light Bearer: Know the Light cantrip",
+                "celestial_revelation": "Celestial Revelation (at level 3): Heavenly Wings, Inner Radiance, or Necrotic Shroud"
+            }
+        },
+        "dragonborn": {
+            "name": "Dragonborn",
+            "description": "Dragonborn ancestors hatched from the eggs of chromatic and metallic dragons. They are wingless, have dragon-like scales, and stand on two legs.",
+            "traits": {
+                "breath_weapon": "Breath Weapon: Exhale magical breath in a 15-foot cone or 30-foot line",
+                "damage_resistance": "Damage Resistance: Based on draconic ancestry",
+                "draconic_flight": "Draconic Flight (at level 5): Sprout spectral wings for 10 minutes"
+            },
+            "ancestry": {
+                "black": "Black Dragon - Acid",
+                "blue": "Blue Dragon - Lightning",
+                "brass": "Brass Dragon - Fire",
+                "bronze": "Bronze Dragon - Lightning",
+                "copper": "Copper Dragon - Acid",
+                "gold": "Gold Dragon - Fire",
+                "green": "Green Dragon - Poison",
+                "red": "Red Dragon - Fire",
+                "silver": "Silver Dragon - Cold",
+                "white": "White Dragon - Cold"
+            }
+        },
+        "dwarf": {
+            "name": "Dwarf",
+            "description": "Dwarves were created from earth in the elder days by a god of forge. Stout and often wide, dwarves carved cities and strongholds into mountains.",
+            "traits": {
+                "darkvision": "Darkvision: See in darkness up to 120 feet",
+                "dwarven_resilience": "Dwarven Resilience: Resistance to poison damage and advantage on saves vs poisoned",
+                "dwarven_toughness": "Dwarven Toughness: Max HP increases by 1 per level",
+                "stonecunning": "Stonecunning: Bonus action to gain tremorsense 60 feet"
+            }
+        },
+        "elf": {
+            "name": "Elf",
+            "description": "Created by Corellon, ancient elves could change their form at will. Elves have pointed ears and no facial hair. They can live up to 750 years.",
+            "traits": {
+                "fey_ancestry": "Fey Ancestry: Advantage on saves against being charmed",
+                "keen_senses": "Keen Senses: Proficiency in Insight, Perception, or Survival",
+                "trance": "Trance: Don't need to sleep, can finish long rest in 4 hours of meditation"
+            },
+            "lineages": {
+                "drow": {
+                    "name": "Drow",
+                    "description": "Drow typically dwell in the Underdark. 120-foot darkvision, know Dancing Lights",
+                    "spells": "Level 3: Faerie Fire | Level 5: Darkness"
+                },
+                "high_elf": {
+                    "name": "High Elf",
+                    "description": "High Elves gain magic from crossing between Feywild and Material Plane. Know Prestidigitation",
+                    "spells": "Level 3: Detect Magic | Level 5: Misty Step"
+                },
+                "wood_elf": {
+                    "name": "Wood Elf",
+                    "description": "Wood Elves carry primordial forest magic. Speed 35 feet, know Druidcraft",
+                    "spells": "Level 3: Longstrider | Level 5: Pass without Trace"
+                }
+            }
+        },
+        "gnome": {
+            "name": "Gnome",
+            "description": "Gnomes are magical creatures created by gods of invention, illusion, and subterranean life. Small with large eyes and pointed ears, they live about 425 years.",
+            "traits": {
+                "darkvision": "Darkvision: See in darkness up to 60 feet",
+                "gnomish_cunning": "Gnomish Cunning: Advantage on INT/WIS/CHA saving throws"
+            },
+            "lineages": {
+                "forest_gnome": {
+                    "name": "Forest Gnome",
+                    "description": "Know Minor Illusion cantrip and Speak with Animals spell"
+                },
+                "rock_gnome": {
+                    "name": "Rock Gnome",
+                    "description": "Know Mending and Prestidigitation cantrips. Can create Tiny clockwork devices"
+                }
+            }
+        },
+        "goliath": {
+            "name": "Goliath",
+            "description": "Goliaths are distant descendants of giants. Each goliath bears traits of their giant ancestry, granting various supernatural abilities.",
+            "traits": {
+                "powerful_build": "Powerful Build: Count as one size larger for carrying capacity. Advantage vs grappled",
+                "large_form": "Large Form (at level 5): Bonus action to become Large for 10 minutes, advantage on STR and +10 speed"
+            },
+            "ancestry": {
+                "cloud_giant": {
+                    "name": "Cloud Giant - Cloud's Jaunt",
+                    "description": "Bonus action to teleport 30 feet"
+                },
+                "fire_giant": {
+                    "name": "Fire Giant - Fire's Burn",
+                    "description": "When you hit with attack, deal extra 1d10 fire damage"
+                },
+                "frost_giant": {
+                    "name": "Frost Giant - Frost's Chill",
+                    "description": "When you hit, deal extra 1d6 cold and reduce speed by 10 feet"
+                },
+                "hill_giant": {
+                    "name": "Hill Giant - Hill's Tumble",
+                    "description": "When you hit, knock target prone"
+                },
+                "stone_giant": {
+                    "name": "Stone Giant - Stone's Endurance",
+                    "description": "Reaction to roll 1d12 + CON to reduce damage"
+                },
+                "storm_giant": {
+                    "name": "Storm Giant - Storm's Thunder",
+                    "description": "Reaction to deal 1d8 thunder damage to attacker within 60 feet"
+                }
+            }
+        },
+        "halfling": {
+            "name": "Halfling",
+            "description": "Guided by gods who cherish life, home, and warmth, halflings prefer peaceful communities where families and friends work together.",
+            "traits": {
+                "brave": "Brave: Advantage on saves against being frightened",
+                "halfling_nimbleness": "Halfling Nimbleness: Move through space of larger creatures",
+                "luck": "Luck: When you roll a 1 on d20, you can reroll",
+                "naturally_stealthy": "Naturally Stealthy: Can hide behind creatures larger than you"
+            }
+        },
+        "human": {
+            "name": "Human",
+            "description": "Found throughout the multiverse, humans are diverse and ambitious. Their ambition and innovation are renowned, respected, and feared.",
+            "traits": {
+                "resourceful": "Resourceful: Gain Heroic Inspiration when you finish a Long Rest",
+                "skillful": "Skillful: Proficiency in one skill of your choice",
+                "versatile": "Versatile: Gain one Origin Feat (recommended: Skilled)"
+            }
+        },
+        "orc": {
+            "name": "Orc",
+            "description": "Orcs trace their creation to Gruumsh, a powerful god who roams the Material Plane. Gruumsh gifted his children with endurance, determination, and darkvision.",
+            "traits": {
+                "darkvision": "Darkvision: See in darkness up to 120 feet",
+                "adrenaline_rush": "Adrenaline Rush: Bonus action to Dash and gain temp HP equal to proficiency bonus",
+                "relentless_endurance": "Relentless Endurance: When reduced to 0 HP but not killed, drop to 1 HP instead"
+            }
+        },
+        "tiefling": {
+            "name": "Tiefling",
+            "description": "Tieflings are either born of the Lower Planes or have ancestors who are devils, demons, or other fiends. This fiendish legacy grants power without affecting morality.",
+            "traits": {
+                "darkvision": "Darkvision: See in darkness up to 60 feet",
+                "otherworldly_presence": "Otherworldly Presence: Know Thaumaturgy cantrip"
+            },
+            "legacies": {
+                "abyssal": {
+                    "name": "Abyssal Legacy",
+                    "description": "The chaos of the Abyss, Pandemonium, and despair of Carceri call to you.",
+                    "resistance": "Poison resistance",
+                    "cantrip": "Poison Spray",
+                    "spells": "Level 3: Ray of Sickness | Level 5: Hold Person"
+                },
+                "chthonic": {
+                    "name": "Chthonic Legacy",
+                    "description": "You feel the pull of Carceri, the greed of Gehenna, and the gloom of Hades.",
+                    "resistance": "Necrotic resistance",
+                    "cantrip": "Chill Touch",
+                    "spells": "Level 3: False Life | Level 5: Ray of Enfeeblement"
+                },
+                "infernal": {
+                    "name": "Infernal Legacy",
+                    "description": "Your connection links you to Gehenna, the Nine Hells, and the battlefields of Acheron.",
+                    "resistance": "Fire resistance",
+                    "cantrip": "Fire Bolt",
+                    "spells": "Level 3: Hellish Rebuke | Level 5: Darkness"
+                }
+            }
+        }
+    },
+    "classes": {
+        "barbarian": "Barbarian",
+        "bard": "Bard",
+        "cleric": "Cleric",
+        "druid": "Druid",
+        "fighter": "Fighter",
+        "monk": "Monk",
+        "paladin": "Paladin",
+        "ranger": "Ranger",
+        "rogue": "Rogue",
+        "sorcerer": "Sorcerer",
+        "warlock": "Warlock",
+        "wizard": "Wizard"
+    },
+    "backgrounds": {
+        "acolyte": {
+            "name": "Acolyte",
+            "abilities": "Intelligence, Wisdom, Charisma",
+            "feat": "Magic Initiate (Cleric)",
+            "skills": "Insight, Religion",
+            "tools": "Calligrapher's Supplies",
+            "equipment": "(A) Calligrapher's Supplies, Book (prayers), Holy Symbol, Parchment (10), Robe, 8 GP; or (B) 50 GP",
+            "desc": "You dedicated your life to service in a temple, performing sacred rites to honor a god or pantheon of gods. You served under a priest and learned religious teachings. Thanks to your priest's teachings and your own devotion, you also learned how to channel divine power."
+        },
+        "criminal": {
+            "name": "Criminal",
+            "abilities": "Dexterity, Constitution, Intelligence",
+            "feat": "Alert",
+            "skills": "Sleight of Hand, Stealth",
+            "tools": "Thieves' Tools",
+            "equipment": "(A) 2 Daggers, Thieves' Tools, Crowbar, 2 Pouches, Traveler's Clothes, 16 GP; or (B) 50 GP",
+            "desc": "You spent your early years in dark alleys, picking pockets or casing shops. You might have been part of a small gang that looked out for each other, or a lone wolf protecting yourself from local gangs and other lawbreakers."
+        },
+        "sage": {
+            "name": "Sage",
+            "abilities": "Constitution, Intelligence, Wisdom",
+            "feat": "Magic Initiate (Wizard)",
+            "skills": "Arcana, History",
+            "tools": "Calligrapher's Supplies",
+            "equipment": "(A) Quarterstaff, Calligrapher's Supplies, Book (history), Parchment (8), Robe, 8 GP; or (B) 50 GP",
+            "desc": "You spent years traveling between manors and monasteries, performing odd jobs to gain access to their libraries. You spent most of your time studying books and scrolls, learning ancient lore and knowledge from across the multiverse."
+        },
+        "soldier": {
+            "name": "Soldier",
+            "abilities": "Strength, Dexterity, Constitution",
+            "feat": "Savage Attacker",
+            "skills": "Athletics, Intimidation",
+            "tools": "One type of Gaming Set",
+            "equipment": "(A) Spear, Shortbow, 20 Arrows, Gaming Set, Healer's Kit, Quiver, Traveler's Clothes, 14 GP; or (B) 50 GP",
+            "desc": "You began training for war as soon as you were old enough, carrying only memories of life before the ranks. War is in your blood. When opportunity presented itself, you used that training on the battlefield, defending your realm through warfare."
+        }
+    },
+    "bgLabels": {
+        "abilities": "Abilities",
+        "feat": "Feat",
+        "skills": "Skills",
+        "tools": "Tool Proficiency",
+        "equipment": "Equipment"
+    },
+    "settings": {
+        "title": "Settings",
+        "back": "Back to Home",
+        "save": "Save Settings",
+        "language": {
+            "title": "Language",
+            "label": "Display Language",
+            "desc": "Change the language used in the app"
+        },
+        "display": {
+            "title": "Display",
+            "theme": "Theme",
+            "themeDesc": "Choose app color theme",
+            "dark": "Dark",
+            "light": "Light",
+            "system": "System"
+        },
+        "audio": {
+            "title": "Audio",
+            "effects": "Sound Effects",
+            "effectsDesc": "Toggle in-game sound effects",
+            "notifications": "Notifications",
+            "notificationsDesc": "Toggle notification sounds"
+        },
+        "account": {
+            "title": "Account",
+            "profile": "Profile",
+            "profileDesc": "Manage your profile",
+            "privacy": "Privacy",
+            "privacyDesc": "Privacy settings",
+            "edit": "Edit",
+            "manage": "Manage"
+        },
+        "version": "Dark Odyssey v3.0"
+    },
+    "mapEditor": {
+        "title": "Map Editor",
+        "import": "Import",
+        "mapBackground": "Map Background",
+        "mapBackgroundDesc": "Place directly on canvas",
+        "spriteAsset": "Sprite Asset",
+        "spriteAssetDesc": "Save to Asset Library",
+        "assets": "Assets",
+        "assetLibrary": "Asset Library",
+        "assetLibraryDesc": "Click + to place on canvas",
+        "noAssets": "No sprite assets yet",
+        "noAssetsHint": "Import → Sprite Asset",
+        "placeOnCanvas": "Place on canvas",
+        "deleteAsset": "Delete asset",
+        "tools": {
+            "select": "Select/Drag",
+            "hand": "Pan canvas"
+        },
+        "grid": {
+            "title": "Grid",
+            "enabled": "Enabled",
+            "type": "Type",
+            "square": "Square",
+            "hexH": "Hex Horizontal",
+            "hexV": "Hex Vertical",
+            "isometric": "Isometric",
+            "lineStyle": "Line Style",
+            "solid": "Solid",
+            "dashed": "Dashed",
+            "dots": "Dots",
+            "cellSize": "Cell Size",
+            "color": "Color",
+            "white": "White",
+            "black": "Black",
+            "custom": "Custom",
+            "opacity": "Opacity"
+        },
+        "sprite": {
+            "title": "Sprite",
+            "size": "Size",
+            "cells": "cells",
+            "resizeToGrid": "Resize to Grid",
+            "custom": "Custom",
+            "delete": "Delete"
+        },
+        "dragDropHint": "Drag and drop images"
+    }
+}

@@ -1,0 +1,210 @@
+@import "tailwindcss";
+
+/* Dark Fantasy Theme for DND Web Game */
+
+:root {
+  /* Base colors */
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #1a1a2e;
+  --bg-card: #16213e;
+  --bg-hover: #1f2b4d;
+
+  /* Accent colors */
+  --accent-gold: #d4af37;
+  --accent-gold-light: #f4cf47;
+  --accent-red: #8b0000;
+  --accent-red-light: #dc143c;
+  --accent-purple: #4a1c6e;
+  --accent-purple-light: #7b2cbf;
+
+  /* Text colors */
+  --text-primary: #e8e6e3;
+  --text-secondary: #9d9d9d;
+  --text-muted: #6c6c6c;
+
+  /* Effects */
+  --glow-gold: 0 0 20px rgba(212, 175, 55, 0.4);
+  --glow-purple: 0 0 30px rgba(123, 44, 191, 0.3);
+  --glow-red: 0 0 20px rgba(139, 0, 0, 0.4);
+
+  /* Gradients */
+  --gradient-dark: linear-gradient(135deg, #0d0d0d 0%, #1a1a2e 50%, #16213e 100%);
+  --gradient-gold: linear-gradient(135deg, #d4af37 0%, #f4cf47 100%);
+  --gradient-purple: linear-gradient(135deg, #4a1c6e 0%, #7b2cbf 100%);
+
+  --background: var(--bg-primary);
+  --foreground: var(--text-primary);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-cinzel);
+}
+
+/* Fonts */
+@font-face {
+  font-family: 'Cinzel';
+  src: url('https://fonts.gstatic.com/s/cinzel/v23/8vIU7ww63mVu7gtR-kwKxNvkNOjw-tbnTYrvDE5ZPsI.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+/* Global Styles */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--gradient-dark);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+/* Typography */
+.font-display {
+  font-family: 'Cinzel', serif;
+}
+
+.text-gold {
+  color: var(--accent-gold);
+}
+
+.text-gradient-gold {
+  background: var(--gradient-gold);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow effects */
+.glow-gold {
+  box-shadow: var(--glow-gold);
+}
+
+.glow-purple {
+  box-shadow: var(--glow-purple);
+}
+
+.text-glow-gold {
+  text-shadow: 0 0 10px rgba(212, 175, 55, 0.5);
+}
+
+/* Buttons */
+.btn-primary {
+  background: var(--gradient-gold);
+  color: #0d0d0d;
+  padding: 0.75rem 2rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  box-shadow: var(--glow-gold);
+  transform: translateY(-2px);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--accent-gold);
+  padding: 0.75rem 2rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease;
+  border: 2px solid var(--accent-gold);
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  background: rgba(212, 175, 55, 0.1);
+  box-shadow: var(--glow-gold);
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  border-color: var(--accent-gold);
+  box-shadow: var(--glow-gold);
+  transform: translateY(-4px);
+}
+
+/* Animations */
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 20px rgba(212, 175, 55, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 40px rgba(212, 175, 55, 0.6);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--accent-purple);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-purple-light);
+}

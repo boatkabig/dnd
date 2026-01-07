@@ -1,0 +1,290 @@
+import React, { useState, useEffect } from 'react';
+import {
+Shield, Zap, Skull, Sword, Book, Scroll,
+Map as MapIcon, Settings, Heart, Flame,
+ChevronRight, Dices, Eye, Sparkles,
+Wind, Crosshair, Anchor, Music, Trees,
+ChevronLeft
+} from 'lucide-react';
+
+const CLASSES = [
+{ id: 'barbarian', name: 'บาร์บาเรียน (Barbarian)', image: 'https://dnd-th.com/assets/classes/class-barbarian.png',
+icon:
+<Sword />, color: 'red', stats: { hp: 140, mp: 10, str: 20, dex: 14, int: 8, wis: 10, cha: 8 }, desc:
+'นักรบผู้ใช้โทสะทำลายล้างทุกสิ่ง ยิ่งเจ็บปวดยิ่งแข็งแกร่ง' },
+{ id: 'bard', name: 'บาร์ด (Bard)', image: 'https://dnd-th.com/assets/classes/class-bard.png', icon:
+<Music />, color: 'pink', stats: { hp: 80, mp: 90, str: 8, dex: 14, int: 12, wis: 10, cha: 18 }, desc:
+'ผู้ร่ายมนตราผ่านท่วงทำนองแห่งบทกวีและเสียงดนตรีที่สั่นสะเทือนจิตวิญญาณ' },
+{ id: 'cleric', name: 'เคลอริก (Cleric)', image: 'https://dnd-th.com/assets/classes/class-cleric.png', icon:
+<Sparkles />, color: 'amber', stats: { hp: 100, mp: 100, str: 14, dex: 10, int: 10, wis: 18, cha: 12 }, desc:
+'ตัวแทนแห่งทวยเทพผู้มีอำนาจรักษาชีวิตและชำระล้างความตาย' },
+{ id: 'druid', name: 'ดรูอิด (Druid)', image: 'https://dnd-th.com/assets/classes/class-druid.png', icon:
+<Trees />, color: 'emerald', stats: { hp: 90, mp: 110, str: 10, dex: 12, int: 10, wis: 19, cha: 10 }, desc:
+'ผู้พิทักษ์ธรรมชาติที่สามารถยืมพลังจากสัตว์ป่าและธาตุทั้งสี่' },
+{ id: 'fighter', name: 'ไฟท์เตอร์ (Fighter)', image: 'https://dnd-th.com/assets/classes/class-fighter.png', icon:
+<Shield />, color: 'blue', stats: { hp: 120, mp: 20, str: 18, dex: 16, int: 10, wis: 10, cha: 10 }, desc:
+'จอมทัพผู้เชี่ยวชาญศาสตราและยุทธวิธีทางทหารทุกรูปแบบ' },
+{ id: 'monk', name: 'มองค์ (Monk)', image: 'https://dnd-th.com/assets/classes/class-monk.png', icon:
+<Zap />, color: 'orange', stats: { hp: 95, mp: 60, str: 12, dex: 18, int: 10, wis: 16, cha: 10 }, desc:
+'นักสู้ผู้ฝึกฝนกายและจิตจนแกร่งดั่งเหล็ก ใช้กำปั้นแทนอาวุธ' },
+{ id: 'paladin', name: 'พาลาดิน (Paladin)', image: 'https://dnd-th.com/assets/classes/class-paladin.png', icon:
+<Anchor />, color: 'yellow', stats: { hp: 130, mp: 50, str: 16, dex: 10, int: 8, wis: 12, cha: 16 }, desc:
+'อัศวินผู้ยึดมั่นในสัตย์สาบานและแสงสว่างแห่งศรัทธา' },
+{ id: 'ranger', name: 'เรนเจอร์ (Ranger)', image: 'https://dnd-th.com/assets/classes/class-ranger.png', icon:
+<Crosshair />, color: 'lime', stats: { hp: 100, mp: 40, str: 12, dex: 19, int: 10, wis: 14, cha: 10 }, desc:
+'พรานป่าผู้ล่าสังหารจากระยะไกลและแกะรอยศัตรูท่ามกลางแดนเถื่อน' },
+{ id: 'rogue', name: 'โรก (Rogue)', image: 'https://dnd-th.com/assets/classes/class-rogue.png', icon:
+<Skull />, color: 'slate', stats: { hp: 85, mp: 30, str: 10, dex: 20, int: 14, wis: 10, cha: 12 }, desc:
+'ผู้ชำนาญการลอบเร้นและปลิดชีพศัตรูจากเงามืดด้วยความเร็วสูง' },
+{ id: 'sorcerer', name: 'ซอเซอร์เรอร์ (Sorcerer)', image: 'https://dnd-th.com/assets/classes/class-sorcerer.png', icon:
+<Flame />, color: 'cyan', stats: { hp: 70, mp: 120, str: 8, dex: 12, int: 12, wis: 10, cha: 19 }, desc:
+'ผู้ร่ายเวทย์ด้วยสายเลือดแห่งมังกรและพลังงานดิบที่ไหลเวียนในกาย' },
+{ id: 'warlock', name: 'วอร์ล็อค (Warlock)', image: 'https://dnd-th.com/assets/classes/class-warlock.png', icon:
+<Eye />, color: 'purple', stats: { hp: 90, mp: 100, str: 10, dex: 12, int: 14, wis: 10, cha: 18 }, desc:
+'ผู้ทำพันธสัญญากับสิ่งลี้ลับเพื่อแลกกับอำนาจมืดอันเหนือจินตนาการ' },
+{ id: 'wizard', name: 'วิซาร์ด (Wizard)', image: 'https://dnd-th.com/assets/classes/class-wizard.png', icon:
+<Book />, color: 'indigo', stats: { hp: 65, mp: 130, str: 8, dex: 12, int: 20, wis: 14, cha: 10 }, desc:
+'จอมปราชญ์ผู้ใช้เวลาทั้งชีวิตศึกษาตำราเวทย์และกฎแห่งจักรวาล' }
+];
+
+export default function App() {
+const [view, setView] = useState('selection');
+const [character, setCharacter] = useState(CLASSES[0]);
+const [logs, setLogs] = useState([{ text: "เงามืดกำลังขยับ... เจ้าพร้อมแล้วหรือยัง?", type: "system" }]);
+const [isRolling, setIsRolling] = useState(false);
+const [lastRoll, setLastRoll] = useState(null);
+
+const addLog = (text, type = 'normal') => {
+setLogs(prev => [{ text, type, time: new Date().toLocaleTimeString('th-TH') }, ...prev].slice(0, 15));
+};
+
+const rollDice = () => {
+if (isRolling) return;
+setIsRolling(true);
+setTimeout(() => {
+const res = Math.floor(Math.random() * 20) + 1;
+setLastRoll(res);
+setIsRolling(false);
+if (res === 20) addLog("CRITICAL SUCCESS! โชคชะตาอยู่ข้างเจ้า", "success");
+else if (res === 1) addLog("CRITICAL FAIL! ความตายคืบคลานเข้ามา", "danger");
+else addLog(`ทอยได้แต้ม ${res}`, "normal");
+}, 600);
+};
+
+const SelectionScreen = () => (
+<div className="h-screen w-screen overflow-hidden bg-black text-white font-serif relative flex flex-col">
+  {/* Dynamic Cinematic Backdrop */}
+  <div className="absolute inset-0 pointer-events-none">
+    <img key={`bg-${character.id}`} src={character.image}
+      className="w-full h-full object-cover object-top opacity-10 blur-xl scale-125 transition-all duration-1000"
+      alt="bg-blur" />
+    <div className="absolute inset-0 bg-gradient-to-b from-black via-transparent to-black"></div>
+    <div className="absolute inset-0 bg-gradient-to-r from-black via-transparent to-black"></div>
+  </div>
+
+  {/* Main Layout */}
+  <div className="relative z-10 flex flex-col h-full">
+    {/* Header - Compact */}
+    <header className="px-12 pt-8 flex justify-between items-end">
+      <div>
+        <h1 className="text-5xl font-black tracking-tighter italic text-white/90">DARK ODYSSEY</h1>
+        <p className="text-[10px] uppercase tracking-[0.5em] text-white/30 mt-1">Character Initiation</p>
+      </div>
+      <div className="text-right">
+        <span className="text-[10px] text-white/20 uppercase tracking-widest font-sans">System Status: Stable</span>
+      </div>
+    </header>
+
+    {/* Content Section - Balanced Grid */}
+    <div className="flex-grow flex items-center px-12 gap-8 overflow-hidden">
+      {/* LEFT: All Class Grid Selection */}
+      <div className="w-1/3 flex flex-col gap-6">
+        <div className="space-y-1">
+          <span className="text-xs font-bold text-white/40 uppercase tracking-widest">Select Class</span>
+          <div className="h-px w-full bg-white/10"></div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-2">
+          {CLASSES.map((c) => (
+          <button key={c.id} onClick={()=> setCharacter(c)}
+            className={`relative aspect-square border overflow-hidden transition-all duration-300 group
+            ${character.id === c.id ? 'border-white ring-2 ring-white/20 scale-105' : 'border-white/10 grayscale
+            opacity-40 hover:opacity-100 hover:grayscale-0 hover:border-white/40'}
+            `}
+            >
+            <img src={c.image} className="w-full h-full object-cover object-top" alt={c.name} />
+            <div className={`absolute inset-0 bg-gradient-to-t from-black/80 to-transparent transition-opacity
+              ${character.id===c.id ? 'opacity-0' : 'opacity-100' }`}></div>
+          </button>
+          ))}
+        </div>
+
+        <div className="p-4 bg-white/[0.02] border border-white/5 space-y-4">
+          <div className="flex justify-between items-center border-b border-white/5 pb-2">
+            <span className="text-xs text-white font-bold">{character.name}</span>
+            <span className="text-xs text-white/40">{character.icon}</span>
+          </div>
+          <p className="text-xs italic text-slate-500 leading-relaxed">{character.desc}</p>
+        </div>
+      </div>
+
+      {/* CENTER: Massive Preview */}
+      <div className="flex-1 flex justify-center items-center relative">
+        <div className="absolute w-[80%] h-[80%] bg-white/5 rounded-full blur-[100px] animate-pulse"></div>
+        <img key={character.id} src={character.image}
+          className="relative max-h-[80vh] object-contain drop-shadow-[0_0_100px_rgba(0,0,0,1)] animate-in fade-in zoom-in duration-1000"
+          alt="preview" />
+      </div>
+
+      {/* RIGHT: Detailed Stats & Proceed */}
+      <div className="w-1/4 flex flex-col gap-8 justify-center">
+        <div className="space-y-4">
+          <span className="text-xs font-bold text-white/40 uppercase tracking-widest">Attributes</span>
+          <div className="space-y-3">
+            {Object.entries(character.stats).map(([key, val]) => (
+            <div key={key} className="flex flex-col gap-1">
+              <div className="flex justify-between text-[10px] uppercase font-bold text-white/60">
+                <span>{key}</span>
+                <span className="text-white">{val}</span>
+              </div>
+              <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                <div className="h-full bg-white transition-all duration-1000" style={{ width: `${(val/20)*100}%` }}>
+                </div>
+              </div>
+            </div>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={()=> setView('main')}
+          className="w-full py-6 bg-white text-black font-black uppercase tracking-[0.4em] text-sm hover:bg-slate-200
+          hover:tracking-[0.5em] transition-all flex items-center justify-center gap-3 active:scale-95"
+          >
+          ENTER REALM
+          <ChevronRight size={18} />
+        </button>
+      </div>
+    </div>
+
+    {/* Footer info */}
+    <footer
+      className="h-12 border-t border-white/5 flex items-center px-12 justify-center text-[9px] text-white/20 uppercase tracking-[0.5em]">
+      Dungeons & Dragons Dark Fantasy • 2025 Edition
+    </footer>
+  </div>
+</div>
+);
+
+const GameScreen = () => (
+<div className="h-screen w-screen overflow-hidden bg-[#030303] text-slate-400 font-serif flex flex-col">
+  {/* Top HUD */}
+  <div
+    className="h-20 border-b border-white/5 flex items-center justify-between px-10 bg-black/60 backdrop-blur-md z-20">
+    <div className="flex items-center gap-6">
+      <div className="w-12 h-12 border border-white/10 bg-white/5 rounded-sm overflow-hidden">
+        <img src={character.image} className="w-full h-full object-cover object-top grayscale" alt="avatar" />
+      </div>
+      <div className="flex flex-col">
+        <span className="text-white font-black tracking-widest uppercase text-sm">{character.name.split(' ')[0]}</span>
+        <span className="text-[9px] text-slate-600 tracking-widest">LVL 1 BOUND WANDERER</span>
+      </div>
+    </div>
+
+    <div className="flex gap-6">
+      <StatusOrb icon={<Heart className="text-red-500" size={14} />} val={character.stats.hp} color="bg-red-600" />
+      <StatusOrb icon={<Flame className="text-blue-500" size={14} />} val={character.stats.mp} color="bg-blue-600" />
+    </div>
+
+    <div className="flex items-center gap-8">
+      <div className={`w-12 h-12 flex items-center justify-center border-2 border-white/10 rounded-sm transition-all
+        duration-500 bg-white/5 ${isRolling ? 'animate-pulse border-white' : '' } `}>
+        <span className="text-xl font-black text-white">{isRolling ? '?' : (lastRoll || '0')}</span>
+      </div>
+      <button onClick={()=> setView('selection')} className="text-[10px] uppercase tracking-widest text-slate-700
+        hover:text-white transition-all">EXIT GAME</button>
+    </div>
+  </div>
+
+  <div className="flex-grow flex overflow-hidden">
+    <div className="flex-1 relative flex flex-col overflow-hidden">
+      <div className="absolute inset-0">
+        <img src="https://images.unsplash.com/photo-1519074063912-ad25b5ceb59f?q=80&w=2000"
+          className="w-full h-full object-cover opacity-10 grayscale brightness-50" alt="location" />
+      </div>
+
+      <div className="relative z-10 flex flex-col h-full p-16 justify-center">
+        <div className="max-w-4xl mx-auto space-y-12">
+          <div className="space-y-2">
+            <span className="text-[10px] text-white/40 uppercase tracking-[0.5em]">The Ruined Cathedral</span>
+            <h3 className="text-4xl font-bold text-white tracking-tighter">เงาประหลาดหลังเสาหิน</h3>
+          </div>
+
+          <p
+            className="text-2xl leading-relaxed italic text-slate-300 first-letter:text-7xl first-letter:text-white first-letter:font-black first-letter:mr-4 first-letter:float-left">
+            ลมหนาวกรีดผ่านผิวหนังขณะที่เจ้าก้าวเข้าสู่ส่วนลึกของวิหาร ทันใดนั้น เงาร่างขนาดใหญ่ขยับตัวที่มุมมืด
+            ดวงตาสีแดงฉานสะท้อนแสงไฟจากคบเพลิงของเจ้า...
+          </p>
+
+          <div className="grid grid-cols-2 gap-4">
+            <GameAction label="เข้าปะทะด้วยพละกำลัง" sub="STR Roll" onClick={()=> { addLog(`เจ้าพุ่งเข้าใส่เงาทมิฬ!`,
+              'action'); rollDice(); }} />
+              <GameAction label="รวบรวมสมาธิปลดปล่อยพลัง" sub="Magic Roll" onClick={()=> {
+                addLog(`มนตราไหลเวียนทั่วกาย...`, 'action'); rollDice(); }} />
+                <GameAction label="สังเกตหาทางหนีทีไล่" sub="WIS Roll" onClick={()=> { addLog(`เจ้าพยายามมองหาทางรอด`,
+                  'action'); rollDice(); }} />
+                  <GameAction label="พยายามสื่อสารในเงามืด" sub="CHA Roll" onClick={()=> {
+                    addLog(`เจ้าเปล่งเสียงก้องขอเจรจา`, 'action'); rollDice(); }} />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Compact Log */}
+    <div className="w-[350px] border-l border-white/5 bg-black/90 p-8 flex flex-col">
+      <div
+        className="text-[10px] uppercase tracking-[0.3em] font-black text-slate-600 mb-8 border-b border-white/5 pb-4">
+        Chronicles</div>
+      <div className="flex-grow space-y-4 overflow-y-auto scrollbar-hide flex flex-col-reverse">
+        {logs.map((log, i) => (
+        <div key={i} className={`p-4 border-l transition-all animate-in fade-in slide-in-from-right-10 duration-500
+          ${log.type==='action' ? 'border-white bg-white/5' : 'border-transparent opacity-40' } ${log.type==='success'
+          ? 'border-emerald-500 text-emerald-400' : log.type==='danger' ? 'border-red-500 text-red-400' : '' } `}>
+          <div className="text-[8px] text-slate-800 font-mono mb-1">{log.time}</div>
+          <div className="text-xs leading-relaxed">{log.text}</div>
+        </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</div>
+);
+
+const StatusOrb = ({ icon, val, color }) => (
+<div className="flex flex-col gap-1">
+  <div className="flex justify-between items-center text-[8px] font-black uppercase text-white/40 px-1">
+    <span>{icon}</span>
+    <span>{val}</span>
+  </div>
+  <div className="w-32 h-1 bg-black rounded-full overflow-hidden border border-white/5">
+    <div className={`h-full ${color} w-3/4 shadow-[0_0_8px_rgba(255,255,255,0.1)]`}></div>
+  </div>
+</div>
+);
+
+const GameAction = ({ label, sub, onClick }) => (
+<button onClick={onClick}
+  className="group p-6 bg-white/[0.01] border border-white/5 hover:border-white/30 hover:bg-white/[0.04] transition-all text-left relative overflow-hidden active:scale-95">
+  <div
+    className="text-white font-bold uppercase tracking-widest text-xs mb-1 group-hover:translate-x-1 transition-transform">
+    {label}</div>
+  <div className="text-[9px] text-slate-600 italic font-sans">{sub}</div>
+  <div
+    className="absolute left-0 top-0 bottom-0 w-0.5 bg-white scale-y-0 group-hover:scale-y-100 transition-transform origin-bottom duration-500">
+  </div>
+</button>
+);
+
+return view === 'selection' ?
+<SelectionScreen /> :
+<GameScreen />;
+}
