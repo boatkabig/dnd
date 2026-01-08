@@ -1,9 +1,9 @@
 'use client';
 
-import { Hand, MousePointer2 } from 'lucide-react';
+import { Hand, MousePointer2, Mountain, Fence } from 'lucide-react';
 import { useI18n } from '@/lib/i18n-context';
 
-export type Tool = 'hand' | 'select';
+export type Tool = 'hand' | 'select' | 'terrain' | 'wall';
 
 interface ToolboxProps {
   activeTool: Tool;
@@ -17,6 +17,8 @@ export function Toolbox({ activeTool, onToolChange }: ToolboxProps) {
   const tools = [
     { id: 'select' as Tool, icon: MousePointer2, label: toolLabels.select },
     { id: 'hand' as Tool, icon: Hand, label: toolLabels.hand },
+    { id: 'terrain' as Tool, icon: Mountain, label: toolLabels.terrain || 'Terrain' },
+    { id: 'wall' as Tool, icon: Fence, label: 'กำแพง' },
   ];
 
   return (

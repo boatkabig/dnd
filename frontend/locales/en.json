@@ -365,7 +365,8 @@
         "deleteAsset": "Delete asset",
         "tools": {
             "select": "Select/Drag",
-            "hand": "Pan canvas"
+            "hand": "Pan canvas",
+            "terrain": "Paint terrain"
         },
         "grid": {
             "title": "Grid",

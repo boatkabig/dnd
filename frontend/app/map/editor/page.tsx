@@ -5,14 +5,39 @@ import { Canvas } from './Canvas';
 import { Toolbox, Tool } from './Toolbox';
 import { Header } from './Header';
 import { AssetLibrary } from './AssetLibrary';
-import { SpriteProperties } from './SpriteProperties';
+import { MapCalibration } from './MapCalibration';
+import { TerrainPanel, type BrushShape } from './TerrainPanel';
+import { WallPanel } from './WallPanel';
+import { LayerPanel, type EditorLayer } from './LayerPanel';
+import { PropertiesPanel } from './PropertiesPanel';
 import { useEditor } from './useEditor';
+import type { TerrainType } from './types';
 
 export default function MapEditorPage() {
   const [activeTool, setActiveTool] = useState<Tool>('select');
   const [showAssetPanel, setShowAssetPanel] = useState(true);
   const editor = useEditor();
   const clipboardRef = useRef<string | null>(null); // Stores copied sprite ID
+  
+  // Terrain tool state
+  const [terrainElevation, setTerrainElevation] = useState(5);
+  const [terrainBrushSize, setTerrainBrushSize] = useState(1);
+  const [terrainType, setTerrainType] = useState<TerrainType>('normal');
+  const [terrainBrushShape, setTerrainBrushShape] = useState<BrushShape>('circle');
+  
+  // Layer state
+  const [activeLayer, setActiveLayer] = useState<EditorLayer>('background');
+  const [layerVisibility, setLayerVisibility] = useState<Record<EditorLayer, boolean>>({
+    background: true,
+    terrain: true,
+    structures: true,
+    objects: true,
+    entities: true,
+  });
+  
+  const handleLayerVisibilityToggle = (layer: EditorLayer) => {
+    setLayerVisibility(prev => ({ ...prev, [layer]: !prev[layer] }));
+  };
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -83,6 +108,9 @@ export default function MapEditorPage() {
       }
       if (e.key === 'h' && !e.ctrlKey && !e.metaKey) {
         setActiveTool('hand');
+      }
+      if (e.key === 't' && !e.ctrlKey && !e.metaKey) {
+        setActiveTool('terrain');
       }
     };
 
@@ -159,9 +187,51 @@ export default function MapEditorPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Canvas Area */}
         <main className="flex-1 relative overflow-hidden">
-          <Canvas activeTool={activeTool} editor={editor} />
+          <Canvas 
+            activeTool={activeTool} 
+            editor={editor}
+            terrainElevation={terrainElevation}
+            terrainBrushSize={terrainBrushSize}
+            terrainType={terrainType}
+            terrainBrushShape={terrainBrushShape}
+          />
           <Toolbox activeTool={activeTool} onToolChange={setActiveTool} />
-          <SpriteProperties editor={editor} />
+          
+          {/* Terrain Panel - show when terrain layer active */}
+          {activeLayer === 'terrain' && (
+            <TerrainPanel
+              editor={editor}
+              elevation={terrainElevation}
+              setElevation={setTerrainElevation}
+              brushSize={terrainBrushSize}
+              setBrushSize={setTerrainBrushSize}
+              terrainType={terrainType}
+              setTerrainType={setTerrainType}
+              brushShape={terrainBrushShape}
+              setBrushShape={setTerrainBrushShape}
+            />
+          )}
+          
+          {/* Wall Panel - show when structures layer active */}
+          {activeLayer === 'structures' && (
+            <WallPanel editor={editor} />
+          )}
+          
+          {/* Map Calibration - show when background layer active */}
+          {activeLayer === 'background' && (
+            <MapCalibration editor={editor} />
+          )}
+          
+          {/* Layer Panel */}
+          <LayerPanel
+            activeLayer={activeLayer}
+            onLayerChange={setActiveLayer}
+            visibility={layerVisibility}
+            onVisibilityToggle={handleLayerVisibilityToggle}
+          />
+          
+          {/* Properties Panel - shows when any object is selected */}
+          <PropertiesPanel editor={editor} />
         </main>
 
         {/* Asset Library Sidebar */}

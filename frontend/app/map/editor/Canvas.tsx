@@ -4,10 +4,16 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Container, Graphics, Sprite as PixiSprite, FederatedPointerEvent, Assets, Text } from 'pixi.js';
 import type { Tool } from './Toolbox';
 import type { Editor } from './useEditor';
+import { ELEVATION_COLORS, type TerrainType } from './types';
+import type { BrushShape } from './TerrainPanel';
 
 interface CanvasProps {
   activeTool: Tool;
   editor: Editor;
+  terrainElevation?: number;
+  terrainBrushSize?: number;
+  terrainType?: TerrainType;
+  terrainBrushShape?: BrushShape;
 }
 
 type HandleType = 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w';
@@ -17,15 +23,43 @@ interface SpriteRef {
   pixiSprite: PixiSprite;
 }
 
-export function Canvas({ activeTool, editor }: CanvasProps) {
+// Helper: distance from point to line segment
+function distanceToLine(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const A = px - x1;
+  const B = py - y1;
+  const C = x2 - x1;
+  const D = y2 - y1;
+  const dot = A * C + B * D;
+  const lenSq = C * C + D * D;
+  let param = lenSq !== 0 ? dot / lenSq : -1;
+  let xx, yy;
+  if (param < 0) { xx = x1; yy = y1; }
+  else if (param > 1) { xx = x2; yy = y2; }
+  else { xx = x1 + param * C; yy = y1 + param * D; }
+  const dx = px - xx;
+  const dy = py - yy;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+export function Canvas({ activeTool, editor, terrainElevation = 0, terrainBrushSize = 1, terrainType = 'normal', terrainBrushShape = 'circle' }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const stageContainerRef = useRef<Container | null>(null);
   const gridGraphicsRef = useRef<Graphics | null>(null);
+  const terrainContainerRef = useRef<Container | null>(null);
+  const wallsContainerRef = useRef<Container | null>(null);
   const spritesContainerRef = useRef<Container | null>(null);
   const selectionContainerRef = useRef<Container | null>(null);
   const rotationTextRef = useRef<Text | null>(null);
   const spriteRefsRef = useRef<SpriteRef[]>([]);
+  
+  // Terrain painting state
+  const isTerrainPaintingRef = useRef(false);
+  
+  // Wall drawing state
+  const isWallDrawingRef = useRef(false);
+  const wallStartPointRef = useRef<{x: number, y: number} | null>(null);
+  const wallPreviewRef = useRef<Graphics | null>(null);
   
   // Canvas state
   const [isReady, setIsReady] = useState(false);
@@ -60,6 +94,12 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
   const activeToolRef = useRef(activeTool);
   const editorRef = useRef(editor);
   
+  // Terrain props refs (to avoid closure issues in event handlers)
+  const terrainElevationRef = useRef(terrainElevation);
+  const terrainBrushSizeRef = useRef(terrainBrushSize);
+  const terrainTypeRef = useRef(terrainType);
+  const terrainBrushShapeRef = useRef(terrainBrushShape);
+  
   useEffect(() => {
     activeToolRef.current = activeTool;
     if (appRef.current) {
@@ -70,6 +110,14 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
+  
+  // Keep terrain refs updated
+  useEffect(() => {
+    terrainElevationRef.current = terrainElevation;
+    terrainBrushSizeRef.current = terrainBrushSize;
+    terrainTypeRef.current = terrainType;
+    terrainBrushShapeRef.current = terrainBrushShape;
+  }, [terrainElevation, terrainBrushSize, terrainType, terrainBrushShape]);
 
   // Screen to world coordinates
   const screenToWorld = useCallback((screenX: number, screenY: number) => {
@@ -110,15 +158,25 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
       app.stage.addChild(stageContainer);
       stageContainerRef.current = stageContainer;
 
-      // Grid graphics
+      // Sprites container (bottom - map backgrounds and objects)
+      const spritesContainer = new Container();
+      stageContainer.addChild(spritesContainer);
+      spritesContainerRef.current = spritesContainer;
+
+      // Terrain container (overlay on top of sprites)
+      const terrainContainer = new Container();
+      stageContainer.addChild(terrainContainer);
+      terrainContainerRef.current = terrainContainer;
+
+      // Grid graphics (above sprites and terrain for visibility)
       const gridGraphics = new Graphics();
       stageContainer.addChild(gridGraphics);
       gridGraphicsRef.current = gridGraphics;
 
-      // Sprites container
-      const spritesContainer = new Container();
-      stageContainer.addChild(spritesContainer);
-      spritesContainerRef.current = spritesContainer;
+      // Walls container (above grid)
+      const wallsContainer = new Container();
+      stageContainer.addChild(wallsContainer);
+      wallsContainerRef.current = wallsContainer;
 
       // Selection/handles container (on top)
       const selectionContainer = new Container();
@@ -269,6 +327,201 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
   useEffect(() => {
     if (isReady) drawGrid();
   }, [isReady, drawGrid]);
+
+  // ============================
+  // Draw Terrain Overlay
+  // ============================
+  const drawTerrain = useCallback(() => {
+    const container = terrainContainerRef.current;
+    if (!container) return;
+
+    container.removeChildren();
+
+    if (!editor.showTerrain) return;
+
+    const cellSize = editor.gridSettings.cellSize;
+    const terrainGrid = editor.terrainGrid;
+
+    // Get elevation color
+    const getElevationColor = (elev: number): number => {
+      const colorMap: Record<number, number> = {
+        [-10]: 0x1e3a5f, // Deep pit - dark blue
+        [-5]: 0x2563eb,  // Pit/Water - blue
+        [0]: 0x22c55e,   // Ground - green
+        [5]: 0xeab308,   // Low - yellow
+        [10]: 0xf97316,  // Medium - orange
+        [15]: 0xef4444,  // High - red
+        [20]: 0xa855f7,  // Very high - purple
+      };
+      const keys = Object.keys(colorMap).map(Number).sort((a, b) => b - a);
+      for (const key of keys) {
+        if (elev >= key) return colorMap[key];
+      }
+      return colorMap[0];
+    };
+
+    // Draw each terrain cell
+    Object.entries(terrainGrid).forEach(([key, cell]) => {
+      const [gridX, gridY] = key.split(',').map(Number);
+      const worldX = gridX * cellSize;
+      const worldY = gridY * cellSize;
+
+      const graphics = new Graphics();
+      
+      // Base color from elevation
+      let baseColor = getElevationColor(cell.elevation);
+      let alpha = 0.5;
+      
+      // Type-specific color adjustments
+      if (cell.type === 'water') {
+        baseColor = 0x3b82f6; // Blue for water
+        alpha = 0.6;
+      } else if (cell.type === 'hazard') {
+        baseColor = 0xdc2626; // Red for hazard
+        alpha = 0.6;
+      } else if (cell.type === 'difficult') {
+        baseColor = 0x92400e; // Brown for difficult
+        alpha = 0.5;
+      }
+      
+      graphics.setFillStyle({ color: baseColor, alpha });
+      graphics.rect(worldX, worldY, cellSize, cellSize);
+      graphics.fill();
+      
+      // Type indicator patterns
+      const centerX = worldX + cellSize / 2;
+      const centerY = worldY + cellSize / 2;
+      
+      if (cell.type === 'water') {
+        // Wave pattern
+        graphics.setStrokeStyle({ width: 2, color: 0xffffff, alpha: 0.4 });
+        graphics.moveTo(worldX + 5, centerY);
+        graphics.quadraticCurveTo(worldX + cellSize/4, centerY - 5, worldX + cellSize/2, centerY);
+        graphics.quadraticCurveTo(worldX + cellSize*3/4, centerY + 5, worldX + cellSize - 5, centerY);
+        graphics.stroke();
+      } else if (cell.type === 'hazard') {
+        // X pattern
+        graphics.setStrokeStyle({ width: 3, color: 0xffffff, alpha: 0.5 });
+        const offset = cellSize * 0.25;
+        graphics.moveTo(worldX + offset, worldY + offset);
+        graphics.lineTo(worldX + cellSize - offset, worldY + cellSize - offset);
+        graphics.moveTo(worldX + cellSize - offset, worldY + offset);
+        graphics.lineTo(worldX + offset, worldY + cellSize - offset);
+        graphics.stroke();
+      } else if (cell.type === 'difficult') {
+        // Dots pattern
+        graphics.setFillStyle({ color: 0xffffff, alpha: 0.4 });
+        const dotSize = 3;
+        graphics.circle(centerX - 8, centerY, dotSize);
+        graphics.circle(centerX + 8, centerY, dotSize);
+        graphics.circle(centerX, centerY - 8, dotSize);
+        graphics.circle(centerX, centerY + 8, dotSize);
+        graphics.fill();
+      }
+
+      // Always show elevation label
+      const labelText = cell.elevation > 0 ? `+${cell.elevation}` : `${cell.elevation}`;
+      const text = new Text({
+        text: labelText,
+        style: {
+          fontSize: cellSize / 4,
+          fill: '#ffffff',
+          fontWeight: 'bold',
+        },
+        anchor: { x: 0.5, y: 0.5 },
+      });
+      text.position.set(centerX, centerY);
+      container.addChild(text);
+
+      container.addChild(graphics);
+    });
+  }, [editor.terrainGrid, editor.showTerrain, editor.gridSettings.cellSize]);
+
+  useEffect(() => {
+    if (isReady) drawTerrain();
+  }, [isReady, drawTerrain]);
+
+  // ============================
+  // Draw Walls
+  // ============================
+  const drawWalls = useCallback(() => {
+    const container = wallsContainerRef.current;
+    if (!container) return;
+    
+    container.removeChildren();
+    
+    const cellSize = editor.gridSettings.cellSize;
+    const walls = editor.walls;
+    
+    // Color by height (taller = more red, shorter = more yellow)
+    const getHeightColor = (height: number): number => {
+      if (height >= 10) return 0xef4444;      // red - full wall
+      if (height >= 5) return 0xf97316;       // orange - medium
+      if (height >= 3) return 0xeab308;       // yellow - low
+      return 0x6b7280;                         // gray - minimal
+    };
+    
+    walls.forEach(wall => {
+      const graphics = new Graphics();
+      const color = getHeightColor(wall.height);
+      const alpha = wall.visibility === 'transparent' ? 0.5 : 1;
+      
+      // Wall line thickness
+      const thickness = wall.isDoor ? 4 : 6;
+      
+      // Convert grid coords to world coords
+      const x1 = wall.p1.x * cellSize;
+      const y1 = wall.p1.y * cellSize;
+      const x2 = wall.p2.x * cellSize;
+      const y2 = wall.p2.y * cellSize;
+      
+      // Draw wall line
+      graphics.setStrokeStyle({ width: thickness, color, alpha });
+      graphics.moveTo(x1, y1);
+      graphics.lineTo(x2, y2);
+      graphics.stroke();
+      
+      // Door indicator
+      if (wall.isDoor) {
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2;
+        const doorColor = wall.doorState === 'open' ? 0x22c55e : 
+                          wall.doorState === 'locked' ? 0xef4444 : 0xeab308;
+        graphics.setFillStyle({ color: doorColor });
+        graphics.circle(midX, midY, 5);
+        graphics.fill();
+      }
+      
+      // Selected wall highlight
+      if (editor.selectedWall?.id === wall.id) {
+        graphics.setStrokeStyle({ width: thickness + 4, color: 0xffffff, alpha: 0.3 });
+        graphics.moveTo(x1, y1);
+        graphics.lineTo(x2, y2);
+        graphics.stroke();
+      }
+      
+      // Make wall clickable
+      graphics.eventMode = 'static';
+      graphics.cursor = 'pointer';
+      graphics.hitArea = {
+        contains: (px: number, py: number) => {
+          // Check if point is near the wall line
+          const dist = distanceToLine(px, py, x1, y1, x2, y2);
+          return dist < 10;
+        }
+      };
+      graphics.on('pointerdown', (e) => {
+        e.stopPropagation();
+        editorRef.current.selectWall(wall.id);
+      });
+      
+      container.addChild(graphics);
+    });
+  }, [editor.walls, editor.selectedWall, editor.gridSettings.cellSize]);
+
+  useEffect(() => {
+    if (isReady) drawWalls();
+  }, [isReady, drawWalls]);
 
   // ============================
   // Draw Selection Handles
@@ -437,6 +690,18 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
 
           // Sprite click to select & start drag
           pixiSprite.on('pointerdown', (e: FederatedPointerEvent) => {
+            // Allow terrain painting through sprites
+            if (activeToolRef.current === 'terrain') {
+              isTerrainPaintingRef.current = true;
+              const world = screenToWorld(e.globalX, e.globalY);
+              const cellSize = editorRef.current.gridSettings.cellSize;
+              const gridX = Math.floor(world.x / cellSize);
+              const gridY = Math.floor(world.y / cellSize);
+              editorRef.current.paintTerrainArea(gridX, gridY, terrainBrushSizeRef.current, terrainElevationRef.current, terrainTypeRef.current, terrainBrushShapeRef.current);
+              e.stopPropagation();
+              return;
+            }
+            
             if (activeToolRef.current !== 'select') return;
             e.stopPropagation();
             
@@ -486,9 +751,33 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
     if (!app || !stageContainer || !isReady) return;
 
     const onPointerDown = (e: FederatedPointerEvent) => {
+      // Terrain painting
+      if (e.button === 0 && activeToolRef.current === 'terrain') {
+        isTerrainPaintingRef.current = true;
+        const world = screenToWorld(e.globalX, e.globalY);
+        const cellSize = editorRef.current.gridSettings.cellSize;
+        const gridX = Math.floor(world.x / cellSize);
+        const gridY = Math.floor(world.y / cellSize);
+        editorRef.current.paintTerrainArea(gridX, gridY, terrainBrushSizeRef.current, terrainElevationRef.current, terrainTypeRef.current, terrainBrushShapeRef.current);
+        return;
+      }
+      
+      // Wall drawing - start
+      if (e.button === 0 && activeToolRef.current === 'wall') {
+        const world = screenToWorld(e.globalX, e.globalY);
+        const cellSize = editorRef.current.gridSettings.cellSize;
+        // Snap to nearest grid point (corner, not center)
+        const gridX = Math.round(world.x / cellSize);
+        const gridY = Math.round(world.y / cellSize);
+        isWallDrawingRef.current = true;
+        wallStartPointRef.current = { x: gridX, y: gridY };
+        return;
+      }
+      
       // Click on empty canvas with Select tool = deselect
       if (e.button === 0 && activeToolRef.current === 'select' && !dragStateRef.current) {
         editorRef.current.selectSprite(null);
+        editorRef.current.selectWall(null);
       }
       
       // Hand tool or middle-click = pan
@@ -505,6 +794,41 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
     };
 
     const onPointerMove = (e: FederatedPointerEvent) => {
+      // Continue terrain painting while dragging
+      if (isTerrainPaintingRef.current && activeToolRef.current === 'terrain') {
+        const world = screenToWorld(e.globalX, e.globalY);
+        const cellSize = editorRef.current.gridSettings.cellSize;
+        const gridX = Math.floor(world.x / cellSize);
+        const gridY = Math.floor(world.y / cellSize);
+        editorRef.current.paintTerrainArea(gridX, gridY, terrainBrushSizeRef.current, terrainElevationRef.current, terrainTypeRef.current, terrainBrushShapeRef.current);
+        return;
+      }
+
+      // Wall preview while dragging
+      if (isWallDrawingRef.current && wallStartPointRef.current && wallsContainerRef.current) {
+        const world = screenToWorld(e.globalX, e.globalY);
+        const cellSize = editorRef.current.gridSettings.cellSize;
+        const endX = Math.round(world.x / cellSize);
+        const endY = Math.round(world.y / cellSize);
+        const start = wallStartPointRef.current;
+        
+        // Remove old preview
+        if (wallPreviewRef.current) {
+          wallsContainerRef.current.removeChild(wallPreviewRef.current);
+        }
+        
+        // Draw preview line
+        const preview = new Graphics();
+        preview.setStrokeStyle({ width: 4, color: 0xffffff, alpha: 0.6 });
+        preview.moveTo(start.x * cellSize, start.y * cellSize);
+        preview.lineTo(endX * cellSize, endY * cellSize);
+        preview.stroke();
+        
+        wallsContainerRef.current.addChild(preview);
+        wallPreviewRef.current = preview;
+        return;
+      }
+
       // Handle resize
       if (dragStateRef.current?.type === 'resize') {
         const state = dragStateRef.current;
@@ -659,7 +983,39 @@ export function Canvas({ activeTool, editor }: CanvasProps) {
       }
     };
 
-    const onPointerUp = () => {
+    const onPointerUp = (e: FederatedPointerEvent) => {
+      // Finish wall drawing
+      if (isWallDrawingRef.current && wallStartPointRef.current) {
+        const world = screenToWorld(e.globalX, e.globalY);
+        const cellSize = editorRef.current.gridSettings.cellSize;
+        // Snap to nearest grid point (corner)
+        const endX = Math.round(world.x / cellSize);
+        const endY = Math.round(world.y / cellSize);
+        const start = wallStartPointRef.current;
+        
+        // Only create wall if start and end are different
+        if (start.x !== endX || start.y !== endY) {
+          editorRef.current.addWall(
+            { x: start.x, y: start.y },
+            { x: endX, y: endY }
+          );
+        }
+        
+        // Clean up preview
+        if (wallPreviewRef.current && wallsContainerRef.current) {
+          wallsContainerRef.current.removeChild(wallPreviewRef.current);
+          wallPreviewRef.current = null;
+        }
+        
+        isWallDrawingRef.current = false;
+        wallStartPointRef.current = null;
+      }
+      
+      // Stop terrain painting
+      if (isTerrainPaintingRef.current) {
+        isTerrainPaintingRef.current = false;
+      }
+      
       // Finish resize/move/rotate
       if (dragStateRef.current) {
         const state = dragStateRef.current;

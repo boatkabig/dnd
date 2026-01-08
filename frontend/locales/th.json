@@ -365,7 +365,8 @@
         "deleteAsset": "ลบ asset",
         "tools": {
             "select": "เลือก/ลาก",
-            "hand": "เลื่อน canvas"
+            "hand": "เลื่อน canvas",
+            "terrain": "วาดภูมิประเทศ"
         },
         "grid": {
             "title": "ตาราง",
