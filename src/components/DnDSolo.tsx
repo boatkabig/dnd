@@ -795,6 +795,7 @@ export default function DnDSolo() {
   const [pendingRoomEncounter, setPendingRoomEncounter] = useState<{ monsterIds: string[]; surprise: boolean; isBoss: boolean } | null>(null);
 
   const logRef = useRef<HTMLDivElement>(null);
+  const logNearBottomRef = useRef(true);
   const idRef = useRef(0);
   const mapRef = useRef<any>(null);
   const cRef = useRef<any>(null);
@@ -830,8 +831,18 @@ export default function DnDSolo() {
   }, []);
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    // Mobile UX fix: only auto-scroll if the user is already near the bottom.
+    // If they've scrolled up to re-read history, don't yank them back down.
+    if (logRef.current && logNearBottomRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
   }, [log, thinking]);
+
+  function handleLogScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    logNearBottomRef.current = distanceFromBottom <= 80;
+  }
 
   const persist = useCallback((cc: any, sc: string, lg: any[], cb: any, hist: any[]) => {
     saveGame({
@@ -4121,7 +4132,7 @@ export default function DnDSolo() {
     return (
       <div className="dnd-root">
 
-        <div style={{ maxWidth: 560, width: "100%", margin: "0 auto", padding: 16 }}>
+        <div style={{ maxWidth: 560, width: "100%", margin: "0 auto", padding: 16, flex: 1, minHeight: 0, overflowY: "auto", boxSizing: "border-box" }}>
           {/* Progress bar */}
           <div style={{ display: "flex", gap: 2, marginBottom: 16, overflowX: "auto" }}>
             {STEPS.map((label, i) => (
@@ -4547,9 +4558,9 @@ export default function DnDSolo() {
           </div>
 
           {/* Navigation buttons */}
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <div style={{ display: "flex", gap: 10, marginTop: 16, position: "sticky", bottom: 0, background: "rgba(20,16,32,0.95)", padding: "10px 0", paddingBottom: "calc(10px + env(safe-area-inset-bottom))" }}>
             <button className="btn" onClick={() => ccStep === 0 ? setPhase("menu") : setCcStep(ccStep - 1)}>{ccStep === 0 ? "กลับ" : "← ย้อน"}</button>
-            {ccStep < 9 ? (
+            {ccStep < 10 ? (
               <button className="btn btn-gold" style={{ flex: 1 }} onClick={() => setCcStep(ccStep + 1)}>ถัดไป →</button>
             ) : (
               <button className="btn btn-gold" style={{ flex: 1 }} disabled={!ccName.trim()} onClick={startNewGame}>⚔️ เริ่มการผจญภัย</button>
@@ -4705,7 +4716,7 @@ export default function DnDSolo() {
       </div>
 
       {/* LOG */}
-      <div ref={logRef} style={{ flex: 1, overflowY: "auto", padding: "10px 14px", maxWidth: 640, width: "100%", margin: "0 auto", boxSizing: "border-box", minHeight: 0 }}>
+      <div ref={logRef} onScroll={handleLogScroll} style={{ flex: 1, overflowY: "auto", padding: "10px 14px", maxWidth: 640, width: "100%", margin: "0 auto", boxSizing: "border-box", minHeight: 0 }}>
         {/* Phase 0 fix: window log to last 80 entries on render (full log kept in state for persistence) */}
         {log.slice(-80).map((e) => {
           if (e.type === "dm") return <div key={e.id} className="msg-dm">{e.text}</div>;
@@ -5797,7 +5808,7 @@ export default function DnDSolo() {
           {combat.grid && combat.playerPos && (
             <div style={{ marginBottom: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
               {/* Battle grid SVG */}
-              <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+              <div className="combat-grid-wrap" style={{ flex: "1 1 320px", minWidth: 280 }}>
                 <svg viewBox={`0 0 ${combat.grid.w * 28} ${combat.grid.h * 28}`} style={{ width: "100%", maxWidth: 380, background: "#0F0A18", border: "1px solid #3A3054", borderRadius: 8 }}>
                   {/* Grid lines */}
                   {Array.from({ length: combat.grid.w + 1 }).map((_, i) => (
@@ -5993,7 +6004,7 @@ export default function DnDSolo() {
       )}
 
       {/* INPUT */}
-      <div style={{ borderTop: "1px solid #3A3054", background: "rgba(20,16,32,0.95)", padding: "10px 14px" }}>
+      <div style={{ borderTop: "1px solid #3A3054", background: "rgba(20,16,32,0.95)", padding: "10px 14px", paddingBottom: "calc(10px + env(safe-area-inset-bottom))" }}>
         {!combat && (
           <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
             {/* Contextual quick actions — change based on scene type */}

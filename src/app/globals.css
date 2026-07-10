@@ -209,7 +209,7 @@
 .enemy-card.dead { opacity: 0.35; }
 
 /* Character creation */
-.cc-opt { border: 1.5px solid var(--dnd-border); border-radius: 12px; padding: 10px; cursor: pointer; background: #1E1830; transition: border-color 0.15s; }
+.cc-opt { border: 1.5px solid var(--dnd-border); border-radius: 12px; padding: 10px; cursor: pointer; background: #1E1830; transition: border-color 0.15s; min-height: 44px; }
 .cc-opt.sel { border-color: var(--dnd-gold); background: #2A2244; }
 
 /* Inputs */
@@ -270,9 +270,9 @@
   .abil-box .modv { font-size: 18px; }
   .ticket { padding: 6px 8px; gap: 8px; }
   .ticket-die { width: 36px; height: 36px; font-size: 16px; }
-  .msg-dm { padding: 8px 10px; font-size: 13px; }
+  .msg-dm { padding: 8px 10px; font-size: 16px; }
   .msg-player { padding: 6px 10px; font-size: 13px; margin-left: 10%; }
-  .input-main { font-size: 14px; padding: 10px 12px; }
+  .input-main { font-size: 16px; padding: 10px 12px; }
   .sheet-tab { font-size: 12px; padding: 10px 4px; }
 }
 
