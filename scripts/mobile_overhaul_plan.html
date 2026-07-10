@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+@page { size: 720px 1020px; margin: 0; }
+:root {
+  --c-bg: #0D0A14;
+  --c-bg2: #141020;
+  --c-bg3: #1A1528;
+  --c-gold: #E0A83E;
+  --c-gold-dim: #8A6B2A;
+  --c-purple: #7C5CBF;
+  --c-text: #E8E4F0;
+  --c-text-dim: #9C92B8;
+  --c-text-mute: #6B6284;
+  --c-border: #2A2438;
+  --c-green: #7FA85C;
+  --c-red: #C74B44;
+  --c-blue: #6B9BD2;
+}
+html, body {
+  margin: 0; padding: 0; width: 720px;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: 'Sarabun', sans-serif;
+  font-size: 14px; line-height: 1.7;
+}
+@media screen {
+  html { display: flex; justify-content: center; background: #1a1a1a; }
+  body { margin: 20px auto; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+}
+
+/* Cover */
+.cover {
+  width: 720px; height: 1020px; box-sizing: border-box;
+  break-after: page; overflow: hidden;
+  background: linear-gradient(180deg, #0D0A14 0%, #141020 50%, #0D0A14 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  position: relative; padding: 60px;
+}
+.cover::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 400px; height: 400px; transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(224,168,62,0.08) 0%, transparent 70%);
+  border-radius: 50%;
+}
+.cover-tag {
+  font-family: 'Cinzel', serif; font-size: 12px; letter-spacing: 6px;
+  color: var(--c-gold); text-transform: uppercase; margin-bottom: 20px;
+  border: 1px solid var(--c-gold-dim); padding: 6px 20px; border-radius: 20px;
+}
+.cover-title {
+  font-family: 'Cinzel', serif; font-size: 42px; font-weight: 900;
+  color: var(--c-text); text-align: center; line-height: 1.3;
+  text-shadow: 0 0 30px rgba(224,168,62,0.3);
+  margin-bottom: 16px;
+}
+.cover-subtitle {
+  font-size: 16px; color: var(--c-text-dim); text-align: center;
+  max-width: 480px; line-height: 1.6; margin-bottom: 40px;
+}
+.cover-meta {
+  position: absolute; bottom: 50px; left: 0; right: 0;
+  text-align: center; font-size: 11px; color: var(--c-text-mute);
+  letter-spacing: 2px; text-transform: uppercase;
+}
+.cover-line {
+  width: 60px; height: 2px; background: var(--c-gold); margin: 0 auto 30px;
+}
+
+/* Main content */
+.main-content { padding: 50px 55px 40px 55px; }
+
+/* Chapter headers */
+.chapter-header {
+  break-after: avoid; break-inside: avoid; margin-top: 28px;
+}
+.chapter-tag {
+  font-family: 'Cinzel', serif; font-size: 11px; letter-spacing: 4px;
+  color: var(--c-gold); text-transform: uppercase; margin-bottom: 6px;
+}
+.chapter-title {
+  font-family: 'Cinzel', serif; font-size: 24px; font-weight: 700;
+  color: var(--c-text); margin-bottom: 8px;
+}
+.chapter-divider {
+  width: 40px; height: 2px; background: var(--c-gold); margin-bottom: 16px;
+}
+
+/* Body text */
+.body-text {
+  margin-bottom: 12px; color: var(--c-text); font-size: 14px; line-height: 1.75;
+}
+.body-text strong { color: var(--c-gold); }
+
+/* Cards */
+.card {
+  break-inside: avoid; margin-bottom: 14px;
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  border-radius: 10px; padding: 16px 18px;
+}
+.card-title {
+  font-size: 14px; font-weight: 700; color: var(--c-gold);
+  margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+}
+.card-body { font-size: 13px; color: var(--c-text-dim); line-height: 1.65; }
+
+/* Phase cards */
+.phase-card {
+  break-inside: avoid; margin-bottom: 16px;
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-gold); border-radius: 8px;
+  padding: 16px 20px;
+}
+.phase-card.p2 { border-left-color: var(--c-purple); }
+.phase-card.p3 { border-left-color: var(--c-blue); }
+.phase-card.p4 { border-left-color: var(--c-green); }
+.phase-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.phase-name {
+  font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700;
+  color: var(--c-gold);
+}
+.phase-card.p2 .phase-name { color: var(--c-purple); }
+.phase-card.p3 .phase-name { color: var(--c-blue); }
+.phase-card.p4 .phase-name { color: var(--c-green); }
+.phase-time {
+  font-size: 11px; color: var(--c-text-mute);
+  background: var(--c-bg3); padding: 3px 10px; border-radius: 10px;
+}
+.task-list { list-style: none; padding: 0; margin: 0; }
+.task-item {
+  padding: 6px 0; font-size: 13px; color: var(--c-text-dim);
+  border-bottom: 1px solid rgba(42,36,56,0.5); line-height: 1.6;
+}
+.task-item:last-child { border-bottom: none; }
+.task-item strong { color: var(--c-text); }
+.task-badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle;
+}
+.badge-s { background: rgba(127,168,92,0.2); color: var(--c-green); }
+.badge-m { background: rgba(224,168,62,0.2); color: var(--c-gold); }
+.badge-l { background: rgba(199,75,68,0.2); color: var(--c-red); }
+
+/* Table */
+.table-wrap { break-inside: avoid; margin-bottom: 14px; overflow-x: auto; }
+table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+th {
+  background: var(--c-bg3); color: var(--c-gold); font-weight: 600;
+  padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--c-border);
+}
+td {
+  padding: 8px 10px; color: var(--c-text-dim);
+  border-bottom: 1px solid var(--c-border); line-height: 1.5;
+}
+tr:hover td { background: rgba(42,36,56,0.3); }
+
+/* Callout */
+.callout {
+  break-inside: avoid; margin-bottom: 14px;
+  background: rgba(124,92,191,0.1); border: 1px solid rgba(124,92,191,0.3);
+  border-radius: 8px; padding: 14px 16px;
+}
+.callout-label {
+  font-size: 11px; font-weight: 700; color: var(--c-purple);
+  text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px;
+}
+.callout-text { font-size: 13px; color: var(--c-text-dim); line-height: 1.65; }
+
+/* Component tree */
+.tree {
+  break-inside: avoid; margin-bottom: 14px;
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  border-radius: 8px; padding: 16px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: var(--c-text-dim); line-height: 1.8; white-space: pre;
+}
+
+/* Stats grid */
+.stats-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+}
+.stat-card {
+  break-inside: avoid; background: var(--c-bg2); border: 1px solid var(--c-border);
+  border-radius: 8px; padding: 14px; text-align: center;
+}
+.stat-value {
+  font-family: 'Cinzel', serif; font-size: 28px; font-weight: 900;
+  color: var(--c-gold); margin-bottom: 4px;
+}
+.stat-label { font-size: 11px; color: var(--c-text-mute); text-transform: uppercase; letter-spacing: 1px; }
+
+/* Ending */
+.ending {
+  width: 720px; height: 1020px; box-sizing: border-box;
+  break-before: page; overflow: hidden;
+  background: linear-gradient(180deg, #0D0A14 0%, #141020 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  position: relative; padding: 60px;
+}
+.ending::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 300px; height: 300px; transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(124,92,191,0.08) 0%, transparent 70%);
+  border-radius: 50%;
+}
+.ending-text {
+  font-family: 'Cinzel', serif; font-size: 28px; font-weight: 700;
+  color: var(--c-gold); text-align: center; line-height: 1.4; margin-bottom: 20px;
+}
+.ending-sub {
+  font-size: 14px; color: var(--c-text-dim); text-align: center;
+  max-width: 400px; line-height: 1.7; margin-bottom: 30px;
+}
+.ending-line { width: 60px; height: 2px; background: var(--c-gold); margin: 0 auto; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-tag">D&amp;D Solo AI DM</div>
+  <div class="cover-title">Mobile-First<br>UX Overhaul Plan</div>
+  <div class="cover-line"></div>
+  <div class="cover-subtitle">แผนปรับปรุงระบบทั้งหมดเพื่อประสบการณ์การเล่น Solo D&amp;D AI DM ที่สมบูรณ์แบบบนมือถือ — UX ที่ดีขึ้น UI ที่เหมาะกับมือถือ และฟีเจอร์ใหม่ที่ทำให้เกมสนุกขึ้น</div>
+  <div class="cover-meta">Phase 1-4 · 2026</div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="main-content">
+
+<!-- ===== SECTION 1: Current State ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 01</div>
+  <div class="chapter-title">สถานะปัจจุบันและปัญหา</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ระบบ D&amp;D Solo AI DM ปัจจุบันทำงานได้ครบทั้ง 36 domain modules + 10 engine chapters + AI DM Layer + Open5e integration แต่ <strong>UX/UI ยังไม่เหมาะกับการเล่นบนมือถือ</strong> และมีปัญหาหลายจุดที่รบกวนประสบการณ์การเล่น จากการตรวจสอบพบปัญหาหลักดังนี้:
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card"><div class="stat-value">0</div><div class="stat-label">Responsive CSS</div></div>
+  <div class="stat-card"><div class="stat-value">62</div><div class="stat-label">useState ใน 1 component</div></div>
+  <div class="stat-card"><div class="stat-value">6</div><div class="stat-label">Modals รวมกัน</div></div>
+  <div class="stat-card"><div class="stat-value">~30px</div><div class="stat-label">Grid cell บนมือถือ (เล็กเกิน)</div></div>
+</div>
+
+<div class="card">
+  <div class="card-title">ปัญหาหลัก 6 จุด</div>
+  <div class="card-body">
+    <strong>1. Theme ไม่ centralized</strong> — CSS อยู่ใน template string ใน DnDSolo.tsx รวม 4,972 บรรทัด แก้ไขยาก<br>
+    <strong>2. ไม่มี responsive CSS</strong> — ใช้แค่ max-width:640px ไม่มี breakpoint สำหรับ tablet/desktop<br>
+    <strong>3. ปุ่มเยอะเกิน</strong> — 6 modals (Map, Character, Shop, Quest, AI DM, Content) อยู่ใน header row เดียว<br>
+    <strong>4. Combat grid เล็กเกิน</strong> — 12×10 grid = ~30px ต่อช่องบนมือถือ ต่ำกว่ามาตรฐาน 44px tap target<br>
+    <strong>5. ไม่มี onboarding</strong> — ผู้เล่นใหม่ไม่รู้ว่าต้องทำอะไร ไม่มี tutorial หรือ sample character<br>
+    <strong>6. Shop ไม่มี search</strong> — 35+ อาวุธ ไม่มีวิธีกรอง ต้องเลื่อนหาทีละตัว
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-label">Key Finding</div>
+  <div class="callout-text">package.json มี dependencies ครบที่ต้องใช้แล้ว: Zustand 5, framer-motion 12, vaul (Drawer), cmdk (Command), embla-carousel, react-resizable-panels, @dnd-kit, sonner — <strong>เราแค่ต้อง wire in สิ่งที่มีอยู่แล้ว</strong> เกือบไม่ต้องติดตั้งอะไรเพิ่ม</div>
+</div>
+
+<!-- ===== SECTION 2: Phase 1 ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 02</div>
+  <div class="chapter-title">Phase 1: Quick Wins (1-2 วัน)</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+งานเร่งด่วนที่ให้ผลเห็นได้ทันที — เป็นการวางรากฐานสำหรับ phase ถัดไป ทุก task ทำได้โดยไม่ต้องเปลี่ยน architecture
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.1 Centralize Theme</div>
+    <div class="phase-time">S · 2 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">ย้าย CSS จาก template string ใน DnDSolo.tsx ไป globals.css<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">ใช้ CSS variables (--c-bg, --c-gold, etc.) แทน hex literals<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">เปลี่ยน @import Google Fonts เป็น next/font (Cinzel + Sarabun)<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.2 3-Tier Breakpoint Hook</div>
+    <div class="phase-time">S · 1 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">สร้าง use-breakpoint.ts: mobile (&lt;768px), tablet (768-1024px), desktop (&gt;1024px)<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">เพิ่ม responsive CSS สำหรับ grid และ panel layouts<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.3 44px Tap Targets</div>
+    <div class="phase-time">S · 2 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">เพิ่ม min-height: 44px ให้ทุกปุ่มบนมือถือ (Apple HIG standard)<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">เพิ่ม padding ให้ combat grid cells บนมือถือ<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.4 Collapse Header Buttons</div>
+    <div class="phase-time">M · 3 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">รวม 6 ปุ่ม (Map, Character, Shop, Quest, AI DM, Content) เข้าเป็น "More" Sheet ใช้ vaul (Drawer)<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">เหลือเฉพาะปุ่มที่จำเป็นบนหน้าจอ: AI DM, Scene Header, Action Input<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.5 Shop Search + Quick Reply</div>
+    <div class="phase-time">M · 3 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">เพิ่ม cmdk search ใน shop (พิมพ์ชื่ออาวุธ/เกราะ/ไอเทม หาเจอทันที)<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">แสดง requires[] จาก DM response เป็น quick-reply chips ใต้ chat<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-name">P1.6 Sample Characters + Scene Header</div>
+    <div class="phase-time">M · 3 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">สร้าง 3 pre-made characters (Fighter, Rogue, Wizard) ใหม่เล่นได้ทันที<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Compact SceneHeader: ชื่อสถานที่ + icon + เวลา + อากาศ ใน 1 บรรทัด<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<!-- ===== SECTION 3: Phase 2 ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 03</div>
+  <div class="chapter-title">Phase 2: Core UX (3-5 วัน)</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ปรับโครงสร้างหลักของแอป — เป็นการเปลี่ยน architecture จาก monolith component เป็น component tree ที่แยกส่วนชัดเจน เพื่อรองรับ mobile-first layout
+</div>
+
+<div class="phase-card p2">
+  <div class="phase-header">
+    <div class="phase-name">P2.1 Zustand State Store</div>
+    <div class="phase-time">L · 1 วัน</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">แยก 62 useState เป็น Zustand slices: characterSlice, combatSlice, uiSlice, worldSlice<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">Migrate ทีละ slice โดยเทส engine scripts หลังแต่ละ slice<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">เก็บ backward compat กับ persist() และ save format v3<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p2">
+  <div class="phase-header">
+    <div class="phase-name">P2.2 BottomNav + Swipeable Panels</div>
+    <div class="phase-time">L · 1 วัน</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">สร้าง BottomNav (4 tabs: เล่าเรื่อง, ต่อสู้, แผนที่, ตัวละคร) สำหรับมือถือ<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">ใช้ embla-carousel สำหรับ swipe ระหว่าง panels<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Desktop: ใช้ react-resizable-panels แบบ 3-column layout<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p2">
+  <div class="phase-header">
+    <div class="phase-name">P2.3 Contextual Quick Actions</div>
+    <div class="phase-time">M · 4 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">สร้าง deriveSceneContext(): ตรวจจาก scene type + intent → แสดงปุ่มที่เกี่ยวข้อง<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Town: คุย, ร้านค้า, พัก, เดินทาง, เควสต์<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Combat: โจมตี, เวท, ไอเทม, เคลื่อนที่, หนี<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Dungeon: สำรวจ, ฟัง, ซ่อน, เปิดประตู<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Social: โน้มน้าว, ข่มขู่, หลอก, สังเกต, ค้าขาย<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card p2">
+  <div class="phase-header">
+    <div class="phase-name">P2.4 Combat Grid Zoom/Pan</div>
+    <div class="phase-time">L · 1 วัน</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">ใช้ react-zoom-pan-pinch สำหรับ pinch-zoom + pan บน grid<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">Default view: 6×6 ช่อง (focus รอบผู้เล่น) ขยายได้สูงสุด 12×10<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Theater of Mind toggle: ซ่อน grid แสดงแค่ HP/AC/status<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Movement preview: BFS คำนวณช่องที่เดินถึงได้ แสดงเป็นพื้นเขียว<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p2">
+  <div class="phase-header">
+    <div class="phase-name">P2.5 Initiative Timeline + Enemy HP</div>
+    <div class="phase-time">M · 4 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">InitiativeTimeline: แสดงลำดับตาแบบแนวนอน (ใครต่อไป, เหลือกี่ตา)<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Turn Banner: "ถึงตาคุณ!" / "Goblin กำลังเคลื่อนที่..." ด้วย framer-motion<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Enemy HP bars บน grid tokens (สีเขียว → เหลือง → แดง)<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">ActionBar แบบ toggle-group: Action / Bonus Action / Reaction<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<!-- ===== SECTION 4: Phase 3 ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 04</div>
+  <div class="chapter-title">Phase 3: Polish (3-5 วัน)</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ขัดเกลาประสบการณ์การเล่น — เพิ่มความสมบูรณ์แบบให้ทุก detail พร้อมใช้งานจริงบนมือถือ
+</div>
+
+<div class="phase-card p3">
+  <div class="phase-header">
+    <div class="phase-name">P3.1 Character Sheet Redesign</div>
+    <div class="phase-time">L · 1 วัน</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">5 swipeable cards: Stats, Skills, Spells, Inventory, Features<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">HP ring (circular progress) + AC shield + condition icons<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Spell cards แบบ school-colored: สีตามโรงเรียนเวท + level badge<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Quick equip/unequip จาก inventory ด้วย popover<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p3">
+  <div class="phase-header">
+    <div class="phase-name">P3.2 Story Log + Narration</div>
+    <div class="phase-time">M · 4 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">Virtualized StoryLog ด้วย @tanstack/react-virtual<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Combat rounds ย่อได้ (collapsible) แสดงแค่ summary<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Narration fade-in animation ด้วย framer-motion<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Visual scene header: location icon + time + weather + scene type<span class="task-badge badge-s">S</span></div>
+  </div>
+</div>
+
+<div class="phase-card p3">
+  <div class="phase-header">
+    <div class="phase-name">P3.3 Onboarding + Tutorial</div>
+    <div class="phase-time">M · 4 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">First-run overlay: 4-step guide (สร้างตัวละคร → คุยกับ DM → ต่อสู้ → พัก)<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Tooltips บน first encounter ของแต่ละระบบ (combat grid, shop, spell book)<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">cmdk "ทำอะไรได้บ้าง?" help palette — แสดงคำสั่งที่ทำได้ใน context ปัจจุบัน<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p3">
+  <div class="phase-header">
+    <div class="phase-name">P3.4 PWA Support</div>
+    <div class="phase-time">M · 3 ชม.</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">manifest.json + service worker สำหรับ offline play<span class="task-badge badge-m">M</span></div>
+    <div class="task-item">Install to home screen (Add to Home Screen prompt)<span class="task-badge badge-s">S</span></div>
+    <div class="task-item">Zustand persist middleware สำหรับ auto-save state<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<!-- ===== SECTION 5: Phase 4 ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 05</div>
+  <div class="chapter-title">Phase 4: Advanced (ต่อเนื่อง)</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ฟีเจอร์ขั้นสูงที่เพิ่มความสมบูรณ์แบบในระยะยาว — ทำได้หลังจาก Phase 1-3 เสร็จสมบูรณ์
+</div>
+
+<div class="phase-card p4">
+  <div class="phase-header">
+    <div class="phase-name">P4.1 Streaming DM Responses</div>
+    <div class="phase-time">L · ongoing</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">Server-side streaming สำหรับ /api/dm (SSE หรือ ReadableStream)<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">แสดง DM narration ทีละตัวอักษร (typewriter effect)<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<div class="phase-card p4">
+  <div class="phase-header">
+    <div class="phase-name">P4.2 Voice I/O</div>
+    <div class="phase-time">L · ongoing</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">TTS: DM บรรยายเสียงอ่านให้ฟังได้ (สำหรับมือถือ ขับรถ ฯลฯ)<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">STT: ผู้เล่นพูดคำสั่งแทนพิมพ์ (Web Speech API)<span class="task-badge badge-l">L</span></div>
+  </div>
+</div>
+
+<div class="phase-card p4">
+  <div class="phase-header">
+    <div class="phase-name">P4.3 DM Memory + Continuity</div>
+    <div class="phase-time">L · ongoing</div>
+  </div>
+  <div class="task-list">
+    <div class="task-item">Prisma-backed DM memory: จดจำ NPC, เหตุการณ์, ความสัมพันธ์ข้าม session<span class="task-badge badge-l">L</span></div>
+    <div class="task-item">Scene continuity payload: ส่ง summary ของเหตุการณ์ล่าสุดให้ DM ทุกครั้ง<span class="task-badge badge-m">M</span></div>
+  </div>
+</div>
+
+<!-- ===== SECTION 6: Component Tree ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 06</div>
+  <div class="chapter-title">Component Tree ใหม่</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+แยก DnDSolo.tsx (4,972 บรรทัด) เป็น component tree ที่ชัดเจน:
+</div>
+
+<div class="tree">AppShell
+├── SceneHeader (location + time + weather)
+├── BottomNav / SidebarNav
+│   ├── ChatPanel (DM narration + player input)
+│   ├── CombatPanel (grid + actions + initiative)
+│   ├── MapPanel (world map + fast travel)
+│   └── CharacterPanel (stats + skills + spells + items)
+├── ContextualQuickActions (เปลี่ยนตาม context)
+├── Drawer (shop / quest / AI DM helper / content)
+└── TurnBanner (framer-motion, combat only)</div>
+
+<!-- ===== SECTION 7: Contextual Quick Actions ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 07</div>
+  <div class="chapter-title">Contextual Quick Actions</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ระบบปุ่มลัดที่เปลี่ยนตามสถานการณ์ — ผู้เล่นเห็นแค่ปุ่มที่เกี่ยวข้องใน context ปัจจุบัน ลดความสับสนและเร่งการตัดสินใจ
+</div>
+
+<div class="table-wrap">
+<table>
+<tr><th>Context</th><th>Quick Actions</th><th>Trigger</th></tr>
+<tr><td><strong>Town</strong></td><td>คุย, ร้านค้า, พัก, เดินทาง, เควสต์บอร์ด</td><td>scene.type = "town"</td></tr>
+<tr><td><strong>Combat</strong></td><td>โจมตี, เวท, ไอเทม, เคลื่อนที่, Dash, Dodge, หนี</td><td>combat != null</td></tr>
+<tr><td><strong>Dungeon</strong></td><td>สำรวจ, ฟัง, ซ่อน, เปิดประตู, ตรวจสอบ</td><td>scene.type = "dungeon"</td></tr>
+<tr><td><strong>Social</strong></td><td>โน้มน้าว, ข่มขู่, หลอก, สังเกต, ค้าขาย</td><td>intent = negotiate/persuade</td></tr>
+<tr><td><strong>Wilderness</strong></td><td>สำรวจ, ติดตามรอย, หาทาง, ตั้งแคมป์, ล่า</td><td>scene.type = "wilderness"</td></tr>
+<tr><td><strong>Rest</strong></td><td>พักสั้น, พักยาว, เฝ้ายาม, ตื่น</td><td>intent = rest หรือปุ่มพัก</td></tr>
+</table>
+</div>
+
+<!-- ===== SECTION 8: Combat UX ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 08</div>
+  <div class="chapter-title">Combat UX บนมือถือ</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+การต่อสู้บนมือถือต้องปรับหลายจุด — grid เล็กเกิน ปุ่มกดยาก ไม่รู้ว่าถึงตาใคร ต้องแก้ทั้งหมด:
+</div>
+
+<div class="card">
+  <div class="card-title">Grid Zoom/Pan</div>
+  <div class="card-body">
+    ใช้ react-zoom-pan-pinch: pinch ขยาย grid 2-3 เท่า, ลากนิ้วเพื่อ pan ไปมา<br>
+    Default view: 6×6 ช่องรอบผู้เล่น (เห็นพื้นที่ใกล้ตัวชัดเจน)<br>
+    Pinch out: ขยายเห็นเต็ม 12×10 กริด<br>
+    Theater of Mind toggle: ซ่อน grid แสดงแค่ HP/AC/status ของศัตรู
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Movement Preview</div>
+  <div class="card-body">
+    กดที่พื้นเขียวเพื่อเคลื่อนที่ — แต่ก่อนกด แสดงพื้นเขียวทุกช่องที่เดินถึงได้<br>
+    ใช้ BFS algorithm คำนวณจาก speed (6 ช่อง = 30 ฟุต) ลบด้วย difficult terrain<br>
+    AoE preview: เลือกเวทที่มี AoE → แสดงวงกลม/กรวย/เส้นบน grid ก่อนยืนยัน
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Initiative Timeline</div>
+  <div class="card-body">
+    แสดงเป็นแถบแนวนอนด้านบน: [Goblin 20] → [Goblin 18] → [คุณ 15] → ...<br>
+    ไฮไลต์ตาปัจจุบัน, แสดง HP bar ของแต่ละตัว<br>
+    Turn Banner: "ถึงตาคุณ!" (เขียว) / "Goblin กำลังเคลื่อนที่..." (แดง) ด้วย framer-motion
+  </div>
+</div>
+
+<!-- ===== SECTION 9: Priority Order ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 09</div>
+  <div class="chapter-title">ลำดับการทำงานและความเสี่ยง</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+ลำดับการทำงานเรียงตามความสำคัญและ dependency:
+</div>
+
+<div class="table-wrap">
+<table>
+<tr><th>Order</th><th>Task</th><th>Complexity</th><th>Dependency</th></tr>
+<tr><td>1</td><td>P1.1 Centralize Theme</td><td>S</td><td>- (unblocks everything)</td></tr>
+<tr><td>2</td><td>P1.2 next/font</td><td>S</td><td>P1.1</td></tr>
+<tr><td>3</td><td>P1.3 Breakpoint Hook</td><td>S</td><td>P1.1</td></tr>
+<tr><td>4</td><td>P1.5 Shop Search + Quick Reply</td><td>M</td><td>- (parallel)</td></tr>
+<tr><td>5</td><td>P1.6 Sample Characters</td><td>M</td><td>- (parallel)</td></tr>
+<tr><td>6</td><td>P2.1 Zustand Store</td><td>L</td><td>P1.1 (critical path)</td></tr>
+<tr><td>7</td><td>P2.2 BottomNav + Panels</td><td>L</td><td>P2.1</td></tr>
+<tr><td>8</td><td>P2.3 Contextual Quick Actions</td><td>M</td><td>P2.2</td></tr>
+<tr><td>9</td><td>P2.4 Combat Grid Zoom</td><td>L</td><td>P2.1 (high risk)</td></tr>
+<tr><td>10</td><td>P2.5 Initiative Timeline</td><td>M</td><td>P2.2</td></tr>
+<tr><td>11</td><td>P3.1 Character Sheet Cards</td><td>L</td><td>P2.1, P2.2</td></tr>
+<tr><td>12</td><td>P3.3 Onboarding</td><td>M</td><td>P2.2, P2.3</td></tr>
+<tr><td>13</td><td>P3.4 PWA</td><td>M</td><td>P2.1</td></tr>
+</table>
+</div>
+
+<div class="callout">
+  <div class="callout-label">Top Risks</div>
+  <div class="callout-text">
+    <strong>1. Store Migration (P2.1)</strong> — 62 useState → Zustand slices อาจทำให้ feature พักชั่วคราว ต้อง migrate ทีละ slice และเทสหลังแต่ละ slice<br>
+    <strong>2. Grid Pinch/Pan (P2.4)</strong> — react-zoom-pan-pinch อาจมี conflict กับ click events ของ grid cells ต้องแยก gesture ระหว่าง pan กับ click<br>
+    <strong>3. Theme Find/Replace (P1.1)</strong> — มี hex literals กระจายอยู่ทั่ว DnDSolo.tsx ต้อง grep-sweep ให้ครบ
+  </div>
+</div>
+
+<!-- ===== SECTION 10: Summary ===== -->
+<div class="chapter-header">
+  <div class="chapter-tag">Section 10</div>
+  <div class="chapter-title">สรุปแผนการทำงาน</div>
+  <div class="chapter-divider"></div>
+</div>
+
+<div class="body-text">
+แผนปรับปรุงทั้งหมดแบ่งเป็น <strong>4 phases</strong> รวมประมาณ <strong>10-14 วัน</strong> สำหรับ Phase 1-3 และ Phase 4 เป็น ongoing:
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card"><div class="stat-value">10-14</div><div class="stat-label">วัน (Phase 1-3)</div></div>
+  <div class="stat-card"><div class="stat-value">20+</div><div class="stat-label">Tasks ทั้งหมด</div></div>
+</div>
+
+<div class="card">
+  <div class="card-title">ผลลัพธ์ที่คาดหวัง</div>
+  <div class="card-body">
+    <strong>Phase 1 (1-2 วัน):</strong> Theme สะอาด, fonts เร็วขึ้น, ปุ่มไม่รก, shop มี search, มี sample character<br><br>
+    <strong>Phase 2 (3-5 วัน):</strong> Mobile layout เสร็จ (BottomNav + swipe), combat grid ซูมได้, contextual actions, initiative timeline<br><br>
+    <strong>Phase 3 (3-5 วัน):</strong> Character sheet สวย, onboarding ครบ, PWA ติดตั้งได้, narration สวยงาม<br><br>
+    <strong>Phase 4 (ongoing):</strong> Streaming DM, voice I/O, DM memory ข้าม session
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-label">Almost No New Dependencies</div>
+  <div class="callout-text">
+    package.json มี dependencies ครบแล้ว: Zustand, framer-motion, vaul, cmdk, embla-carousel, react-resizable-panels — <strong>เราแค่ต้อง wire in สิ่งที่มีอยู่</strong> ต้องติดตั้งเพิ่มแค่ @tanstack/react-virtual (สำหรับ virtualized lists) และ react-zoom-pan-pinch (สำหรับ grid zoom)
+  </div>
+</div>
+
+</div>
+
+<!-- ENDING -->
+<div class="ending">
+  <div class="ending-text">พร้อมสร้าง<br>ประสบการณ์ที่สมบูรณ์แบบ</div>
+  <div class="ending-sub">D&amp;D Solo AI DM — Mobile-First UX Overhaul<br>Phase 1-4 · 2026</div>
+  <div class="ending-line"></div>
+</div>
+
+</body>
+</html>

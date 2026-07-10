@@ -1,0 +1,953 @@
+     1→/**
+     2→ * SRD client + normalizers for dnd5eapi.co data.
+     3→ *
+     4→ * All functions hit /api/srd (the server-side proxy). Results are cached in
+     5→ * memory for the session. Normalizers convert raw SRD JSON into the shapes the
+     6→ * engine wants to consume.
+     7→ */
+     8→
+     9→/* ----------------- types ----------------- */
+    10→export interface SRDListItem {
+    11→  index: string;
+    12→  name: string;
+    13→  url: string;
+    14→}
+    15→
+    16→export interface SRDListResponse {
+    17→  count: number;
+    18→  results: SRDListItem[];
+    19→}
+    20→
+    21→export interface NormalizedSpell {
+    22→  index: string;
+    23→  name: string;
+    24→  level: number;
+    25→  school: string;
+    26→  casting_time: string;
+    27→  range: string;
+    28→  duration: string;
+    29→  concentration: boolean;
+    30→  ritual: boolean;
+    31→  components: string[];
+    32→  material?: string;
+    33→  desc: string;
+    34→  higher_level?: string;
+    35→  classes: string[];
+    36→  subclasses: string[];
+    37→  // Combat mechanics (derived):
+    38→  kind: "attack" | "save" | "auto" | "heal" | "buff" | "utility";
+    39→  damage?: string;          // dice formula at the chosen slot/char level
+    40→  damageType?: string;
+    41→  damageScaling?: "slot" | "character" | "none"; // slot = damage_at_slot_level, character = cantrip scaling
+    42→  saveAbility?: string;     // "dex" | "con" | "wis" | "str" | "int" | "cha"
+    43→  saveSuccess?: "half" | "none";
+    44→  heal?: string;
+    45→  aoeType?: string;         // "sphere" | "cone" | "cylinder" | "line" | "cube"
+    46→  aoeSize?: number;
+    47→  attackType?: "ranged" | "melee";
+    48→  conditionsAdd?: string[]; // conditions applied on hit/fail
+    49→  bonusAction?: boolean;
+    50→  isCantrip: boolean;
+    51→}
+    52→
+    53→export interface NormalizedMonster {
+    54→  index: string;
+    55→  th: string;            // display name (engine compat)
+    56→  name: string;
+    57→  ac: number;
+    58→  hp: number;
+    59→  atk: number;           // primary attack bonus
+    60→  dmg: string;           // primary damage formula
+    61→  init: number;
+    62→  xp: number;
+    63→  cr: string;
+    64→  sv: { dex: number; con: number; wis: number; str: number; int: number; cha: number };
+    65→  srd: boolean;
+    66→  // Multi-attack & special abilities (parsed into engine-friendly format)
+    67→  attacks: { name: string; atk: number; dmg: string; dmgType?: string }[];
+    68→  specialAbilities?: { name: string; desc: string }[];
+    69→  legendaryActions?: { name: string; desc: string }[];
+    70→  actions?: { name: string; desc: string }[];
+    71→  size?: string;
+    72→  type?: string;
+    73→  alignment?: string;
+    74→  speed?: string;
+    75→  senses?: string;
+    76→  languages?: string;
+    77→}
+    78→
+    79→export interface NormalizedEquipment {
+    80→  index: string;
+    81→  name: string;
+    82→  equipmentCategory: string;
+    83→  cost: { quantity: number; unit: string };
+    84→  weight: number;
+    85→  desc?: string;
+    86→  // Weapon-specific
+    87→  weaponCategory?: string;
+    88→  damage?: { damage_dice: string; damage_type: string };
+    89→  range?: { normal: number; long?: number };
+    90→  properties?: string[];
+    91→  // Armor-specific
+    92→  armorCategory?: string;
+    93→  armorClass?: { base: number; dexBonus: boolean; maxBonus?: number };
+    94→  strMinimum?: number;
+    95→  stealthDisadvantage?: boolean;
+    96→}
+    97→
+    98→export interface NormalizedCondition {
+    99→  index: string;
+   100→  name: string;
+   101→  desc: string[];
+   102→}
+   103→
+   104→export interface NormalizedClass {
+   105→  index: string;
+   106→  name: string;
+   107→  hitDie: number;
+   108→  proficiencies: string[];
+   109→  savingThrows: string[];
+   110→  startingEquipment: string;
+   111→  classLevels: string;
+   112→  spellcasting?: string;
+   113→  subclasses: string[];
+   114→}
+   115→
+   116→export interface NormalizedRace {
+   117→  index: string;
+   118→  name: string;
+   119→  speed: number;
+   120→  abilityBonuses: { name: string; bonus: number }[];
+   121→  size: string;
+   122→  startingProficiencies: string[];
+   123→  languages: string[];
+   124→  traits: string[];
+   125→}
+   126→
+   127→/* ----------------- caching ----------------- */
+   128→const cache = new Map<string, any>();
+   129→const listCache = new Map<string, SRDListResponse>();
+   130→
+   131→async function fetchSRD(path: string): Promise<any> {
+   132→  if (cache.has(path)) return cache.get(path);
+   133→  const r = await fetch(`/api/srd?${path}`);
+   134→  if (!r.ok) return null;
+   135→  const data = await r.json();
+   136→  if (data && !data.error) cache.set(path, data);
+   137→  return data;
+   138→}
+   139→
+   140→/* ----------------- lists ----------------- */
+   141→export async function srdListSpells(spellClass?: string, spellLevel?: number): Promise<SRDListResponse> {
+   142→  const params = new URLSearchParams({ list: "spells" });
+   143→  if (spellClass) params.set("spellClass", spellClass);
+   144→  if (spellLevel !== undefined) params.set("spellLevel", String(spellLevel));
+   145→  const key = params.toString();
+   146→  if (listCache.has(key)) return listCache.get(key)!;
+   147→  const data = await fetchSRD(key);
+   148→  if (data) listCache.set(key, data);
+   149→  return data || { count: 0, results: [] };
+   150→}
+   151→
+   152→export async function srdListMonsters(): Promise<SRDListResponse> {
+   153→  if (listCache.has("list=monsters")) return listCache.get("list=monsters")!;
+   154→  const data = await fetchSRD("list=monsters");
+   155→  if (data) listCache.set("list=monsters", data);
+   156→  return data || { count: 0, results: [] };
+   157→}
+   158→
+   159→export async function srdListEquipment(): Promise<SRDListResponse> {
+   160→  if (listCache.has("list=equipment")) return listCache.get("list=equipment")!;
+   161→  const data = await fetchSRD("list=equipment");
+   162→  if (data) listCache.set("list=equipment", data);
+   163→  return data || { count: 0, results: [] };
+   164→}
+   165→
+   166→export async function srdListMagicItems(): Promise<SRDListResponse> {
+   167→  if (listCache.has("list=magic-items")) return listCache.get("list=magic-items")!;
+   168→  const data = await fetchSRD("list=magic-items");
+   169→  if (data) listCache.set("list=magic-items", data);
+   170→  return data || { count: 0, results: [] };
+   171→}
+   172→
+   173→export async function srdListConditions(): Promise<SRDListResponse> {
+   174→  if (listCache.has("list=conditions")) return listCache.get("list=conditions")!;
+   175→  const data = await fetchSRD("list=conditions");
+   176→  if (data) listCache.set("list=conditions", data);
+   177→  return data || { count: 0, results: [] };
+   178→}
+   179→
+   180→export async function srdListClasses(): Promise<SRDListResponse> {
+   181→  if (listCache.has("list=classes")) return listCache.get("list=classes")!;
+   182→  const data = await fetchSRD("list=classes");
+   183→  if (data) listCache.set("list=classes", data);
+   184→  return data || { count: 0, results: [] };
+   185→}
+   186→
+   187→export async function srdListRaces(): Promise<SRDListResponse> {
+   188→  if (listCache.has("list=races")) return listCache.get("list=races")!;
+   189→  const data = await fetchSRD("list=races");
+   190→  if (data) listCache.set("list=races", data);
+   191→  return data || { count: 0, results: [] };
+   192→}
+   193→
+   194→/* ----------------- detail fetchers + normalizers ----------------- */
+   195→const ABILITY_MAP: Record<string, string> = {
+   196→  strength: "str", dexterity: "dex", constitution: "con",
+   197→  intelligence: "int", wisdom: "wis", charisma: "cha",
+   198→};
+   199→
+   200→export function normalizeSpell(m: any, slotLevel?: number, charLevel = 1): NormalizedSpell {
+   201→  const damage = m.damage || {};
+   202→  const heal = m.heal_at_slot_level || {};
+   203→  const hasDamage = !!damage.damage_type && (damage.damage_at_slot_level || damage.damage_at_character_level);
+   204→  const hasHeal = !!heal && Object.keys(heal).length > 0;
+   205→  const hasSave = !!m.save;
+   206→  const hasAttack = !!m.attack_type;
+   207→  const isAuto = hasDamage && !hasSave && !hasAttack; // e.g. Magic Missile (auto-hit, no save)
+   208→  const concentration = !!m.concentration;
+   209→  const bonusAction = (m.casting_time || "").toLowerCase().includes("bonus action");
+   210→
+   211→  // Determine damage formula
+   212→  let dmgFormula: string | undefined;
+   213→  let damageScaling: "slot" | "character" | "none" = "none";
+   214→  if (damage.damage_at_slot_level && slotLevel) {
+   215→    // Pick the highest level ≤ slotLevel
+   216→    const levels = Object.keys(damage.damage_at_slot_level).map(Number).sort((a, b) => a - b);
+   217→    const best = levels.filter((l) => l <= slotLevel).pop() || levels[0];
+   218→    dmgFormula = damage.damage_at_slot_level[best];
+   219→    damageScaling = "slot";
+   220→  } else if (damage.damage_at_character_level) {
+   221→    const levels = Object.keys(damage.damage_at_character_level).map(Number).sort((a, b) => a - b);
+   222→    const best = levels.filter((l) => l <= charLevel).pop() || levels[0];
+   223→    dmgFormula = damage.damage_at_character_level[best];
+   224→    damageScaling = "character";
+   225→  }
+   226→
+   227→  // Determine heal formula
+   228→  let healFormula: string | undefined;
+   229→  if (hasHeal && slotLevel) {
+   230→    const levels = Object.keys(heal).map(Number).sort((a, b) => a - b);
+   231→    const best = levels.filter((l) => l <= slotLevel).pop() || levels[0];
+   232→    healFormula = heal[best];
+   233→  }
+   234→
+   235→  // Determine spell kind
+   236→  let kind: NormalizedSpell["kind"] = "utility";
+   237→  if (hasHeal) kind = "heal";
+   238→  else if (hasAttack && hasDamage) kind = "attack";
+   239→  else if (hasSave && hasDamage) kind = "save";
+   240→  else if (isAuto) kind = "auto";
+   241→  else if (concentration || (m.duration || "").toLowerCase().includes("minute") || (m.duration || "").toLowerCase().includes("hour")) kind = "buff";
+   242→
+   243→  // Conditions applied (parsed from description — basic heuristic for common buff/debuff spells)
+   244→  const conditionsAdd: string[] = [];
+   245→  const descLower = (m.desc || []).join(" ").toLowerCase();
+   246→  const conditionKeywords: Record<string, string[]> = {
+   247→    poisoned: ["poisoned"],
+   248→    frightened: ["frightened"],
+   249→    restrained: ["restrained"],
+   250→    blinded: ["blinded"],
+   251→    charmed: ["charmed"],
+   252→    prone: ["knocked prone", "fall prone"],
+   253→  };
+   254→  for (const [cond, keywords] of Object.entries(conditionKeywords)) {
+   255→    if (keywords.some((kw) => descLower.includes(kw))) conditionsAdd.push(cond);
+   256→  }
+   257→
+   258→  return {
+   259→    index: m.index,
+   260→    name: m.name,
+   261→    level: m.level,
+   262→    school: m.school?.name || "Unknown",
+   263→    casting_time: m.casting_time || "1 action",
+   264→    range: m.range || "Self",
+   265→    duration: m.duration || "Instantaneous",
+   266→    concentration,
+   267→    ritual: !!m.ritual,
+   268→    components: m.components || [],
+   269→    material: m.material,
+   270→    desc: Array.isArray(m.desc) ? m.desc.join(" ") : (m.desc || ""),
+   271→    higher_level: Array.isArray(m.higher_level) ? m.higher_level.join(" ") : m.higher_level,
+   272→    classes: (m.classes || []).map((c: any) => c.name),
+   273→    subclasses: (m.subclasses || []).map((s: any) => s.name),
+   274→    kind,
+   275→    damage: dmgFormula,
+   276→    damageType: damage.damage_type?.name,
+   277→    damageScaling,
+   278→    saveAbility: hasSave ? ABILITY_MAP[(m.save.dc_type?.name || "").toLowerCase()] : undefined,
+   279→    saveSuccess: hasSave ? (m.save.dc_success === "half" ? "half" : "none") : undefined,
+   280→    heal: healFormula,
+   281→    aoeType: m.area_of_effect?.type,
+   282→    aoeSize: m.area_of_effect?.size,
+   283→    attackType: m.attack_type,
+   284→    conditionsAdd: conditionsAdd.length > 0 ? conditionsAdd : undefined,
+   285→    bonusAction,
+   286→    isCantrip: m.level === 0,
+   287→  };
+   288→}
+   289→
+   290→export async function fetchSpell(index: string, slotLevel?: number, charLevel = 1): Promise<NormalizedSpell | null> {
+   291→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   292→  const raw = await fetchSRD(`spell=${encodeURIComponent(idx)}`);
+   293→  if (!raw) return null;
+   294→  return normalizeSpell(raw, slotLevel, charLevel);
+   295→}
+   296→
+   297→export async function fetchMonster(indexRaw: string): Promise<NormalizedMonster | null> {
+   298→  const index = String(indexRaw).toLowerCase().replace(/_/g, "-").trim();
+   299→  const m = await fetchSRD(`monster=${encodeURIComponent(index)}`);
+   300→  if (!m) return null;
+   301→
+   302→  // Parse actions into attack list
+   303→  const attacks: { name: string; atk: number; dmg: string; dmgType?: string }[] = [];
+   304→  for (const act of m.actions || []) {
+   305→    if (act.attack_bonus !== undefined && Array.isArray(act.damage) && act.damage.some((d: any) => d.damage_dice)) {
+   306→      const dd = act.damage.find((d: any) => d.damage_dice);
+   307→      attacks.push({
+   308→        name: act.name,
+   309→        atk: act.attack_bonus,
+   310→        dmg: String(dd.damage_dice).replace(/\s/g, ""),
+   311→        dmgType: dd.damage_type?.name,
+   312→      });
+   313→    }
+   314→  }
+   315→  // Legendary actions
+   316→  const legendaryActions = (m.legendary_actions || []).map((a: any) => ({ name: a.name, desc: a.desc }));
+   317→  const specialAbilities = (m.special_abilities || []).map((a: any) => ({ name: a.name, desc: a.desc }));
+   318→  const actions = (m.actions || []).map((a: any) => ({ name: a.name, desc: a.desc }));
+   319→
+   320→  // Save mods: start from ability mod, override with proficiency
+   321→  const abilities: any = {
+   322→    str: m.strength, dex: m.dexterity, con: m.constitution,
+   323→    int: m.intelligence, wis: m.wisdom, cha: m.charisma,
+   324→  };
+   325→  const sv: any = {};
+   326→  for (const k of Object.keys(abilities)) sv[k] = Math.floor(((abilities[k] || 10) - 10) / 2);
+   327→  for (const p of m.proficiencies || []) {
+   328→    const n = (p.proficiency && p.proficiency.index) || "";
+   329→    for (const abil of Object.keys(abilities)) {
+   330→      if (n === `saving-throw-${abil}`) sv[abil] = p.value;
+   331→    }
+   332→  }
+   333→
+   334→  // CR → XP
+   335→  const crToXp: Record<string, number> = {
+   336→    "0": 10, "1/8": 25, "1/4": 50, "1/2": 100, "1": 200, "2": 450, "3": 700, "4": 1100, "5": 1800,
+   337→    "6": 2300, "7": 2900, "8": 3900, "9": 5000, "10": 5900, "11": 7200, "12": 8400, "13": 10000,
+   338→    "14": 11500, "15": 13000, "16": 15000, "17": 18000, "18": 20000, "19": 22000, "20": 25000,
+   339→    "21": 33000, "22": 41000, "23": 50000, "24": 62000, "25": 75000, "26": 90000, "27": 105000,
+   340→    "28": 120000, "29": 135000, "30": 155000,
+   341→  };
+   342→  const cr = m.challenge_rating || "0";
+   343→  const xp = crToXp[String(cr)] || 50;
+   344→
+   345→  const ac = Array.isArray(m.armor_class) ? ((m.armor_class[0] && m.armor_class[0].value) || 12) : (m.armor_class || 12);
+   346→  const primary = attacks[0] || { name: "Attack", atk: 3, dmg: "1d6+1" };
+   347→
+   348→  return {
+   349→    index: m.index,
+   350→    th: m.name,
+   351→    name: m.name,
+   352→    ac,
+   353→    hp: m.hit_points || 10,
+   354→    atk: primary.atk,
+   355→    dmg: primary.dmg,
+   356→    init: Math.floor(((m.dexterity || 10) - 10) / 2),
+   357→    xp,
+   358→    cr: String(cr),
+   359→    sv,
+   360→    srd: true,
+   361→    attacks,
+   362→    specialAbilities,
+   363→    legendaryActions,
+   364→    actions,
+   365→    size: m.size,
+   366→    type: m.type,
+   367→    alignment: m.alignment,
+   368→    speed: typeof m.speed === "object" ? JSON.stringify(m.speed) : String(m.speed || ""),
+   369→    senses: Array.isArray(m.senses) ? m.senses.join(", ") : (m.senses || ""),
+   370→    languages: Array.isArray(m.languages) ? m.languages.join(", ") : (m.languages || ""),
+   371→  };
+   372→}
+   373→
+   374→export async function fetchEquipment(index: string): Promise<NormalizedEquipment | null> {
+   375→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   376→  const m = await fetchSRD(`equipment=${encodeURIComponent(idx)}`);
+   377→  if (!m) return null;
+   378→  return {
+   379→    index: m.index,
+   380→    name: m.name,
+   381→    equipmentCategory: m.equipment_category?.name || "",
+   382→    cost: m.cost || { quantity: 0, unit: "gp" },
+   383→    weight: m.weight || 0,
+   384→    desc: Array.isArray(m.desc) ? m.desc.join(" ") : m.desc,
+   385→    weaponCategory: m.weapon_category,
+   386→    damage: m.damage ? { damage_dice: m.damage.damage_dice, damage_type: m.damage.damage_type?.name } : undefined,
+   387→    range: m.range,
+   388→    properties: (m.properties || []).map((p: any) => p.name),
+   389→    armorCategory: m.armor_category,
+   390→    armorClass: m.armor_class,
+   391→    strMinimum: m.str_minimum,
+   392→    stealthDisadvantage: m.stealth_disadvantage,
+   393→  };
+   394→}
+   395→
+   396→export async function fetchCondition(index: string): Promise<NormalizedCondition | null> {
+   397→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   398→  const m = await fetchSRD(`condition=${encodeURIComponent(idx)}`);
+   399→  if (!m) return null;
+   400→  return {
+   401→    index: m.index,
+   402→    name: m.name,
+   403→    desc: m.desc || [],
+   404→  };
+   405→}
+   406→
+   407→export async function fetchClass(index: string): Promise<NormalizedClass | null> {
+   408→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   409→  const m = await fetchSRD(`class=${encodeURIComponent(idx)}`);
+   410→  if (!m) return null;
+   411→  return {
+   412→    index: m.index,
+   413→    name: m.name,
+   414→    hitDie: m.hit_die,
+   415→    proficiencies: (m.proficiencies || []).map((p: any) => p.name),
+   416→    savingThrows: (m.saving_throws || []).map((s: any) => s.name.toLowerCase()),
+   417→    startingEquipment: Array.isArray(m.starting_equipment) ? m.starting_equipment.map((e: any) => `${e.quantity||1}x ${e.equipment?.name||""}`).join(", ") : "",
+   418→    classLevels: m.class_levels,
+   419→    spellcasting: m.spellcasting?.spellcasting_ability?.name,
+   420→    subclasses: (m.subclasses || []).map((s: any) => s.name),
+   421→  };
+   422→}
+   423→
+   424→export async function fetchRace(index: string): Promise<NormalizedRace | null> {
+   425→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   426→  const m = await fetchSRD(`race=${encodeURIComponent(idx)}`);
+   427→  if (!m) return null;
+   428→  return {
+   429→    index: m.index,
+   430→    name: m.name,
+   431→    speed: m.speed,
+   432→    abilityBonuses: (m.ability_bonuses || []).map((ab: any) => ({
+   433→      name: ab.ability_score?.name || "",
+   434→      bonus: ab.bonus,
+   435→    })),
+   436→    size: m.size,
+   437→    startingProficiencies: (m.starting_proficiencies || []).map((p: any) => p.name),
+   438→    languages: (m.languages || []).map((l: any) => l.name),
+   439→    traits: (m.traits || []).map((t: any) => t.name),
+   440→  };
+   441→}
+   442→
+   443→/* ----------------- new endpoints (backgrounds, feats, subraces, traits, proficiencies, etc.) ----------------- */
+   444→
+   445→export interface NormalizedBackground {
+   446→  index: string;
+   447→  name: string;
+   448→  skills: string[];
+   449→  startingEquipment: string;
+   450→  feature: { name: string; desc: string };
+   451→}
+   452→
+   453→export async function fetchBackground(index: string): Promise<NormalizedBackground | null> {
+   454→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   455→  const m = await fetchSRD(`background=${encodeURIComponent(idx)}`);
+   456→  if (!m) return null;
+   457→  return {
+   458→    index: m.index,
+   459→    name: m.name,
+   460→    skills: (m.skill_proficiencies || []).map((s: any) => s.name || s.index || ""),
+   461→    startingEquipment: Array.isArray(m.starting_equipment) ? m.starting_equipment.map((e: any) => `${e.quantity||1}x ${e.equipment?.name||""}`).join(", ") : "",
+   462→    feature: m.feature ? { name: m.feature.name || "", desc: Array.isArray(m.feature.desc) ? m.feature.desc.join(" ") : (m.feature.desc || "") } : { name: "", desc: "" },
+   463→  };
+   464→}
+   465→
+   466→export interface NormalizedFeat {
+   467→  index: string;
+   468→  name: string;
+   469→  desc: string[];
+   470→  prerequisite?: string;
+   471→}
+   472→
+   473→export async function fetchFeat(index: string): Promise<NormalizedFeat | null> {
+   474→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   475→  const m = await fetchSRD(`feat=${encodeURIComponent(idx)}`);
+   476→  if (!m) return null;
+   477→  return {
+   478→    index: m.index,
+   479→    name: m.name,
+   480→    desc: m.desc || [],
+   481→    prerequisite: m.prerequisite,
+   482→  };
+   483→}
+   484→
+   485→export interface NormalizedSubrace {
+   486→  index: string;
+   487→  name: string;
+   488→  desc: string;
+   489→  abilityBonuses: { name: string; bonus: number }[];
+   490→  startingProficiencies: string[];
+   491→  traits: string[];
+   492→}
+   493→
+   494→export async function fetchSubrace(index: string): Promise<NormalizedSubrace | null> {
+   495→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   496→  const m = await fetchSRD(`subrace=${encodeURIComponent(idx)}`);
+   497→  if (!m) return null;
+   498→  return {
+   499→    index: m.index,
+   500→    name: m.name,
+   501→    desc: Array.isArray(m.desc) ? m.desc.join(" ") : (m.desc || ""),
+   502→    abilityBonuses: (m.ability_bonuses || []).map((ab: any) => ({
+   503→      name: ab.ability_score?.name || "",
+   504→      bonus: ab.bonus,
+   505→    })),
+   506→    startingProficiencies: (m.starting_proficiencies || []).map((p: any) => p.name),
+   507→    traits: (m.traits || []).map((t: any) => t.name),
+   508→  };
+   509→}
+   510→
+   511→export interface NormalizedTrait {
+   512→  index: string;
+   513→  name: string;
+   514→  desc: string[];
+   515→  proficiencies: string[];
+   516→}
+   517→
+   518→export async function fetchTrait(index: string): Promise<NormalizedTrait | null> {
+   519→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   520→  const m = await fetchSRD(`trait=${encodeURIComponent(idx)}`);
+   521→  if (!m) return null;
+   522→  return {
+   523→    index: m.index,
+   524→    name: m.name,
+   525→    desc: m.desc || [],
+   526→    proficiencies: (m.proficiencies || []).map((p: any) => p.name),
+   527→  };
+   528→}
+   529→
+   530→export interface NormalizedProficiency {
+   531→  index: string;
+   532→  name: string;
+   533→  type: string;
+   534→  classes: string[];
+   535→  races: string[];
+   536→}
+   537→
+   538→export async function fetchProficiency(index: string): Promise<NormalizedProficiency | null> {
+   539→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   540→  const m = await fetchSRD(`proficiency=${encodeURIComponent(idx)}`);
+   541→  if (!m) return null;
+   542→  return {
+   543→    index: m.index,
+   544→    name: m.name,
+   545→    type: m.type || "",
+   546→    classes: (m.classes || []).map((c: any) => c.name),
+   547→    races: (m.races || []).map((r: any) => r.name),
+   548→  };
+   549→}
+   550→
+   551→export interface NormalizedDamageType {
+   552→  index: string;
+   553→  name: string;
+   554→  desc: string[];
+   555→}
+   556→
+   557→export async function fetchDamageType(index: string): Promise<NormalizedDamageType | null> {
+   558→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   559→  const m = await fetchSRD(`damage-type=${encodeURIComponent(idx)}`);
+   560→  if (!m) return null;
+   561→  return {
+   562→    index: m.index,
+   563→    name: m.name,
+   564→    desc: m.desc || [],
+   565→  };
+   566→}
+   567→
+   568→export interface NormalizedMagicSchool {
+   569→  index: string;
+   570→  name: string;
+   571→  desc: string;
+   572→}
+   573→
+   574→export async function fetchMagicSchool(index: string): Promise<NormalizedMagicSchool | null> {
+   575→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   576→  const m = await fetchSRD(`magic-school=${encodeURIComponent(idx)}`);
+   577→  if (!m) return null;
+   578→  return {
+   579→    index: m.index,
+   580→    name: m.name,
+   581→    desc: Array.isArray(m.desc) ? m.desc.join(" ") : (m.desc || ""),
+   582→  };
+   583→}
+   584→
+   585→export interface NormalizedLanguage {
+   586→  index: string;
+   587→  name: string;
+   588→  desc: string;
+   589→  type: string;
+   590→  typical_speakers: string[];
+   591→  script: string;
+   592→}
+   593→
+   594→export async function fetchLanguage(index: string): Promise<NormalizedLanguage | null> {
+   595→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   596→  const m = await fetchSRD(`language=${encodeURIComponent(idx)}`);
+   597→  if (!m) return null;
+   598→  return {
+   599→    index: m.index,
+   600→    name: m.name,
+   601→    desc: Array.isArray(m.desc) ? m.desc.join(" ") : (m.desc || ""),
+   602→    type: m.type || "Standard",
+   603→    typical_speakers: m.typical_speakers || [],
+   604→    script: m.script || "",
+   605→  };
+   606→}
+   607→
+   608→export interface NormalizedAbilityScore {
+   609→  index: string;
+   610→  name: string;
+   611→  fullName: string;
+   612→  desc: string[];
+   613→  skills: string[];
+   614→}
+   615→
+   616→export async function fetchAbilityScore(index: string): Promise<NormalizedAbilityScore | null> {
+   617→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   618→  const m = await fetchSRD(`ability-score=${encodeURIComponent(idx)}`);
+   619→  if (!m) return null;
+   620→  return {
+   621→    index: m.index,
+   622→    name: m.name,
+   623→    fullName: m.full_name || m.name,
+   624→    desc: m.desc || [],
+   625→    skills: (m.skills || []).map((s: any) => s.name),
+   626→  };
+   627→}
+   628→
+   629→export interface NormalizedEquipmentCategory {
+   630→  index: string;
+   631→  name: string;
+   632→  equipment: { index: string; name: string }[];
+   633→}
+   634→
+   635→export async function fetchEquipmentCategory(index: string): Promise<NormalizedEquipmentCategory | null> {
+   636→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   637→  const m = await fetchSRD(`equipment-category=${encodeURIComponent(idx)}`);
+   638→  if (!m) return null;
+   639→  return {
+   640→    index: m.index,
+   641→    name: m.name,
+   642→    equipment: (m.equipment || []).map((e: any) => ({ index: e.index, name: e.name })),
+   643→  };
+   644→}
+   645→
+   646→export interface NormalizedWeaponProperty {
+   647→  index: string;
+   648→  name: string;
+   649→  desc: string[];
+   650→}
+   651→
+   652→export async function fetchWeaponProperty(index: string): Promise<NormalizedWeaponProperty | null> {
+   653→  const idx = String(index).toLowerCase().replace(/_/g, "-").trim();
+   654→  const m = await fetchSRD(`weapon-property=${encodeURIComponent(idx)}`);
+   655→  if (!m) return null;
+   656→  return {
+   657→    index: m.index,
+   658→    name: m.name,
+   659→    desc: m.desc || [],
+   660→  };
+   661→}
+   662→
+   663→/* ----------------- additional list fetchers ----------------- */
+   664→
+   665→export async function srdListBackgrounds(): Promise<SRDListResponse> {
+   666→  if (listCache.has("list=backgrounds")) return listCache.get("list=backgrounds")!;
+   667→  const data = await fetchSRD("list=backgrounds");
+   668→  if (data) listCache.set("list=backgrounds", data);
+   669→  return data || { count: 0, results: [] };
+   670→}
+   671→
+   672→export async function srdListFeats(): Promise<SRDListResponse> {
+   673→  if (listCache.has("list=feats")) return listCache.get("list=feats")!;
+   674→  const data = await fetchSRD("list=feats");
+   675→  if (data) listCache.set("list=feats", data);
+   676→  return data || { count: 0, results: [] };
+   677→}
+   678→
+   679→export async function srdListSubraces(): Promise<SRDListResponse> {
+   680→  if (listCache.has("list=subraces")) return listCache.get("list=subraces")!;
+   681→  const data = await fetchSRD("list=subraces");
+   682→  if (data) listCache.set("list=subraces", data);
+   683→  return data || { count: 0, results: [] };
+   684→}
+   685→
+   686→export async function srdListTraits(): Promise<SRDListResponse> {
+   687→  if (listCache.has("list=traits")) return listCache.get("list=traits")!;
+   688→  const data = await fetchSRD("list=traits");
+   689→  if (data) listCache.set("list=traits", data);
+   690→  return data || { count: 0, results: [] };
+   691→}
+   692→
+   693→export async function srdListProficiencies(): Promise<SRDListResponse> {
+   694→  if (listCache.has("list=proficiencies")) return listCache.get("list=proficiencies")!;
+   695→  const data = await fetchSRD("list=proficiencies");
+   696→  if (data) listCache.set("list=proficiencies", data);
+   697→  return data || { count: 0, results: [] };
+   698→}
+   699→
+   700→export async function srdListEquipmentCategories(): Promise<SRDListResponse> {
+   701→  if (listCache.has("list=equipment-categories")) return listCache.get("list=equipment-categories")!;
+   702→  const data = await fetchSRD("list=equipment-categories");
+   703→  if (data) listCache.set("list=equipment-categories", data);
+   704→  return data || { count: 0, results: [] };
+   705→}
+   706→
+   707→export async function srdListDamageTypes(): Promise<SRDListResponse> {
+   708→  if (listCache.has("list=damage-types")) return listCache.get("list=damage-types")!;
+   709→  const data = await fetchSRD("list=damage-types");
+   710→  if (data) listCache.set("list=damage-types", data);
+   711→  return data || { count: 0, results: [] };
+   712→}
+   713→
+   714→export async function srdListMagicSchools(): Promise<SRDListResponse> {
+   715→  if (listCache.has("list=magic-schools")) return listCache.get("list=magic-schools")!;
+   716→  const data = await fetchSRD("list=magic-schools");
+   717→  if (data) listCache.set("list=magic-schools", data);
+   718→  return data || { count: 0, results: [] };
+   719→}
+   720→
+   721→export async function srdListLanguages(): Promise<SRDListResponse> {
+   722→  if (listCache.has("list=languages")) return listCache.get("list=languages")!;
+   723→  const data = await fetchSRD("list=languages");
+   724→  if (data) listCache.set("list=languages", data);
+   725→  return data || { count: 0, results: [] };
+   726→}
+   727→
+   728→export async function srdListAbilityScores(): Promise<SRDListResponse> {
+   729→  if (listCache.has("list=ability-scores")) return listCache.get("list=ability-scores")!;
+   730→  const data = await fetchSRD("list=ability-scores");
+   731→  if (data) listCache.set("list=ability-scores", data);
+   732→  return data || { count: 0, results: [] };
+   733→}
+   734→
+   735→export async function srdListWeaponProperties(): Promise<SRDListResponse> {
+   736→  if (listCache.has("list=weapon-properties")) return listCache.get("list=weapon-properties")!;
+   737→  const data = await fetchSRD("list=weapon-properties");
+   738→  if (data) listCache.set("list=weapon-properties", data);
+   739→  return data || { count: 0, results: [] };
+   740→}
+   741→
+   742→/* ----------------- probe ----------------- */
+   743→export async function srdProbe(): Promise<boolean> {
+   744→  try {
+   745→    const r = await fetch("/api/srd?probe=1");
+   746→    if (!r.ok) return false;
+   747→    const data = await r.json();
+   748→    return !!data.ok;
+   749→  } catch {
+   750→    return false;
+   751→  }
+   752→}
+   753→
+   754→
+   755→/* ========================================================================
+   756→ * ADAPTERS FOR DOMAIN 21-30 (engine-internal types)
+   757→ * ========================================================================
+   758→ * These functions convert SRD data into the structures defined in the new
+   759→ * domain modules (monsters.ts, world.ts, etc). They live here so SRD parsing
+   760→ * stays centralized; domain modules stay pure & testable.
+   761→ * ======================================================================== */
+   762→
+   763→import type {
+   764→  MonsterDefinition,
+   765→  MonsterStats,
+   766→  MonsterAction,
+   767→  MonsterAbility,
+   768→  AIBehavior,
+   769→  CreatureType,
+   770→  CreatureSize,
+   771→  Alignment,
+   772→} from "./monsters.js";
+   773→
+   774→import type { LoreEntry } from "./world.js";
+   775→
+   776→/** Convert SRD NormalizedMonster into a MonsterDefinition (Domain 25). */
+   777→export function convertSRDMonsterToDefinition(m: NormalizedMonster): MonsterDefinition {
+   778→  const sizeMap: Record<string, CreatureSize> = {
+   779→    Tiny: "tiny",
+   780→    Small: "small",
+   781→    Medium: "medium",
+   782→    Large: "large",
+   783→    Huge: "huge",
+   784→    Gargantuan: "gargantuan",
+   785→  };
+   786→  const alignMap: Record<string, Alignment> = {
+   787→    "lawful good": "lawful_good",
+   788→    "neutral good": "neutral_good",
+   789→    "chaotic good": "chaotic_good",
+   790→    "lawful neutral": "lawful_neutral",
+   791→    "neutral": "true_neutral",
+   792→    "true neutral": "true_neutral",
+   793→    "chaotic neutral": "chaotic_neutral",
+   794→    "lawful evil": "lawful_evil",
+   795→    "neutral evil": "neutral_evil",
+   796→    "chaotic evil": "chaotic_evil",
+   797→    "unaligned": "unaligned",
+   798→    "any alignment": "true_neutral",
+   799→  };
+   800→  const size = sizeMap[m.size ?? "Medium"] ?? "medium";
+   801→  const type = (m.type?.toLowerCase() ?? "humanoid") as CreatureType;
+   802→  const alignment = alignMap[(m.alignment ?? "unaligned").toLowerCase()] ?? "unaligned";
+   803→
+   804→  // Convert special abilities + actions + legendary actions into MonsterAbility[]
+   805→  const abilities: MonsterAbility[] = [];
+   806→  for (const sa of m.specialAbilities ?? []) {
+   807→    abilities.push({
+   808→      id: `ab_${sa.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+   809→      kind: "trait",
+   810→      name: sa.name,
+   811→      description: sa.desc,
+   812→      passive: true,
+   813→    });
+   814→  }
+   815→  for (const a of m.actions ?? []) {
+   816→    abilities.push({
+   817→      id: `ac_${a.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+   818→      kind: "feature",
+   819→      name: a.name,
+   820→      description: a.desc,
+   821→    });
+   822→  }
+   823→  for (const la of m.legendaryActions ?? []) {
+   824→    abilities.push({
+   825→      id: `la_${la.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+   826→      kind: "legendary",
+   827→      name: la.name,
+   828→      description: la.desc,
+   829→    });
+   830→  }
+   831→  // Attacks
+   832→  const actions: MonsterAction[] = m.attacks.map((a, i) => ({
+   833→    id: `atk_${i}`,
+   834→    name: a.name,
+   835→    type: "action",
+   836→    description: `${a.name}: +${a.atk} to hit, ${a.dmg} ${a.dmgType ?? ""} damage`,
+   837→  }));
+   838→
+   839→  const stats: MonsterStats = {
+   840→    hp: m.hp,
+   841→    maxHp: m.hp,
+   842→    ac: m.ac,
+   843→    speed: 30,
+   844→    abilities: {
+   845→      str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10,
+   846→    },
+   847→    savingThrows: m.sv,
+   848→    skills: {},
+   849→    passivePerception: 10 + (m.sv.wis ?? 0),
+   850→    languages: m.languages?.split(",").map((s) => s.trim()) ?? [],
+   851→  };
+   852→
+   853→  // Default AI behavior based on type
+   854→  const behavior: AIBehavior = {
+   855→    pattern: type === "beast" || type === "monstrosity" ? "aggressive" : "tactical",
+   856→    priorities: ["attack", "defend"],
+   857→    fleeThreshold: 25,
+   858→    preferTarget: "nearest",
+   859→  };
+   860→
+   861→  return {
+   862→    base: {
+   863→      id: m.index,
+   864→      name: m.name,
+   865→      type,
+   866→      size,
+   867→      alignment,
+   868→      cr: m.cr,
+   869→      source: "srd",
+   870→    },
+   871→    stats,
+   872→    actions,
+   873→    abilities,
+   874→    behavior,
+   875→  };
+   876→}
+   877→
+   878→/** Fetch a single SRD monster and convert to engine MonsterDefinition. */
+   879→export async function fetchMonsterDefinition(index: string): Promise<MonsterDefinition | null> {
+   880→  const m = await fetchMonster(index);
+   881→  if (!m) return null;
+   882→  return convertSRDMonsterToDefinition(m);
+   883→}
+   884→
+   885→/* -------------------- Domain 26: World / Lore -------------------- */
+   886→
+   887→export interface SRDRule {
+   888→  index: string;
+   889→  name: string;
+   890→  desc: string;
+   891→  subsections?: Array<{ index: string; name: string; desc: string }>;
+   892→}
+   893→
+   894→/** Fetch a "rule" entry from SRD and convert to a LoreEntry (Domain 26). */
+   895→export async function fetchRuleAsLore(ruleIndex: string): Promise<LoreEntry | null> {
+   896→  try {
+   897→    const r = await fetch(`/api/srd?rule=${encodeURIComponent(ruleIndex)}`);
+   898→    if (!r.ok) return null;
+   899→    const data = await r.json();
+   900→    return {
+   901→      id: data.index ?? ruleIndex,
+   902→      category: "history",
+   903→      title: data.name ?? ruleIndex,
+   904→      content: data.desc ?? "",
+   905→      knownByDefault: false,
+   906→      tags: ["srd", "rule"],
+   907→    };
+   908→  } catch {
+   909→    return null;
+   910→  }
+   911→}
+   912→
+   913→/** List all SRD rules — useful for building a Lore database. */
+   914→export async function srdListRules(): Promise<SRDListResponse> {
+   915→  if (listCache.has("list=rules")) return listCache.get("list=rules")!;
+   916→  const data = await fetchSRD("list=rules");
+   917→  if (data) listCache.set("list=rules", data);
+   918→  return data || { count: 0, results: [] };
+   919→}
+   920→
+   921→export async function srdListRuleSections(): Promise<SRDListResponse> {
+   922→  if (listCache.has("list=rule-sections")) return listCache.get("list=rule-sections")!;
+   923→  const data = await fetchSRD("list=rule-sections");
+   924→  if (data) listCache.set("list=rule-sections", data);
+   925→  return data || { count: 0, results: [] };
+   926→}
+   927→
+   928→/* -------------------- Domain 22: Social / Alignments -------------------- */
+   929→
+   930→export async function srdListAlignments(): Promise<SRDListResponse> {
+   931→  if (listCache.has("list=alignments")) return listCache.get("list=alignments")!;
+   932→  const data = await fetchSRD("list=alignments");
+   933→  if (data) listCache.set("list=alignments", data);
+   934→  return data || { count: 0, results: [] };
+   935→}
+   936→
+   937→export interface SRDAlignment {
+   938→  index: string;
+   939→  name: string;
+   940→  abbreviation: string;
+   941→  desc: string;
+   942→}
+   943→
+   944→export async function fetchAlignment(index: string): Promise<SRDAlignment | null> {
+   945→  try {
+   946→    const r = await fetch(`/api/srd?alignment=${encodeURIComponent(index)}`);
+   947→    if (!r.ok) return null;
+   948→    return await r.json();
+   949→  } catch {
+   950→    return null;
+   951→  }
+   952→}
+   953→

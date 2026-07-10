@@ -1,0 +1,2002 @@
+     1→import React, { useState, useRef, useEffect, useCallback } from "react";
+     2→
+     3→/* ============================================================
+     4→   D&D 5e SOLO — Deterministic Engine + Claude DM
+     5→   - Engine (code): ทอยเต๋า, HP/AC, spell slots, conditions,
+     6→     combat, initiative, death saves, XP/level — ตายตัวตามกฎ
+     7→   - DM (Claude API): บรรยาย/เล่น NPC เท่านั้น ห้ามแตะตัวเลข
+     8→   ============================================================ */
+     9→
+    10→/* ---------------- DICE ENGINE ---------------- */
+    11→const d = (sides) => Math.floor(Math.random() * sides) + 1;
+    12→
+    13→function rollFormula(formula) {
+    14→  // "2d6+3" -> { total, rolls:[..], mod }
+    15→  const m = String(formula).replace(/\s/g, "").match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+    16→  if (!m) return { total: 0, rolls: [], mod: 0, formula };
+    17→  const n = parseInt(m[1] || "1", 10);
+    18→  const sides = parseInt(m[2], 10);
+    19→  const mod = m[3] ? parseInt(m[3], 10) : 0;
+    20→  const rolls = [];
+    21→  for (let i = 0; i < n; i++) rolls.push(d(sides));
+    22→  return { total: rolls.reduce((a, b) => a + b, 0) + mod, rolls, mod, formula };
+    23→}
+    24→
+    25→function rollD20(mod, adv = "none") {
+    26→  const a = d(20), b = d(20);
+    27→  let die = a;
+    28→  if (adv === "advantage") die = Math.max(a, b);
+    29→  if (adv === "disadvantage") die = Math.min(a, b);
+    30→  return { die, other: adv !== "none" ? (die === a ? b : a) : null, mod, total: die + mod, adv };
+    31→}
+    32→
+    33→/* ---------------- 5e DATA ---------------- */
+    34→const ABILS = ["str", "dex", "con", "int", "wis", "cha"];
+    35→const ABIL_TH = { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" };
+    36→const mod = (score) => Math.floor((score - 10) / 2);
+    37→const profByLevel = (lv) => Math.ceil(lv / 4) + 1;
+    38→const XP_THRESHOLDS = [0, 300, 900, 2700, 6500, 14000];
+    39→
+    40→const SKILLS = {
+    41→  athletics: { abil: "str", th: "Athletics" },
+    42→  acrobatics: { abil: "dex", th: "Acrobatics" },
+    43→  sleight_of_hand: { abil: "dex", th: "Sleight of Hand" },
+    44→  stealth: { abil: "dex", th: "Stealth" },
+    45→  arcana: { abil: "int", th: "Arcana" },
+    46→  history: { abil: "int", th: "History" },
+    47→  investigation: { abil: "int", th: "Investigation" },
+    48→  nature: { abil: "int", th: "Nature" },
+    49→  religion: { abil: "int", th: "Religion" },
+    50→  animal_handling: { abil: "wis", th: "Animal Handling" },
+    51→  insight: { abil: "wis", th: "Insight" },
+    52→  medicine: { abil: "wis", th: "Medicine" },
+    53→  perception: { abil: "wis", th: "Perception" },
+    54→  survival: { abil: "wis", th: "Survival" },
+    55→  deception: { abil: "cha", th: "Deception" },
+    56→  intimidation: { abil: "cha", th: "Intimidation" },
+    57→  performance: { abil: "cha", th: "Performance" },
+    58→  persuasion: { abil: "cha", th: "Persuasion" },
+    59→};
+    60→
+    61→const CONDITIONS_TH = {
+    62→  poisoned: "Poisoned (เสียเปรียบทอยโจมตี/สกิล)",
+    63→  frightened: "Frightened (เสียเปรียบขณะเห็นต้นเหตุ)",
+    64→  prone: "Prone (ล้ม)",
+    65→  restrained: "Restrained (ถูกตรึง)",
+    66→  blinded: "Blinded (มองไม่เห็น)",
+    67→  charmed: "Charmed (ถูกเสน่ห์)",
+    68→};
+    69→// 5e RAW: เงื่อนไขแต่ละแบบมีผลไม่เหมือนกัน
+    70→const DISADV_CONDS = ["poisoned", "frightened", "restrained", "blinded", "prone"]; // การโจมตีของคุณเสียเปรียบ
+    71→const CHECK_DISADV_CONDS = ["poisoned", "frightened", "blinded"]; // ability check เสียเปรียบ (restrained ไม่มีผลกับ check ตาม RAW)
+    72→const ENEMY_ADV_CONDS = ["restrained", "blinded", "prone"]; // ศัตรูโจมตีคุณแบบได้เปรียบ
+    73→
+    74→const SLOT_TABLE = { 1: [2], 2: [3], 3: [4, 2], 4: [4, 3], 5: [4, 3, 2] };
+    75→
+    76→const WEAPONS = {
+    77→  dagger: { th: "Dagger", dmg: "1d4", abil: "dex", ranged: false, price: 2 },
+    78→  mace: { th: "Mace", dmg: "1d6", abil: "str", ranged: false, price: 5 },
+    79→  handaxe: { th: "Handaxe", dmg: "1d6", abil: "str", ranged: false, price: 5 },
+    80→  shortsword: { th: "Shortsword", dmg: "1d6", abil: "dex", ranged: false, price: 10 },
+    81→  longsword: { th: "Longsword", dmg: "1d8", abil: "str", ranged: false, price: 15 },
+    82→  warhammer: { th: "Warhammer", dmg: "1d8", abil: "str", ranged: false, price: 15 },
+    83→  rapier: { th: "Rapier", dmg: "1d8", abil: "dex", ranged: false, price: 25 },
+    84→  greataxe: { th: "Greataxe", dmg: "1d12", abil: "str", ranged: false, price: 30 },
+    85→  shortbow: { th: "Shortbow", dmg: "1d6", abil: "dex", ranged: true, price: 25 },
+    86→  light_crossbow: { th: "Light Crossbow", dmg: "1d8", abil: "dex", ranged: true, price: 25 },
+    87→  longbow: { th: "Longbow", dmg: "1d8", abil: "dex", ranged: true, price: 50 },
+    88→  // อาวุธเวท (plus = บวกทั้งทอยโจมตีและดาเมจ · venom = พิษ 1 ครั้ง/long rest)
+    89→  shortsword_p1: { th: "Shortsword +1", dmg: "1d6", abil: "dex", ranged: false, price: 1000, plus: 1 },
+    90→  longsword_p1: { th: "Longsword +1", dmg: "1d8", abil: "str", ranged: false, price: 1000, plus: 1 },
+    91→  longbow_p1: { th: "Longbow +1", dmg: "1d8", abil: "dex", ranged: true, price: 1200, plus: 1 },
+    92→  dagger_venom: { th: "Dagger of Venom", dmg: "1d4", abil: "dex", ranged: false, price: 2500, venom: true },
+    93→};
+    94→const weaponByName = (nm) => Object.entries(WEAPONS).find(([, w]) => w.th === nm);
+    95→
+    96→/* ---------------- MAGIC ITEMS (สวมใส่ได้ — engine บังคับใช้ผลจริง) ---------------- */
+    97→const MAGIC_ITEMS = {
+    98→  "Cloak of Elvenkind": { slot: "cloak", effect: "adv_stealth", price: 500, desc: "ได้เปรียบ Stealth check ขณะสวม" },
+    99→  "Boots of Elvenkind": { slot: "boots", effect: "adv_stealth", price: 500, desc: "ย่างก้าวไร้เสียง — ได้เปรียบ Stealth check" },
+   100→  "Gloves of Thievery": { slot: "gloves", effect: "sleight5", price: 500, desc: "+5 Sleight of Hand" },
+   101→  "Studded Leather Armor +1": { slot: "armor", acBase: 12, acBonus: 1, price: 1500, desc: "เกราะเบา AC 12+DEX+1" },
+   102→  "Studded Leather Armor +2": { slot: "armor", acBase: 12, acBonus: 2, price: 4000, desc: "เกราะเบา AC 12+DEX+2" },
+   103→  "Studded Leather Armor +3": { slot: "armor", acBase: 12, acBonus: 3, price: 8000, desc: "เกราะเบา AC 12+DEX+3" },
+   104→  "Ring of Protection": { slot: "ring", acPlus: 1, savePlus: 1, price: 2000, desc: "+1 AC และ +1 saving throw ทุกชนิด" },
+   105→  "Ring of Invisibility": { slot: "ring", effect: "invisibility", price: 20000, desc: "ล่องหนได้ (ปุ่ม 🫥 ใน combat) — โจมตีได้เปรียบ ศัตรูตีคุณเสียเปรียบ จนกว่าคุณจะโจมตี" },
+   106→  "Bag of Holding": { slot: "bag", price: 1000, desc: "เป้ามิติ เก็บของได้มหาศาล (ไม่มีผลกลไก)" },
+   107→};
+   108→const wornHas = (c, eff) => (c.worn || []).some((n) => MAGIC_ITEMS[n] && MAGIC_ITEMS[n].effect === eff);
+   109→
+   110→// AC รวมผลจากเกราะเวท/แหวน — ใช้แทน cls.acCalc ตรง ๆ ทุกจุด
+   111→function computeAC(c) {
+   112→  const armor = (c.worn || []).map((n) => MAGIC_ITEMS[n]).find((m) => m && m.slot === "armor");
+   113→  let ac = armor ? armor.acBase + mod(c.abilities.dex) + (armor.acBonus || 0) : CLASSES[c.cls].acCalc(c);
+   114→  (c.worn || []).forEach((n) => { const m = MAGIC_ITEMS[n]; if (m && m.acPlus) ac += m.acPlus; });
+   115→  return ac;
+   116→}
+   117→
+   118→const CONSUMABLES = {
+   119→  "Potion of Healing": { heal: "2d4+2", combat: true, price: 50 },
+   120→  "Potion of Greater Healing": { heal: "4d4+4", combat: true, price: 150 },
+   121→  "Antitoxin": { cure: "poisoned", combat: true, price: 50 },
+   122→  "เสบียง": { heal: "1d4", combat: false, price: 1 },
+   123→};
+   124→
+   125→const BACKGROUNDS = {
+   126→  soldier: { th: "Soldier (ทหารเก่า)", skills: ["athletics", "intimidation"] },
+   127→  criminal: { th: "Criminal (อดีตโจร)", skills: ["deception", "stealth"] },
+   128→  sage: { th: "Sage (นักปราชญ์)", skills: ["arcana", "history"] },
+   129→  acolyte: { th: "Acolyte (ศิษย์วัด)", skills: ["insight", "religion"] },
+   130→  folk_hero: { th: "Folk Hero (วีรชนชาวบ้าน)", skills: ["animal_handling", "survival"] },
+   131→  urchin: { th: "Urchin (เด็กข้างถนน)", skills: ["sleight_of_hand", "stealth"] },
+   132→};
+   133→
+   134→const RACES = {
+   135→  human: { th: "Human", bonus: { str: 1, dex: 1, con: 1, int: 1, wis: 1, cha: 1 } },
+   136→  elf: { th: "Elf", bonus: { dex: 2, wis: 1 } },
+   137→  dwarf: { th: "Dwarf", bonus: { con: 2, str: 1 } },
+   138→  halfling: { th: "Halfling", bonus: { dex: 2, cha: 1 } },
+   139→};
+   140→
+   141→const CLASSES = {
+   142→  fighter: {
+   143→    th: "Fighter", hitDie: 10, caster: false,
+   144→    array: { str: 15, dex: 13, con: 14, int: 8, wis: 12, cha: 10 },
+   145→    acCalc: () => 16,
+   146→    weapon: "longsword", ranged: "light_crossbow",
+   147→    skills: ["athletics", "perception", "intimidation"],
+   148→    saves: ["str", "con"],
+   149→    feature: "Second Wind: ฟื้น 1d10+level (1 ครั้ง/short rest)",
+   150→  },
+   151→  rogue: {
+   152→    th: "Rogue", hitDie: 8, caster: false,
+   153→    array: { str: 8, dex: 15, con: 13, int: 12, wis: 10, cha: 14 },
+   154→    acCalc: (c) => 11 + mod(c.abilities.dex),
+   155→    weapon: "shortsword", ranged: "shortbow",
+   156→    skills: ["stealth", "acrobatics", "deception", "perception"],
+   157→    saves: ["dex", "int"],
+   158→    feature: "Sneak Attack: +Xd6 เมื่อโจมตีแบบได้เปรียบ (Hide ก่อน)",
+   159→  },
+   160→  wizard: {
+   161→    th: "Wizard", hitDie: 6, caster: true, castAbil: "int",
+   162→    array: { str: 8, dex: 14, con: 13, int: 15, wis: 12, cha: 10 },
+   163→    acCalc: (c) => 10 + mod(c.abilities.dex),
+   164→    weapon: "dagger", ranged: null,
+   165→    skills: ["arcana", "investigation", "history"],
+   166→    saves: ["int", "wis"],
+   167→    feature: "เวทมนตร์: Fire Bolt, Magic Missile, Burning Hands",
+   168→  },
+   169→  cleric: {
+   170→    th: "Cleric", hitDie: 8, caster: true, castAbil: "wis",
+   171→    array: { str: 14, dex: 10, con: 13, int: 8, wis: 15, cha: 12 },
+   172→    acCalc: () => 16,
+   173→    weapon: "mace", ranged: null,
+   174→    skills: ["insight", "religion", "medicine", "persuasion"],
+   175→    saves: ["wis", "cha"],
+   176→    feature: "เวทมนตร์: Sacred Flame, Cure Wounds, Guiding Bolt",
+   177→  },
+   178→};
+   179→
+   180→const SPELLS = {
+   181→  fire_bolt: { th: "Fire Bolt", cls: "wizard", slot: 0, minLv: 1, kind: "attack", dmg: (lv) => (lv >= 5 ? "2d10" : "1d10"), type: "fire", desc: "ลูกไฟพุ่งใส่ (spell attack) 1d10 fire · 2d10 ที่ Lv.5" },
+   182→  magic_missile: { th: "Magic Missile", cls: "wizard", slot: 1, minLv: 1, kind: "auto", dmg: () => "3d4+3", type: "force", desc: "ลูกศรเวท 3 ดอก โดนอัตโนมัติ ไม่ต้องทอย รวม 3d4+3" },
+   183→  burning_hands: { th: "Burning Hands", cls: "wizard", slot: 1, minLv: 1, kind: "save", save: "dex", dmg: () => "3d6", type: "fire", half: true, aoe: true, desc: "พ่นไฟรูปพัด โดนศัตรู 2 ตัวแรก DEX save ผ่านลดครึ่ง (3d6)" },
+   184→  scorching_ray: { th: "Scorching Ray", cls: "wizard", slot: 2, minLv: 3, kind: "rays", count: 3, dmg: () => "2d6", type: "fire", desc: "ลำแสงไฟ 3 ลำ ทอยโจมตีแยกกัน ลำละ 2d6 fire" },
+   185→  fireball: { th: "Fireball", cls: "wizard", slot: 3, minLv: 5, kind: "save", save: "dex", dmg: () => "8d6", type: "fire", half: true, aoe: "all", desc: "ระเบิดไฟใส่ศัตรูทุกตัว DEX save ผ่านลดครึ่ง (8d6!)" },
+   186→  sacred_flame: { th: "Sacred Flame", cls: "cleric", slot: 0, minLv: 1, kind: "save", save: "dex", dmg: (lv) => (lv >= 5 ? "2d8" : "1d8"), type: "radiant", half: false, desc: "เปลวศักดิ์สิทธิ์ DEX save พลาดโดนเต็ม 1d8 · 2d8 ที่ Lv.5" },
+   187→  guiding_bolt: { th: "Guiding Bolt", cls: "cleric", slot: 1, minLv: 1, kind: "attack", dmg: () => "4d6", type: "radiant", desc: "สายฟ้าแสง (spell attack) 4d6 radiant · โดนแล้วเป้าเรืองแสง — โจมตีครั้งถัดไปใส่มันได้เปรียบ" },
+   188→  cure_wounds: { th: "Cure Wounds", cls: "cleric", slot: 1, minLv: 1, kind: "heal", dmg: () => "1d8", desc: "สัมผัสรักษา ฟื้น 1d8 + WIS mod" },
+   189→  healing_word: { th: "Healing Word", cls: "cleric", slot: 1, minLv: 1, kind: "heal", bonus: true, dmg: () => "1d4", desc: "คำรักษา (bonus action — ยังทำแอคชันอื่นต่อได้) ฟื้น 1d4 + WIS" },
+   190→  spiritual_weapon: { th: "Spiritual Weapon", cls: "cleric", slot: 2, minLv: 3, kind: "summon_weapon", desc: "อัญเชิญอาวุธวิญญาณ (bonus action) โจมตีเองทุกรอบ 1d8+WIS นาน 10 รอบ · ไม่ใช้สมาธิ ใช้คู่กับ Spirit Guardians ได้" },
+   191→  spirit_guardians: { th: "Spirit Guardians", cls: "cleric", slot: 3, minLv: 5, kind: "guardians", dmg: () => "3d8", desc: "วิญญาณพิทักษ์วนรอบตัว ศัตรูทุกตัวโดน 3d8 ทุกรอบ WIS save ลดครึ่ง (ต้องรักษาสมาธิ)" },
+   192→};
+   193→
+   194→/* ---------------- CLASS FEATURES BY LEVEL ---------------- */
+   195→const FEATURES = {
+   196→  fighter: {
+   197→    1: [{ k: "second_wind", th: "Second Wind", desc: "Bonus action ฟื้น 1d10+level (ยังโจมตีต่อได้ในเทิร์นเดียวกัน) · 1 ครั้ง/short rest" }],
+   198→    2: [{ k: "action_surge", th: "Action Surge", desc: "ทำแอคชันเพิ่มอีก 1 ครั้งในเทิร์นเดียว · 1 ครั้ง/short rest" }],
+   199→    3: [{ k: "improved_critical", th: "Champion: Improved Critical", desc: "คริติคอลเมื่อทอยได้ 19-20 (subclass: Champion)" }],
+   200→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "เพิ่มค่า ability +2 (แบ่ง +1 สองค่าได้)" }],
+   201→    5: [{ k: "extra_attack", th: "Extra Attack", desc: "โจมตีด้วยอาวุธ 2 ครั้งต่อ 1 แอคชัน" }],
+   202→  },
+   203→  rogue: {
+   204→    1: [{ k: "sneak_attack", th: "Sneak Attack", desc: "โจมตีแบบได้เปรียบ +1d6 (Lv.3: 2d6, Lv.5: 3d6)" }],
+   205→    2: [{ k: "cunning_action", th: "Cunning Action", desc: "Dash/Disengage/Hide เป็น bonus action — ซ่อนแล้วยังโจมตีต่อได้ และหนีจาก combat แบบได้เปรียบ" }],
+   206→    3: [{ k: "fast_hands", th: "Thief: Fast Hands", desc: "ใช้ไอเทมเป็น bonus action — ดื่มยาแล้วยังโจมตีต่อได้ (subclass: Thief)" }],
+   207→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "เพิ่มค่า ability +2 (แบ่ง +1 สองค่าได้)" }],
+   208→    5: [{ k: "uncanny_dodge", th: "Uncanny Dodge", desc: "การโจมตีแรกที่โดนคุณในแต่ละรอบ ดาเมจลดครึ่งอัตโนมัติ" }],
+   209→  },
+   210→  wizard: {
+   211→    1: [{ k: "spellcasting", th: "Spellcasting", desc: "Fire Bolt, Magic Missile, Burning Hands" }],
+   212→    2: [{ k: "arcane_recovery", th: "Arcane Recovery", desc: "Short rest คืน spell slot Lv.1 ให้ 1 slot · 1 ครั้ง/long rest" }],
+   213→    3: [{ k: "lv2_spells", th: "เวทระดับ 2", desc: "ปลด Scorching Ray (subclass: Evocation)" }],
+   214→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "เพิ่มค่า ability +2 (แบ่ง +1 สองค่าได้)" }],
+   215→    5: [{ k: "lv3_spells", th: "เวทระดับ 3", desc: "ปลด Fireball" }],
+   216→  },
+   217→  cleric: {
+   218→    1: [{ k: "spellcasting", th: "Spellcasting", desc: "Sacred Flame, Cure Wounds, Healing Word, Guiding Bolt" }],
+   219→    2: [{ k: "preserve_life", th: "Channel Divinity: Preserve Life", desc: "ฟื้น HP ตัวเอง 5×level ทันที (ไม่เกินครึ่งของ Max HP ตาม RAW) · 1 ครั้ง/short rest (subclass: Life Domain)" }],
+   220→    3: [{ k: "lv2_spells", th: "เวทระดับ 2", desc: "ปลด Spiritual Weapon" }],
+   221→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "เพิ่มค่า ability +2 (แบ่ง +1 สองค่าได้)" }],
+   222→    5: [{ k: "lv3_spells", th: "เวทระดับ 3", desc: "ปลด Spirit Guardians" }],
+   223→  },
+   224→};
+   225→function critThreshold(c) { return c.cls === "fighter" && c.level >= 3 ? 19 : 20; }
+   226→function hasFeature(c, key) {
+   227→  const f = FEATURES[c.cls] || {};
+   228→  for (let lv = 1; lv <= c.level; lv++) if ((f[lv] || []).some((x) => x.k === key)) return true;
+   229→  return false;
+   230→}
+   231→
+   232→// sv = saving throw modifiers ตาม stat block ใน Monster Manual (ใช้ตอนผู้เล่นร่ายเวทแบบ save)
+   233→const BESTIARY = {
+   234→  giant_rat: { th: "Giant Rat", ac: 12, hp: 7, atk: 4, dmg: "1d4+2", init: 2, xp: 25, sv: { dex: 2, con: 0, wis: 0 } },
+   235→  bandit: { th: "Bandit", ac: 12, hp: 11, atk: 3, dmg: "1d6+1", init: 1, xp: 25, sv: { dex: 1, con: 1, wis: 0 } },
+   236→  cultist: { th: "Cultist", ac: 12, hp: 9, atk: 3, dmg: "1d6+1", init: 1, xp: 25, sv: { dex: 1, con: 0, wis: 0 } },
+   237→  goblin: { th: "Goblin", ac: 13, hp: 7, atk: 4, dmg: "1d6+2", init: 2, xp: 50, sv: { dex: 2, con: 0, wis: -1 } },
+   238→  wolf: { th: "Wolf", ac: 13, hp: 11, atk: 4, dmg: "2d4+2", init: 2, xp: 50, sv: { dex: 2, con: 1, wis: 1 } },
+   239→  skeleton: { th: "Skeleton", ac: 13, hp: 13, atk: 4, dmg: "1d6+2", init: 2, xp: 50, sv: { dex: 2, con: 2, wis: -3 } },
+   240→  zombie: { th: "Zombie", ac: 8, hp: 22, atk: 3, dmg: "1d6+1", init: -2, xp: 50, sv: { dex: -2, con: 3, wis: -2 } },
+   241→  orc: { th: "Orc", ac: 13, hp: 15, atk: 5, dmg: "1d12+3", init: 1, xp: 100, sv: { dex: 1, con: 3, wis: 0 } },
+   242→  ghoul: { th: "Ghoul", ac: 12, hp: 22, atk: 4, dmg: "2d6+2", init: 2, xp: 200, sv: { dex: 2, con: 0, wis: 0 } },
+   243→  giant_spider: { th: "Giant Spider", ac: 14, hp: 26, atk: 5, dmg: "1d8+3", init: 3, xp: 200, poison: { dc: 11, dmg: "2d8" }, sv: { dex: 3, con: 1, wis: 0 } },
+   244→  bugbear: { th: "Bugbear", ac: 16, hp: 27, atk: 4, dmg: "2d8+2", init: 2, xp: 200, sv: { dex: 2, con: 1, wis: 0 } },
+   245→  ogre: { th: "Ogre", ac: 11, hp: 59, atk: 6, dmg: "2d8+4", init: -1, xp: 450, sv: { dex: -1, con: 3, wis: -2 } },
+   246→};
+   247→const monSave = (e, abil) => (e.sv && e.sv[abil] !== undefined ? e.sv[abil] : 0);
+   248→
+   249→/* ---------------- D&D 5e SRD API (dnd5eapi.co) ----------------
+   250→   ใช้เป็นแหล่งมอนสเตอร์เพิ่มจาก BESTIARY ภายใน — probe ตอนเปิดแอป
+   251→   ถ้า fetch ไม่ได้ (เช่น CSP ของ claude.ai artifact บล็อก) จะ fallback
+   252→   เป็น bestiary ภายในอัตโนมัติ และไม่บอก DM ว่าใช้ SRD ได้ */
+   253→const SRD_BASE = "https://www.dnd5eapi.co/api/2014";
+   254→let SRD_OK = false;
+   255→const srdCache = {};
+   256→
+   257→async function srdProbe() {
+   258→  try {
+   259→    const ctrl = new AbortController();
+   260→    const t = setTimeout(() => ctrl.abort(), 4000);
+   261→    const r = await fetch(`${SRD_BASE}/monsters/goblin`, { signal: ctrl.signal });
+   262→    clearTimeout(t);
+   263→    SRD_OK = r.ok;
+   264→  } catch (e) { SRD_OK = false; }
+   265→  return SRD_OK;
+   266→}
+   267→
+   268→async function fetchSRDMonster(indexRaw) {
+   269→  const index = String(indexRaw).toLowerCase().replace(/_/g, "-").trim();
+   270→  if (srdCache[index]) return srdCache[index];
+   271→  try {
+   272→    const r = await fetch(`${SRD_BASE}/monsters/${index}`);
+   273→    if (!r.ok) return null;
+   274→    const m = await r.json();
+   275→    // เลือก action โจมตีอันแรกที่มี attack roll + damage dice
+   276→    let atkBonus = 3, dmg = "1d6+1";
+   277→    const act = (m.actions || []).find((a) => a.attack_bonus !== undefined && Array.isArray(a.damage) && a.damage.some((d) => d.damage_dice));
+   278→    if (act) {
+   279→      atkBonus = act.attack_bonus;
+   280→      const dd = act.damage.find((d) => d.damage_dice);
+   281→      if (dd) dmg = String(dd.damage_dice).replace(/\s/g, "");
+   282→    }
+   283→    // save mods: เริ่มจาก ability mod แล้วทับด้วย saving-throw proficiency ถ้ามี
+   284→    const sv = { dex: mod(m.dexterity), con: mod(m.constitution), wis: mod(m.wisdom) };
+   285→    (m.proficiencies || []).forEach((p) => {
+   286→      const n = (p.proficiency && p.proficiency.index) || "";
+   287→      if (n === "saving-throw-dex") sv.dex = p.value;
+   288→      if (n === "saving-throw-con") sv.con = p.value;
+   289→      if (n === "saving-throw-wis") sv.wis = p.value;
+   290→    });
+   291→    const ac = Array.isArray(m.armor_class) ? ((m.armor_class[0] && m.armor_class[0].value) || 12) : (m.armor_class || 12);
+   292→    const mon = { th: m.name, ac, hp: m.hit_points || 10, atk: atkBonus, dmg, init: mod(m.dexterity), xp: m.xp || 50, sv, cr: m.challenge_rating, srd: true };
+   293→    srdCache[index] = mon;
+   294→    return mon;
+   295→  } catch (e) { return null; }
+   296→}
+   297→
+   298→/* ---------------- CHARACTER FACTORY ---------------- */
+   299→function makeCharacter(name, raceKey, classKey, bgKey) {
+   300→  const cls = CLASSES[classKey];
+   301→  const race = RACES[raceKey];
+   302→  const bg = BACKGROUNDS[bgKey] || null;
+   303→  const abilities = {};
+   304→  ABILS.forEach((a) => { abilities[a] = (cls.array[a] || 10) + (race.bonus[a] || 0); });
+   305→  const level = 1;
+   306→  const maxHp = cls.hitDie + mod(abilities.con);
+   307→  const inventory = ["เสบียง", "เสบียง", "เสบียง", "คบเพลิง", "เชือก 50 ฟุต", "Potion of Healing", WEAPONS[cls.weapon].th];
+   308→  if (cls.ranged) inventory.push(WEAPONS[cls.ranged].th);
+   309→  const c = {
+   310→    name, race: raceKey, cls: classKey, level, xp: 0,
+   311→    background: bg ? bgKey : null,
+   312→    extraSkills: bg ? bg.skills.slice() : [],
+   313→    abilities, maxHp, hp: maxHp,
+   314→    conditions: [], gold: 15,
+   315→    inventory,
+   316→    weapon: cls.weapon, ranged: cls.ranged || null,
+   317→    hitDiceLeft: level,
+   318→    secondWindUsed: false, hiddenAdv: false,
+   319→    actionSurgeUsed: false, arcaneRecoveryUsed: false, preserveLifeUsed: false,
+   320→    pendingAsi: 0,
+   321→    slots: cls.caster ? SLOT_TABLE[1].slice() : [],
+   322→    slotsMax: cls.caster ? SLOT_TABLE[1].slice() : [],
+   323→    deathSaves: { s: 0, f: 0 }, dead: false,
+   324→    worn: [], venomUsed: false,
+   325→  };
+   326→  c.ac = computeAC(c);
+   327→  return c;
+   328→}
+   329→
+   330→// patch old saves so new fields exist
+   331→function migrateChar(o) {
+   332→  const cls = CLASSES[o.cls];
+   333→  const n = { ...o };
+   334→  if (typeof n.weapon !== "string" || !WEAPONS[n.weapon]) n.weapon = cls.weapon;
+   335→  if (n.ranged === undefined) n.ranged = cls.ranged || null;
+   336→  if (n.hitDiceLeft === undefined) n.hitDiceLeft = n.level;
+   337→  if (!Array.isArray(n.extraSkills)) n.extraSkills = [];
+   338→  if (n.background === undefined) n.background = null;
+   339→  if (n.actionSurgeUsed === undefined) n.actionSurgeUsed = false;
+   340→  if (n.arcaneRecoveryUsed === undefined) n.arcaneRecoveryUsed = false;
+   341→  if (n.preserveLifeUsed === undefined) n.preserveLifeUsed = false;
+   342→  if (n.pendingAsi === undefined) n.pendingAsi = n.level >= 4 ? 1 : 0;
+   343→  if (!Array.isArray(n.worn)) n.worn = [];
+   344→  if (n.venomUsed === undefined) n.venomUsed = false;
+   345→  n.ac = computeAC(n);
+   346→  return n;
+   347→}
+   348→
+   349→function getMelee(c) { return WEAPONS[c.weapon] || WEAPONS[CLASSES[c.cls].weapon]; }
+   350→function getRanged(c) { return c.ranged ? WEAPONS[c.ranged] : null; }
+   351→
+   352→function skillMod(c, skillKey) {
+   353→  const s = SKILLS[skillKey];
+   354→  if (!s) return mod(c.abilities.dex);
+   355→  const isProf = CLASSES[c.cls].skills.includes(skillKey) || (c.extraSkills || []).includes(skillKey);
+   356→  let m0 = mod(c.abilities[s.abil]) + (isProf ? profByLevel(c.level) : 0);
+   357→  if (skillKey === "sleight_of_hand" && wornHas(c, "sleight5")) m0 += 5;
+   358→  return m0;
+   359→}
+   360→function saveMod(c, abil) {
+   361→  const prof = CLASSES[c.cls].saves.includes(abil) ? profByLevel(c.level) : 0;
+   362→  let m0 = mod(c.abilities[abil]) + prof;
+   363→  (c.worn || []).forEach((n) => { const mi = MAGIC_ITEMS[n]; if (mi && mi.savePlus) m0 += mi.savePlus; });
+   364→  return m0;
+   365→}
+   366→function attackMod(c, w) {
+   367→  const weap = w || getMelee(c);
+   368→  return mod(c.abilities[weap.abil]) + profByLevel(c.level) + (weap.plus || 0);
+   369→}
+   370→function spellAtkMod(c) {
+   371→  return mod(c.abilities[CLASSES[c.cls].castAbil]) + profByLevel(c.level);
+   372→}
+   373→function spellDC(c) {
+   374→  return 8 + mod(c.abilities[CLASSES[c.cls].castAbil]) + profByLevel(c.level);
+   375→}
+   376→function hasDisadv(c) {
+   377→  return c.conditions.some((x) => DISADV_CONDS.includes(x));
+   378→}
+   379→function hasCheckDisadv(c) {
+   380→  return c.conditions.some((x) => CHECK_DISADV_CONDS.includes(x));
+   381→}
+   382→function sneakDice(level) { return Math.ceil(level / 2); }
+   383→
+   384→/* ---------------- MAP ENGINE ---------------- */
+   385→const DIRV = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1] };
+   386→const MAP_ICON = { town: "🏘️", building: "🏠", room: "▦", dungeon: "🕳️", wilderness: "🌲", place: "📍" };
+   387→
+   388→function emptyMap() { return { nodes: {}, edges: [], current: null }; }
+   389→
+   390→function applyMapUpdate(mu, mp, pushEntry) {
+   391→  if (!mu) return mp;
+   392→  const m = mp
+   393→    ? { nodes: { ...mp.nodes }, edges: mp.edges.slice(), current: mp.current }
+   394→    : emptyMap();
+   395→  const al = mu.add_location;
+   396→  if (al && al.id) {
+   397→    if (!m.nodes[al.id]) {
+   398→      let x = 0, y = 0;
+   399→      const fromId = al.from && m.nodes[al.from] ? al.from : m.current;
+   400→      if (fromId && m.nodes[fromId]) {
+   401→        const v = DIRV[al.dir] || [1, 0];
+   402→        x = m.nodes[fromId].x + v[0];
+   403→        y = m.nodes[fromId].y + v[1];
+   404→        let guard = 0;
+   405→        while (Object.values(m.nodes).some((n) => n.x === x && n.y === y) && guard < 10) { x += 1; guard += 1; }
+   406→        m.edges.push([fromId, al.id]);
+   407→      }
+   408→      m.nodes[al.id] = { name: al.name || al.id, type: MAP_ICON[al.type] ? al.type : "place", x, y };
+   409→      if (pushEntry) pushEntry(`🗺️ ค้นพบสถานที่ใหม่: ${al.name || al.id}`);
+   410→    } else if (m.current && m.current !== al.id && !m.edges.some(([a, b]) => (a === m.current && b === al.id) || (a === al.id && b === m.current))) {
+   411→      m.edges.push([m.current, al.id]);
+   412→    }
+   413→  }
+   414→  if (mu.connect && Array.isArray(mu.connect) && mu.connect.length === 2 && m.nodes[mu.connect[0]] && m.nodes[mu.connect[1]]) {
+   415→    if (!m.edges.some(([a, b]) => (a === mu.connect[0] && b === mu.connect[1]) || (a === mu.connect[1] && b === mu.connect[0]))) m.edges.push([mu.connect[0], mu.connect[1]]);
+   416→  }
+   417→  if (mu.move_to && m.nodes[mu.move_to]) m.current = mu.move_to;
+   418→  return m;
+   419→}
+   420→
+   421→/* ---------------- DM (Claude API) ---------------- */
+   422→function buildSystemPrompt(c) {
+   423→  const cls = CLASSES[c.cls];
+   424→  return `คุณคือ Dungeon Master มืออาชีพสำหรับแคมเปญ D&D 5e เดี่ยว (solo) โทน dark fantasy ผจญภัยสนุก
+   425→ภาษา: บรรยายเป็นภาษาไทย ผสมศัพท์ D&D อังกฤษ (เช่น Stealth check, Initiative, tavern)
+   426→
+   427→กฎเหล็ก (สำคัญที่สุด):
+   428→1. คุณห้ามตัดสินผลการทอยเต๋า ห้ามกำหนดตัวเลขดาเมจ/HP เอง — engine ภายนอกเป็นคนทอยและคำนวณทั้งหมด
+   429→1.1 สำคัญมาก: ถ้าผู้เล่นประกาศโจมตี/ยิง/แทง/ร่ายเวทใส่ใคร ห้ามบรรยายว่าการโจมตีนั้น "โดน" หรือเกิดดาเมจ (มันยังไม่ถูกทอย!) ให้บรรยายแค่วินาทีที่กำลังจะลงมือ แล้วสั่ง start_combat ทันที (ใส่ "surprise": true ถ้าศัตรูไม่รู้ตัว) — การโจมตีนัดแรกของผู้เล่นจะเกิดจริงผ่านปุ่มใน combat
+   430→1.2 ห้ามใช้คำ meta เช่น "engine", "ระบบ", "คำนวณ", "ทอยเต๋า(โดยระบบ)" ใน narration — บรรยายอยู่ในโลกแฟนตาซีเท่านั้น
+   431→2. ถ้า action ของผู้เล่นมีความเสี่ยง/ไม่แน่นอน ให้สั่ง check ผ่านฟิลด์ "requires" แล้วรอผล
+   432→3. ถ้าผลลัพธ์ทำให้เกิดการต่อสู้ ใช้ "start_combat" — มอนสเตอร์ภายใน (id): ${Object.keys(BESTIARY).join(", ")}${SRD_OK ? ` และคุณยังใช้มอนสเตอร์จาก D&D 5e SRD ได้ทุกตัว ด้วย index แบบ kebab-case ของ dnd5eapi.co (เช่น owlbear, dire-wolf, ghast, animated-armor, young-green-dragon) — engine จะดึง stat block จริงมาใช้ เลือกความยากให้เหมาะ: รวม CR ต่อการต่อสู้ ~ level/4 ถึง level/2 ของผู้เล่น (ผู้เล่นเดี่ยว อย่าจัดเกิน)` : " เท่านั้น"} — ถ้าผู้เล่นลอบ/ซุ่มโจมตีสำเร็จ (เช่นผ่าน Stealth check มาก่อน หรือศัตรูไม่รู้ตัว) ให้ใส่ "surprise": true ด้วย engine จะให้ Surprise Round ตามกฎ (โจมตีได้เปรียบ + Sneak Attack ทำงาน + ศัตรูเสียเทิร์นแรก) ถ้าศัตรูเห็นตัวผู้เล่นอยู่แล้วห้ามใส่
+   433→4. เปลี่ยนแปลงสถานะ (ทอง/ไอเทม/XP/HP จากเหตุแวดล้อม) ผ่าน "updates" เท่านั้น และต้องสมเหตุสมผล — conditions_add/remove ใช้ได้เฉพาะ id เหล่านี้: ${Object.keys(CONDITIONS_TH).join(", ")}
+   434→5. บรรยายกระชับ 2-5 ประโยค จบด้วยสถานการณ์ที่ชวนให้ผู้เล่นตัดสินใจ อย่าถามว่า "จะทำอะไร" ตรง ๆ ทุกครั้ง
+   435→6. DC แนะนำ: ง่าย 10, กลาง 13, ยาก 15, ยากมาก 18
+   436→7. อย่าใจดีเกินไป โลกมีอันตรายจริง แต่ให้แต้ม XP/รางวัลเมื่อผู้เล่นทำสำเร็จ (เจอกัน ~50-200 XP ต่อเหตุการณ์สำคัญ)
+   437→
+   438→ร้านค้าและการซื้อขาย:
+   439→- เมื่อผู้เล่นซื้อของ ให้ใช้ gold_delta ติดลบตามราคา และ items_add ด้วยชื่อ canonical เป๊ะ ๆ ถ้าทองไม่พอให้ NPC ปฏิเสธ
+   440→- ราคาไอเทม (gp): ${Object.entries(CONSUMABLES).map(([n, i]) => `${n}=${i.price}`).join(", ")}
+   441→- ราคาอาวุธ (gp): ${Object.values(WEAPONS).map((w) => `${w.th}=${w.price}`).join(", ")} — ขายของคืนได้ครึ่งราคา
+   442→- เมื่อผู้เล่นสั่ง "ใช้" ไอเทมฟื้น HP/แก้พิษผ่านการพิมพ์ (เช่น "ดื่มยา", "กินเสบียง"): ใส่ชื่อ canonical ใน "items_use" — engine จะทอยผลและหักไอเทมให้เอง ห้ามใช้ items_remove สำหรับการใช้ไอเทม (items_remove = เสีย/ขาย/โดนขโมยเท่านั้น) และห้ามบรรยายตัวเลขฟื้น/สัญญาว่าระบบจะทอยให้
+   443→- ชื่อไอเทมฟื้น HP/แก้พิษ ต้องใช้ชื่อเหล่านี้เท่านั้น (engine รู้จัก): ${Object.keys(CONSUMABLES).join(", ")} — loot จากมอนสเตอร์แรง ๆ อาจมี Potion of Healing ได้บ้าง
+   444→- Magic items ที่ engine รองรับจริง (สวม/ถือแล้วมีผลกลไก) มีเท่านี้: ${Object.entries(MAGIC_ITEMS).map(([n, m]) => `${n}=${m.price}gp`).join(", ")} และอาวุธเวท: ${Object.values(WEAPONS).filter((w) => w.plus || w.venom).map((w) => `${w.th}=${w.price}gp`).join(", ")} — ห้ามแจก/ขายไอเทมเวทนอกรายการนี้ (จะกลายเป็นของ flavor ไร้ผล) magic item คือรางวัลใหญ่มาก แจกได้น้อยครั้งมาก ๆ และควรมาจากเควสต์สำคัญ
+   445→- ผู้เล่นคนนี้ชอบสายค้าขาย/นักธุรกิจ: ดีลการค้า การเจรจา และกำไรก้อนโตเป็นส่วนหนึ่งของความสนุก — ให้ตัวเลขทองสมจริงตามขนาดของดีล (ดีลใหญ่หลักพันหลักหมื่น gp ได้ถ้าเนื้อเรื่องรองรับ) แต่กำไรต้องแลกมาด้วยการเล่นจริง: เจรจา (Persuasion/Deception/Insight), หาข้อมูล, ความเสี่ยง, คู่แข่ง, ต้นทุน — ไม่ใช่แจกฟรี และโลกควรตอบสนองต่อความรวย (โจรหมายหัว, ขุนนางชวนลงทุน, ภาษี)
+   446→
+   447→ตัวละครผู้เล่น: ${c.name} — ${RACES[c.race].th} ${cls.th} level ${c.level}${c.background && BACKGROUNDS[c.background] ? `, ภูมิหลัง: ${BACKGROUNDS[c.background].th} (ใช้สร้าง NPC ที่รู้จัก/ปมอดีต/บทสนทนาได้)` : ""}, ${cls.feature}
+   448→
+   449→ระบบแผนที่ (สำคัญ — ทำสม่ำเสมอ):
+   450→- engine วาดแผนที่จากคำสั่งของคุณ ผู้เล่นเห็นเฉพาะที่ค้นพบแล้ว (fog of war)
+   451→- เมื่อผู้เล่นไปถึง/เห็นสถานที่ใหม่: ใส่ map_update.add_location (id เป็น snake_case ภาษาอังกฤษ คงที่ตลอดแคมเปญ) พร้อม dir ทิศจากที่ปัจจุบัน และ move_to ถ้าผู้เล่นเข้าไป
+   452→- เมื่อกลับไปที่ที่เคยไป: ใส่แค่ move_to ด้วย id เดิม
+   453→- ใช้ type ให้ถูกระดับ: town=เมือง, building=อาคาร/ร้าน, room=ห้องในดันเจี้ยน/อาคาร, dungeon=ทางเข้าดันเจี้ยน, wilderness=ป่า/ถนน/ธรรมชาติ
+   454→- ภายในดันเจี้ยน ให้แตกเป็น room ทีละห้องตามที่สำรวจ เชื่อมทิศทางจริง (n/s/e/w) เพื่อให้ผังห้องสมเหตุสมผล
+   455→
+   456→ตอบเป็น JSON ล้วนเท่านั้น (ห้ามมี markdown, ห้ามมีข้อความนอก JSON) ตาม schema:
+   457→{
+   458→  "narration": "ข้อความบรรยาย",
+   459→  "scene": "ป้ายสถานที่สั้น ๆ หรือ null",
+   460→  "requires": null หรือ {"type":"check","skill":"<หนึ่งใน: ${Object.keys(SKILLS).join("|")}>","dc":13,"advantage":"none|advantage|disadvantage"} หรือ {"type":"save","ability":"str|dex|con|int|wis|cha","dc":12,"on_fail_damage":"2d6","half_on_success":true},
+   461→  "start_combat": null หรือ {"monsters":["goblin","goblin"], "surprise": false},
+   462→  "map_update": null หรือ {"add_location":{"id":"old_mill","name":"โรงสีเก่า","type":"building","dir":"ne","from":null},"move_to":"old_mill","connect":null},
+   463→  "updates": null หรือ {"hp_delta":0,"gold_delta":0,"xp_award":0,"items_add":[],"items_use":[],"items_remove":[],"conditions_add":[],"conditions_remove":[]}
+   464→}
+   465→ห้ามใช้ requires และ start_combat พร้อมกัน ถ้าเพิ่งได้รับ [ผลทอย] มา ห้ามสั่ง requires ซ้ำสำหรับ action เดิม`;
+   466→}
+   467→
+   468→async function callDM(systemPrompt, history) {
+   469→  const response = await fetch("https://api.anthropic.com/v1/messages", {
+   470→    method: "POST",
+   471→    headers: { "Content-Type": "application/json" },
+   472→    body: JSON.stringify({
+   473→      model: "claude-sonnet-4-6",
+   474→      max_tokens: 1000,
+   475→      system: systemPrompt,
+   476→      messages: history,
+   477→    }),
+   478→  });
+   479→  const data = await response.json();
+   480→  const text = (data.content || [])
+   481→    .filter((b) => b.type === "text")
+   482→    .map((b) => b.text)
+   483→    .join("\n");
+   484→  const clean = text.replace(/```json|```/g, "").trim();
+   485→  const start = clean.indexOf("{");
+   486→  const end = clean.lastIndexOf("}");
+   487→  if (start === -1 || end === -1) throw new Error("DM ตอบไม่เป็น JSON");
+   488→  return JSON.parse(clean.slice(start, end + 1));
+   489→}
+   490→
+   491→/* ---------------- STORAGE ---------------- */
+   492→const SAVE_KEY = "dnd-solo-save-v1";
+   493→async function saveGame(payload) {
+   494→  try { await window.storage.set(SAVE_KEY, JSON.stringify(payload)); } catch (e) { /* ignore */ }
+   495→}
+   496→async function loadGame() {
+   497→  try {
+   498→    const r = await window.storage.get(SAVE_KEY);
+   499→    return r ? JSON.parse(r.value) : null;
+   500→  } catch (e) { return null; }
+   501→}
+   502→async function deleteSave() {
+   503→  try { await window.storage.delete(SAVE_KEY); } catch (e) { /* ignore */ }
+   504→}
+   505→
+   506→/* ---------------- UI SUBCOMPONENTS ---------------- */
+   507→function HPBar({ hp, maxHp }) {
+   508→  const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
+   509→  const color = pct > 50 ? "#7FA85C" : pct > 25 ? "#E0A83E" : "#C74B44";
+   510→  return (
+   511→    <div className="hpbar">
+   512→      <div className="hpbar-fill" style={{ width: pct + "%", background: color }} />
+   513→      <span className="hpbar-label">{hp} / {maxHp} HP</span>
+   514→    </div>
+   515→  );
+   516→}
+   517→
+   518→function RollTicket({ entry }) {
+   519→  const r = entry.roll;
+   520→  const crit = r.die === 20;
+   521→  const fumble = r.die === 1;
+   522→  return (
+   523→    <div className={"ticket" + (entry.success === true ? " ok" : entry.success === false ? " bad" : "")}>
+   524→      <div className="ticket-die-wrap">
+   525→        <div className={"ticket-die" + (crit ? " crit" : "") + (fumble ? " fumble" : "")}>{r.die}</div>
+   526→        {r.other !== null && r.other !== undefined && <div className="ticket-die ghost">{r.other}</div>}
+   527→      </div>
+   528→      <div className="ticket-body">
+   529→        <div className="ticket-title">{entry.title}</div>
+   530→        <div className="ticket-math">
+   531→          d20 <b>{r.die}</b> {r.mod >= 0 ? "+" : ""}{r.mod} = <b>{r.total}</b>
+   532→          {entry.dc != null && <> vs DC {entry.dc}</>}
+   533→          {entry.vsAc != null && <> vs AC {entry.vsAc}</>}
+   534→          {r.adv !== "none" && <span className="ticket-adv"> · {r.adv === "advantage" ? "ADV" : "DIS"}</span>}
+   535→        </div>
+   536→        {entry.extra && <div className="ticket-extra">{entry.extra}</div>}
+   537→      </div>
+   538→      {entry.success !== undefined && entry.success !== null && (
+   539→        <div className={"stamp " + (entry.success ? "s-ok" : "s-bad")}>
+   540→          {crit && entry.success ? "CRIT!" : entry.success ? "สำเร็จ" : "พลาด"}
+   541→        </div>
+   542→      )}
+   543→    </div>
+   544→  );
+   545→}
+   546→
+   547→/* ---------------- MAIN APP ---------------- */
+   548→export default function DnDSolo() {
+   549→  const [phase, setPhase] = useState("loading"); // loading | menu | create | play | dead
+   550→  const [hasSave, setHasSave] = useState(false);
+   551→  const [c, setC] = useState(null);
+   552→  const [scene, setScene] = useState("");
+   553→  const [log, setLog] = useState([]);
+   554→  const [combat, setCombat] = useState(null);
+   555→  const [map, setMap] = useState(null);
+   556→  const [mapOpen, setMapOpen] = useState(false);
+   557→  const [history, setHistory] = useState([]);
+   558→  const [input, setInput] = useState("");
+   559→  const [thinking, setThinking] = useState(false);
+   560→  const [combatMenu, setCombatMenu] = useState(""); // "" | "spell" | "item"
+   561→  const [sheetOpen, setSheetOpen] = useState(false);
+   562→  const [sheetTab, setSheetTab] = useState("stats"); // stats | skills | items
+   563→  const [asiPicks, setAsiPicks] = useState([]);
+   564→  // character creation
+   565→  const [ccName, setCcName] = useState("");
+   566→  const [ccRace, setCcRace] = useState("human");
+   567→  const [ccClass, setCcClass] = useState("fighter");
+   568→  const [ccBg, setCcBg] = useState("soldier");
+   569→  // export/import save
+   570→  const [ioOpen, setIoOpen] = useState(false);
+   571→  const [ioText, setIoText] = useState("");
+   572→  const [ioMsg, setIoMsg] = useState("");
+   573→
+   574→  const logRef = useRef(null);
+   575→  const idRef = useRef(0);
+   576→  const mapRef = useRef(null);
+   577→  // กัน stale-state ตอนแตะปุ่มรัวบนมือถือ (React batching ทำให้ closure เห็น state เก่า)
+   578→  const cRef = useRef(null);
+   579→  const combatRef = useRef(null);
+   580→  const logDataRef = useRef([]);
+   581→  const nextId = () => ++idRef.current;
+   582→
+   583→  useEffect(() => { mapRef.current = map; }, [map]);
+   584→  useEffect(() => { cRef.current = c; }, [c]);
+   585→  useEffect(() => { combatRef.current = combat; }, [combat]);
+   586→  useEffect(() => { logDataRef.current = log; }, [log]);
+   587→
+   588→  const [srdStatus, setSrdStatus] = useState("checking"); // checking | online | offline
+   589→
+   590→  useEffect(() => {
+   591→    (async () => {
+   592→      const save = await loadGame();
+   593→      setHasSave(!!save);
+   594→      setPhase("menu");
+   595→    })();
+   596→    srdProbe().then((ok) => setSrdStatus(ok ? "online" : "offline"));
+   597→  }, []);
+   598→
+   599→  useEffect(() => {
+   600→    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+   601→  }, [log, thinking]);
+   602→
+   603→  const persist = useCallback((cc, sc, lg, cb, hist) => {
+   604→    saveGame({ c: cc, scene: sc, log: lg.slice(-80), combat: cb, history: hist.slice(-24), map: mapRef.current });
+   605→  }, []);
+   606→
+   607→  const pushLog = (entries, setter) => setter((prev) => [...prev, ...entries]);
+   608→
+   609→  /* -------- engine helpers that also produce log entries -------- */
+   610→  function entryNarration(text) { return { id: nextId(), type: "dm", text }; }
+   611→  function entryPlayer(text) { return { id: nextId(), type: "player", text }; }
+   612→  function entrySystem(text) { return { id: nextId(), type: "system", text }; }
+   613→
+   614→  function applyUpdates(u, cc, entries) {
+   615→    if (!u) return cc;
+   616→    const nc = { ...cc, conditions: [...cc.conditions], inventory: [...cc.inventory] };
+   617→    if (u.hp_delta) {
+   618→      nc.hp = Math.max(0, Math.min(nc.maxHp, nc.hp + u.hp_delta));
+   619→      entries.push(entrySystem(`HP ${u.hp_delta > 0 ? "+" : ""}${u.hp_delta} → ${nc.hp}/${nc.maxHp}`));
+   620→    }
+   621→    if (u.gold_delta) {
+   622→      nc.gold = Math.max(0, nc.gold + u.gold_delta);
+   623→      entries.push(entrySystem(`ทอง ${u.gold_delta > 0 ? "+" : ""}${u.gold_delta} → ${nc.gold} gp`));
+   624→    }
+   625→    // items_use: ผู้เล่นใช้ไอเทมผ่านการพิมพ์ — engine ทอยผลจริง (heal/cure) และหักออกจากเป้า
+   626→    (u.items_use || []).forEach((it) => {
+   627→      const idx = nc.inventory.indexOf(it);
+   628→      if (idx < 0) { entries.push(entrySystem(`ไม่มี ${it} ในเป้สัมภาระ`)); return; }
+   629→      const consum = CONSUMABLES[it];
+   630→      nc.inventory.splice(idx, 1);
+   631→      if (consum && consum.heal) {
+   632→        const h = rollFormula(consum.heal);
+   633→        nc.hp = Math.min(nc.maxHp, nc.hp + h.total);
+   634→        entries.push(entrySystem(`🧪 ใช้ ${it}: ฟื้น ${h.total} HP (${consum.heal}) → ${nc.hp}/${nc.maxHp}`));
+   635→      } else if (consum && consum.cure) {
+   636→        const ci = nc.conditions.indexOf(consum.cure);
+   637→        if (ci >= 0) { nc.conditions.splice(ci, 1); entries.push(entrySystem(`🧪 ใช้ ${it}: หายจากสถานะ ${consum.cure}`)); }
+   638→        else entries.push(entrySystem(`🧪 ใช้ ${it}: ไม่มีสถานะให้แก้ (เสียของฟรี)`));
+   639→      } else {
+   640→        entries.push(entrySystem(`ใช้: ${it}`));
+   641→      }
+   642→    });
+   643→    (u.items_add || []).forEach((it) => { nc.inventory.push(it); entries.push(entrySystem(`ได้รับ: ${it}`)); });
+   644→    (u.items_remove || []).forEach((it) => {
+   645→      const i = nc.inventory.indexOf(it); if (i >= 0) { nc.inventory.splice(i, 1); entries.push(entrySystem(`เสีย: ${it}`)); }
+   646→    });
+   647→    (u.conditions_add || []).forEach((cd) => { if (!nc.conditions.includes(cd) && CONDITIONS_TH[cd]) { nc.conditions.push(cd); entries.push(entrySystem(`สถานะ: ${CONDITIONS_TH[cd]}`)); } });
+   648→    (u.conditions_remove || []).forEach((cd) => { const i = nc.conditions.indexOf(cd); if (i >= 0) { nc.conditions.splice(i, 1); entries.push(entrySystem(`หายจากสถานะ: ${cd}`)); } });
+   649→    if (u.xp_award) return gainXP(nc, u.xp_award, entries);
+   650→    return nc;
+   651→  }
+   652→
+   653→  function gainXP(cc, amount, entries) {
+   654→    let nc = { ...cc, xp: cc.xp + amount };
+   655→    entries.push(entrySystem(`+${amount} XP (รวม ${nc.xp})`));
+   656→    while (nc.level < 5 && nc.xp >= XP_THRESHOLDS[nc.level]) {
+   657→      const cls = CLASSES[nc.cls];
+   658→      const hpGain = Math.floor(cls.hitDie / 2) + 1 + mod(nc.abilities.con);
+   659→      nc = {
+   660→        ...nc, level: nc.level + 1,
+   661→        maxHp: nc.maxHp + hpGain, hp: nc.hp + hpGain,
+   662→        hitDiceLeft: Math.min(nc.level + 1, (nc.hitDiceLeft || 0) + 1),
+   663→      };
+   664→      if (cls.caster) { nc.slotsMax = SLOT_TABLE[nc.level].slice(); nc.slots = SLOT_TABLE[nc.level].slice(); }
+   665→      nc.ac = computeAC(nc);
+   666→      entries.push(entrySystem(`🎉 LEVEL UP! → Level ${nc.level} (Max HP +${hpGain}, Proficiency +${profByLevel(nc.level)})`));
+   667→      (FEATURES[nc.cls][nc.level] || []).forEach((f) => {
+   668→        entries.push(entrySystem(`✨ ปลดความสามารถใหม่: ${f.th} — ${f.desc}`));
+   669→        if (f.k === "asi") nc.pendingAsi = (nc.pendingAsi || 0) + 1;
+   670→      });
+   671→      const newSpells = Object.values(SPELLS).filter((s) => s.cls === nc.cls && s.minLv === nc.level);
+   672→      newSpells.forEach((s) => entries.push(entrySystem(`📖 เรียนเวทใหม่: ${s.th} — ${s.desc}`)));
+   673→    }
+   674→    return nc;
+   675→  }
+   676→
+   677→  /* -------- combat engine -------- */
+   678→  async function initCombat(monsterIds, cc, entries, surprise = false) {
+   679→    const enemies = [];
+   680→    for (const id of (monsterIds || []).slice(0, 4)) {
+   681→      const base = BESTIARY[id] || (SRD_OK ? await fetchSRDMonster(id) : null);
+   682→      if (base) enemies.push({ uid: `${id}_${enemies.length}`, id, ...base, hpNow: base.hp });
+   683→      else entries.push(entrySystem(`⚠️ engine ไม่รู้จักมอนสเตอร์ "${id}" — ข้ามตัวนี้`));
+   684→    }
+   685→    if (enemies.length === 0) return null;
+   686→    const pInit = rollD20(mod(cc.abilities.dex));
+   687→    const eInitBest = Math.max(...enemies.map((e) => d(20) + e.init));
+   688→    entries.push({ id: nextId(), type: "roll", title: "Initiative", roll: pInit, extra: `ศัตรูทอยได้สูงสุด ${eInitBest}`, success: surprise || pInit.total >= eInitBest, dc: eInitBest });
+   689→    // RAW: surprise ไม่เปลี่ยน initiative แต่ฝ่ายที่ surprised ขยับไม่ได้ในเทิร์นแรก → ผลสุทธิ = ผู้เล่นได้ลงมือก่อนเสมอ
+   690→    const playerFirst = surprise ? true : pInit.total >= eInitBest;
+   691→    entries.push(entrySystem(`⚔️ เข้าสู่ Combat! ${enemies.map((e) => e.th).join(", ")} — ${surprise ? "ศัตรูไม่ทันตั้งตัว!" : playerFirst ? "คุณได้เริ่มก่อน" : "ศัตรูเริ่มก่อน"}`));
+   692→    if (surprise) entries.push(entrySystem("🗡️ Surprise Round! การโจมตีของคุณในรอบนี้ได้เปรียบ (unseen attacker) และศัตรูเสียเทิร์นแรก — Sneak Attack ทำงานเต็ม ๆ"));
+   693→    const cb = { enemies, round: 1, playerFirst, dodge: false, surprise: !!surprise };
+   694→    return cb;
+   695→  }
+   696→
+   697→  function enemyAttacks(cb, cc, entries) {
+   698→    let nc = { ...cc };
+   699→    let uncannyUsed = false;
+   700→    // 5e RAW: restrained/blinded/prone → ศัตรูโจมตีคุณแบบได้เปรียบ · Dodge → เสียเปรียบ · ทั้งคู่ = หักล้างกัน
+   701→    const enemyHasAdv = nc.conditions.some((k) => ENEMY_ADV_CONDS.includes(k));
+   702→    for (const e of cb.enemies) {
+   703→      if (e.hpNow <= 0 || nc.hp <= 0) continue;
+   704→      // RAW: Dodge / ล่องหน / ซ่อนตัวสำเร็จ (unseen target) → ศัตรูโจมตีคุณแบบเสียเปรียบ
+   705→      const defAdv = cb.dodge || cb.invisible || nc.hiddenAdv;
+   706→      let adv = "none";
+   707→      if (enemyHasAdv && !defAdv) adv = "advantage";
+   708→      else if (!enemyHasAdv && defAdv) adv = "disadvantage";
+   709→      const atk = rollD20(e.atk, adv);
+   710→      const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= nc.ac);
+   711→      let extra = "";
+   712→      if (hit) {
+   713→        let dmgR = rollFormula(e.dmg);
+   714→        let dmg = dmgR.total;
+   715→        if (atk.die === 20) { const extraR = rollFormula(e.dmg.replace(/[+-]\d+$/, "") || e.dmg); dmg += extraR.rolls.reduce((a, b) => a + b, 0); }
+   716→        extra = `ดาเมจ ${e.dmg}${atk.die === 20 ? " (CRIT x2 dice)" : ""} = ${dmg}`;
+   717→        if (e.poison) {
+   718→          const sv = rollD20(saveMod(nc, "con"));
+   719→          let psR = rollFormula(e.poison.dmg);
+   720→          let ptotal = psR.total;
+   721→          if (atk.die === 20) ptotal += rollFormula(e.poison.dmg).rolls.reduce((a, b) => a + b, 0); // RAW: คริทบเต๋าดาเมจทุกก้อนของการโจมตีนั้น รวมพิษ
+   722→          const pdmg = sv.total >= e.poison.dc ? Math.floor(ptotal / 2) : ptotal;
+   723→          extra += ` · CON save ${sv.total} vs DC ${e.poison.dc} → พิษ +${pdmg}`;
+   724→          dmg += pdmg;
+   725→        }
+   726→        // Uncanny Dodge (Rogue Lv.5): halve first hit each round
+   727→        if (hasFeature(nc, "uncanny_dodge") && !uncannyUsed) {
+   728→          dmg = Math.floor(dmg / 2);
+   729→          uncannyUsed = true;
+   730→          extra += ` · 🌀 Uncanny Dodge ลดครึ่ง → ${dmg}`;
+   731→        }
+   732→        nc.hp = Math.max(0, nc.hp - dmg);
+   733→        // Concentration check (RAW: เฉพาะเวทที่ใช้สมาธิ — Spirit Guardians · Spiritual Weapon ไม่ใช้สมาธิ)
+   734→        if (cb.spiritGuardians && dmg > 0 && nc.hp > 0) {
+   735→          const dc = Math.max(10, Math.floor(dmg / 2));
+   736→          const sv = rollD20(saveMod(nc, "con"));
+   737→          if (sv.total < dc) {
+   738→            cb.spiritGuardians = false;
+   739→            entries.push(entrySystem(`💫 เสียสมาธิ! (CON save ${sv.total} vs DC ${dc}) Spirit Guardians สลายไป`));
+   740→          }
+   741→        }
+   742→      }
+   743→      entries.push({ id: nextId(), type: "roll", title: `${e.th} โจมตี`, roll: atk, vsAc: nc.ac, success: hit, extra: hit ? extra + ` → HP คุณเหลือ ${nc.hp}` : null });
+   744→      if (nc.hp <= 0) {
+   745→        entries.push(entrySystem(`💀 ${nc.name} ล้มลงหมดสติ! ต้องทอย Death Saving Throw`));
+   746→        break;
+   747→      }
+   748→    }
+   749→    return nc;
+   750→  }
+   751→
+   752→  function checkCombatEnd(cb, cc, entries) {
+   753→    const alive = cb.enemies.filter((e) => e.hpNow > 0);
+   754→    if (alive.length === 0) {
+   755→      const xp = cb.enemies.reduce((a, e) => a + e.xp, 0);
+   756→      entries.push(entrySystem(`🏆 ชนะ Combat! ศัตรูทั้งหมดถูกกำจัด`));
+   757→      const nc = gainXP(cc, xp, entries);
+   758→      return { ended: true, cc: nc };
+   759→    }
+   760→    return { ended: false, cc };
+   761→  }
+   762→
+   763→  async function narrateCombatEvent(summary, cc, sc, baseLog, hist) {
+   764→    setThinking(true);
+   765→    try {
+   766→      const newHist = [...hist, { role: "user", content: summary }];
+   767→      const res = await callDM(buildSystemPrompt(cc), newHist);
+   768→      const entries = [entryNarration(res.narration)];
+   769→      let nc = applyUpdates(res.updates, cc, entries);
+   770→      let nsc = res.scene || sc;
+   771→      let ncb = null;
+   772→      const nmp = applyMapUpdate(res.map_update, mapRef.current, (t) => entries.push(entrySystem(t)));
+   773→      mapRef.current = nmp;
+   774→      if (res.start_combat && res.start_combat.monsters) {
+   775→        ncb = await initCombat(res.start_combat.monsters, nc, entries, res.start_combat.surprise);
+   776→      }
+   777→      const finalHist = [...newHist, { role: "assistant", content: JSON.stringify(res) }];
+   778→      const finalLog = [...baseLog, ...entries];
+   779→      cRef.current = nc; combatRef.current = ncb; logDataRef.current = finalLog;
+   780→      setC(nc); setScene(nsc); setLog(finalLog); setCombat(ncb); setHistory(finalHist); setMap(nmp);
+   781→      persist(nc, nsc, finalLog, ncb, finalHist);
+   782→      if (nc.dead) setPhase("dead");
+   783→    } catch (e) {
+   784→      const finalLog = [...baseLog, entrySystem("⚠️ DM ขัดข้อง: " + e.message + " (ลองพิมพ์ต่อได้)")];
+   785→      setLog(finalLog);
+   786→    } finally { setThinking(false); }
+   787→  }
+   788→
+   789→  // commit แบบอัปเดต ref ทันที — การแตะครั้งถัดไปเห็นค่าล่าสุดเสมอแม้ React ยังไม่ re-render
+   790→  function commitCombat(cc2, cb2, log2) {
+   791→    cRef.current = cc2; combatRef.current = cb2; logDataRef.current = log2;
+   792→    setC(cc2); setCombat(cb2); setLog(log2);
+   793→  }
+   794→
+   795→  function playerCombatAction(kind, payload) {
+   796→    const combat0 = combatRef.current;
+   797→    const c0 = cRef.current;
+   798→    const log0 = logDataRef.current;
+   799→    if (!combat0 || thinking) return;
+   800→    let cc = { ...c0 };
+   801→    let cb = { ...combat0, enemies: combat0.enemies.map((e) => ({ ...e })) };
+   802→    const entries = [];
+   803→
+   804→    // --- unconscious: death save loop ---
+   805→    if (cc.hp <= 0 && !cc.dead) {
+   806→      const r = rollD20(0);
+   807→      let ds = { ...cc.deathSaves };
+   808→      if (r.die === 20) { cc.hp = 1; ds = { s: 0, f: 0 }; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! ฟื้นขึ้นมาด้วย 1 HP" }); }
+   809→      else if (r.total >= 10) { ds.s += 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `สำเร็จ ${ds.s}/3` }); }
+   810→      else { ds.f += r.die === 1 ? 2 : 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `ล้มเหลว ${ds.f}/3` }); }
+   811→      cc.deathSaves = ds;
+   812→      if (ds.f >= 3) {
+   813→        cc.dead = true;
+   814→        entries.push(entrySystem(`☠️ ${cc.name} เสียชีวิต...`));
+   815→        const finalLog = [...log0, ...entries];
+   816→        commitCombat(cc, null, finalLog); persist(cc, scene, finalLog, null, history);
+   817→        setPhase("dead");
+   818→        return;
+   819→      }
+   820→      if (ds.s >= 3 || cc.hp > 0) {
+   821→        if (cc.hp <= 0) { entries.push(entrySystem("อาการคงที่ (stable) — ศัตรูทิ้งคุณไว้และจากไป")); }
+   822→        cc.deathSaves = { s: 0, f: 0 };
+   823→        if (cc.hp <= 0) cc.hp = 1;
+   824→        const finalLog = [...log0, ...entries];
+   825→        commitCombat(cc, null, finalLog);
+   826→        narrateCombatEvent(`[จบ combat] ${cc.name} หมดสติแต่รอดชีวิต (stable, 1 HP) ศัตรูจากไปแล้ว บรรยายฉากที่ฟื้นขึ้นมา`, cc, scene, finalLog, history);
+   827→        return;
+   828→      }
+   829→      // still down: enemies wait (cinematic), next round
+   830→      cb.round += 1;
+   831→      const finalLog = [...log0, ...entries];
+   832→      commitCombat(cc, cb, finalLog); persist(cc, scene, finalLog, cb, history);
+   833→      return;
+   834→    }
+   835→
+   836→    cb.dodge = false;
+   837→    cc.conditions = [...cc.conditions];
+   838→    // RAW: ลุกจาก prone ใช้ movement ครึ่งหนึ่ง — engine ให้ลุกอัตโนมัติต้นเทิร์น
+   839→    const proneIdx = cc.conditions.indexOf("prone");
+   840→    if (proneIdx >= 0) {
+   841→      cc.conditions.splice(proneIdx, 1);
+   842→      entries.push(entrySystem("🧍 ลุกขึ้นยืน (ใช้ movement ครึ่งหนึ่ง) — หายจากสถานะ Prone"));
+   843→    }
+   844→    let fled = false;
+   845→    let endsTurn = true; // bonus actions และ Action Surge ทำให้ยังไม่จบเทิร์น
+   846→
+   847→    const doWeaponAttack = (w, label) => {
+   848→      const target = cb.enemies.find((e) => e.uid === payload && e.hpNow > 0) || cb.enemies.find((e) => e.hpNow > 0);
+   849→      if (!target || !w) return;
+   850→      let adv = cc.hiddenAdv || cb.surprise || cb.invisible || target.glow ? "advantage" : "none"; // surprise/ล่องหน = unseen attacker, glow = โดน Guiding Bolt
+   851→      if (hasDisadv(cc)) adv = adv === "advantage" ? "none" : "disadvantage";
+   852→      const atk = rollD20(attackMod(cc, w), adv);
+   853→      if (target.glow) target.glow = false; // RAW: ใช้ได้กับการโจมตีถัดไปครั้งเดียว
+   854→      const critOn = critThreshold(cc);
+   855→      const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= target.ac);
+   856→      const isCrit = hit && atk.die >= critOn;
+   857→      let extra = null;
+   858→      if (hit) {
+   859→        const dmgR = rollFormula(w.dmg);
+   860→        let dmg = dmgR.total + mod(cc.abilities[w.abil]) + (w.plus || 0);
+   861→        let parts = [`${w.dmg}(${dmgR.rolls.join("+")})+${mod(cc.abilities[w.abil]) + (w.plus || 0)}${w.plus ? ` (อาวุธ +${w.plus})` : ""}`];
+   862→        if (isCrit) { const cr = rollFormula(w.dmg); dmg += cr.total; parts.push(`CRIT(${critOn}-20) +${cr.total}`); }
+   863→        // RAW: Sneak Attack ต้อง "ได้เปรียบจริง" หลังหักล้างกับสถานะเสียเปรียบแล้ว · คริ = ทบเต๋า Sneak ด้วย
+   864→        if (cc.cls === "rogue" && adv === "advantage") {
+   865→          const nDice = sneakDice(cc.level) * (isCrit ? 2 : 1);
+   866→          const sn = rollFormula(`${nDice}d6`);
+   867→          dmg += sn.total; parts.push(`Sneak Attack ${nDice}d6 +${sn.total}`);
+   868→        }
+   869→        // Dagger of Venom: เคลือบพิษ 1 ครั้ง/long rest — เป้า CON save DC 15 ไม่ผ่านโดน 2d10 poison
+   870→        if (w.venom && !cc.venomUsed) {
+   871→          cc.venomUsed = true;
+   872→          const sv = rollD20(monSave(target, "con"));
+   873→          if (sv.total < 15) {
+   874→            const p = rollFormula("2d10");
+   875→            dmg += p.total; parts.push(`🐍 พิษ +${p.total} (CON save ${sv.total} < 15)`);
+   876→          } else parts.push(`🐍 พิษถูกต้านทาน (CON save ${sv.total} ≥ 15)`);
+   877→        }
+   878→        target.hpNow = Math.max(0, target.hpNow - dmg);
+   879→        extra = `${parts.join(" · ")} = ${dmg} ดาเมจ → ${target.th} ${target.hpNow <= 0 ? "ตาย!" : `เหลือ ${target.hpNow} HP`}`;
+   880→      }
+   881→      entries.push({ id: nextId(), type: "roll", title: `${label} ${target.th} (${w.th})`, roll: atk, vsAc: target.ac, success: hit, extra });
+   882→      cc.hiddenAdv = false;
+   883→      if (cb.invisible) { cb.invisible = false; entries.push(entrySystem("🫥 ร่างของคุณปรากฏขึ้นอีกครั้ง (การโจมตีทำให้การล่องหนสิ้นสุด)")); }
+   884→    };
+   885→
+   886→    if (kind === "attack" || kind === "attack_ranged") {
+   887→      const w = kind === "attack_ranged" ? getRanged(cc) : getMelee(cc);
+   888→      const label = kind === "attack_ranged" ? "🏹 ยิง" : "โจมตี";
+   889→      const numAttacks = hasFeature(cc, "extra_attack") ? 2 : 1;
+   890→      for (let i = 0; i < numAttacks; i++) {
+   891→        if (!cb.enemies.some((e) => e.hpNow > 0)) break;
+   892→        if (i > 0) entries.push(entrySystem("⚔️ Extra Attack — โจมตีครั้งที่ 2"));
+   893→        doWeaponAttack(w, label);
+   894→      }
+   895→    } else if (kind === "item") {
+   896→      const item = CONSUMABLES[payload];
+   897→      const idx = cc.inventory.indexOf(payload);
+   898→      if (item && idx >= 0) {
+   899→        cc.inventory = [...cc.inventory];
+   900→        cc.inventory.splice(idx, 1);
+   901→        if (item.heal) {
+   902→          const h = rollFormula(item.heal);
+   903→          cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+   904→          entries.push(entrySystem(`🧪 ใช้ ${payload}: ฟื้น ${h.total} HP (${item.heal}) → ${cc.hp}/${cc.maxHp}`));
+   905→        }
+   906→        if (item.cure) {
+   907→          const ci = cc.conditions.indexOf(item.cure);
+   908→          cc.conditions = [...cc.conditions];
+   909→          if (ci >= 0) { cc.conditions.splice(ci, 1); entries.push(entrySystem(`🧪 ใช้ ${payload}: หายจากสถานะ ${item.cure}`)); }
+   910→          else entries.push(entrySystem(`🧪 ใช้ ${payload}: ไม่มีสถานะ ${item.cure} อยู่ (เสียของฟรี)`));
+   911→        }
+   912→        // Thief: Fast Hands — ใช้ไอเทมเป็น bonus action
+   913→        if (hasFeature(cc, "fast_hands") && !cb.bonusUsed) {
+   914→          cb.bonusUsed = true; endsTurn = false;
+   915→          entries.push(entrySystem("🖐️ Fast Hands (bonus action) — ยังทำแอคชันหลักต่อได้"));
+   916→        }
+   917→      }
+   918→      setCombatMenu("");
+   919→    } else if (kind === "spell") {
+   920→      const sp = SPELLS[payload];
+   921→      if (sp && cc.level >= (sp.minLv || 1)) {
+   922→        let cast = false;
+   923→        if (sp.slot === 0) cast = true;
+   924→        else if ((cc.slots[sp.slot - 1] || 0) > 0) {
+   925→          cc.slots = cc.slots.map((v, i) => (i === sp.slot - 1 ? v - 1 : v));
+   926→          cast = true;
+   927→        } else entries.push(entrySystem("Spell slot ไม่พอ!"));
+   928→        if (cast) {
+   929→          if (sp.kind === "heal") {
+   930→            const h = rollFormula(sp.dmg(cc.level));
+   931→            const heal = h.total + mod(cc.abilities[CLASSES[cc.cls].castAbil]);
+   932→            cc.hp = Math.min(cc.maxHp, cc.hp + heal);
+   933→            entries.push(entrySystem(`✨ ${sp.th}: ฟื้น ${heal} HP → ${cc.hp}/${cc.maxHp}`));
+   934→            if (sp.bonus && !cb.bonusUsed) {
+   935→              cb.bonusUsed = true; endsTurn = false;
+   936→              entries.push(entrySystem(`💨 ${sp.th} เป็น bonus action — ยังทำแอคชันหลักต่อได้`));
+   937→            }
+   938→          } else if (sp.kind === "summon_weapon") {
+   939→            // RAW: Spiritual Weapon ไม่ใช้สมาธิ อยู่ได้ 1 นาที (10 รอบ) — ใช้คู่ Spirit Guardians ได้
+   940→            cb.spiritualWeapon = true; cb.swRounds = 10;
+   941→            entries.push(entrySystem(`✨ ${sp.th}: อาวุธวิญญาณปรากฏ! โจมตีเองทุกรอบ 1d8+WIS นาน 10 รอบ (ไม่ใช้สมาธิ)`));
+   942→            if (!cb.bonusUsed) { cb.bonusUsed = true; endsTurn = false; entries.push(entrySystem("💨 เป็น bonus action — ยังทำแอคชันหลักต่อได้")); }
+   943→          } else if (sp.kind === "guardians") {
+   944→            cb.spiritGuardians = true; // concentration ตาม RAW
+   945→            entries.push(entrySystem(`✨ ${sp.th}: วิญญาณพิทักษ์วนรอบตัว! ศัตรูทุกตัวโดน ${sp.dmg(cc.level)} ทุกรอบ (ต้องรักษาสมาธิ — โดนตีอาจต้องทอย CON save)`));
+   946→          } else if (sp.kind === "rays") {
+   947→            for (let i = 0; i < (sp.count || 3); i++) {
+   948→              const t = cb.enemies.find((e) => e.hpNow > 0);
+   949→              if (!t) break;
+   950→              const atk = rollD20(spellAtkMod(cc), hasDisadv(cc) ? "disadvantage" : "none");
+   951→              const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= t.ac);
+   952→              let extra = null;
+   953→              if (hit) {
+   954→                const dr = rollFormula(sp.dmg(cc.level));
+   955→                let dmg = dr.total;
+   956→                if (atk.die === 20) dmg += rollFormula(sp.dmg(cc.level)).total;
+   957→                t.hpNow = Math.max(0, t.hpNow - dmg);
+   958→                extra = `${sp.type} ${dmg} ดาเมจ → ${t.th} ${t.hpNow <= 0 ? "ตาย!" : `เหลือ ${t.hpNow} HP`}`;
+   959→              }
+   960→              entries.push({ id: nextId(), type: "roll", title: `${sp.th} ลำที่ ${i + 1} → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
+   961→            }
+   962→          } else {
+   963→            const alive = cb.enemies.filter((e) => e.hpNow > 0);
+   964→            const targets = sp.aoe === "all" ? alive : sp.aoe ? alive.slice(0, 2) : alive.slice(0, 1);
+   965→            // RAW: เวท AoE ทอยดาเมจครั้งเดียว ใช้ผลเดียวกันกับทุกเป้าหมาย
+   966→            const aoeRoll = sp.kind === "save" ? rollFormula(sp.dmg(cc.level)) : null;
+   967→            for (const t of targets) {
+   968→              if (sp.kind === "attack") {
+   969→                let adv = t.glow || cb.surprise || cb.invisible ? "advantage" : "none"; // Guiding Bolt mark / Surprise / ล่องหน
+   970→                if (hasDisadv(cc)) adv = adv === "advantage" ? "none" : "disadvantage";
+   971→                const atk = rollD20(spellAtkMod(cc), adv);
+   972→                if (t.glow) t.glow = false;
+   973→                const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= t.ac);
+   974→                let extra = null;
+   975→                if (hit) {
+   976→                  const dr = rollFormula(sp.dmg(cc.level));
+   977→                  let dmg = dr.total;
+   978→                  if (atk.die === 20) dmg += rollFormula(sp.dmg(cc.level)).total;
+   979→                  t.hpNow = Math.max(0, t.hpNow - dmg);
+   980→                  extra = `${sp.type} ${dmg} ดาเมจ → ${t.th} ${t.hpNow <= 0 ? "ตาย!" : `เหลือ ${t.hpNow} HP`}`;
+   981→                  if (payload === "guiding_bolt" && t.hpNow > 0) {
+   982→                    t.glow = true;
+   983→                    extra += " · ✨ เป้าเรืองแสง — การโจมตีครั้งถัดไปใส่มันได้เปรียบ";
+   984→                  }
+   985→                }
+   986→                entries.push({ id: nextId(), type: "roll", title: `${sp.th} → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
+   987→              } else if (sp.kind === "auto") {
+   988→                // RAW: Magic Missile 3 ดอก ดอกละ 1d4+1 โดนอัตโนมัติ — ดอกถัดไปย้ายเป้าเองถ้าตัวแรกตาย
+   989→                const parts = [];
+   990→                for (let dart = 0; dart < 3; dart++) {
+   991→                  const tgt = cb.enemies.find((e) => e.hpNow > 0);
+   992→                  if (!tgt) break;
+   993→                  const dr = rollFormula("1d4+1");
+   994→                  tgt.hpNow = Math.max(0, tgt.hpNow - dr.total);
+   995→                  parts.push(`ดอก ${dart + 1}: ${dr.total} → ${tgt.th}${tgt.hpNow <= 0 ? " ตาย!" : ""}`);
+   996→                }
+   997→                entries.push(entrySystem(`✨ ${sp.th}: โดนอัตโนมัติ · ${parts.join(" · ")}`));
+   998→                break; // จัดการครบ 3 ดอกแล้ว ไม่ต้องวนเป้าต่อ
+   999→              } else if (sp.kind === "save") {
+  1000→                const dc = spellDC(cc);
+  1001→                const sv = rollD20(monSave(t, sp.save)); // save mod ตาม stat block จริง
+  1002→                const failed = sv.total < dc;
+  1003→                let dmg = failed ? aoeRoll.total : sp.half ? Math.floor(aoeRoll.total / 2) : 0;
+  1004→                t.hpNow = Math.max(0, t.hpNow - dmg);
+  1005→                entries.push({ id: nextId(), type: "roll", title: `${sp.th} → ${t.th} (${(sp.save || "dex").toUpperCase()} save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} ดาเมจ → ${t.th} ${t.hpNow <= 0 ? "ตาย!" : `เหลือ ${t.hpNow} HP`}` });
+  1006→              }
+  1007→            }
+  1008→          }
+  1009→        }
+  1010→      }
+  1011→      setCombatMenu("");
+  1012→    } else if (kind === "second_wind") {
+  1013→      if (cc.cls === "fighter" && !cc.secondWindUsed) {
+  1014→        const h = rollFormula(`1d10+${cc.level}`);
+  1015→        cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+  1016→        cc.secondWindUsed = true;
+  1017→        entries.push(entrySystem(`🛡️ Second Wind: ฟื้น ${h.total} HP → ${cc.hp}/${cc.maxHp}`));
+  1018→        if (!cb.bonusUsed) { cb.bonusUsed = true; endsTurn = false; entries.push(entrySystem("💨 เป็น bonus action — ยังทำแอคชันหลักต่อได้")); }
+  1019→      }
+  1020→    } else if (kind === "action_surge") {
+  1021→      if (hasFeature(cc, "action_surge") && !cc.actionSurgeUsed) {
+  1022→        cc.actionSurgeUsed = true;
+  1023→        cb.extraAction = true;
+  1024→        endsTurn = false;
+  1025→        entries.push(entrySystem("⚡ Action Surge! แอคชันถัดไปจะไม่จบเทิร์น — ทำได้ 2 แอคชันรอบนี้"));
+  1026→      }
+  1027→    } else if (kind === "preserve_life") {
+  1028→      if (hasFeature(cc, "preserve_life") && !cc.preserveLifeUsed) {
+  1029→        // RAW: ฟื้นรวม 5×level แต่ห้ามเกินครึ่งหนึ่งของ Max HP
+  1030→        const cap = Math.floor(cc.maxHp / 2);
+  1031→        if (cc.hp >= cap) {
+  1032→          entries.push(entrySystem(`🕊️ Preserve Life ใช้ไม่ได้ — HP เกินครึ่งของ Max HP แล้ว (RAW: ฟื้นได้ไม่เกิน ${cap})`));
+  1033→        } else {
+  1034→          const heal = Math.min(5 * cc.level, cap - cc.hp);
+  1035→          cc.preserveLifeUsed = true;
+  1036→          cc.hp = cc.hp + heal;
+  1037→          entries.push(entrySystem(`🕊️ Channel Divinity — Preserve Life: ฟื้น ${heal} HP → ${cc.hp}/${cc.maxHp} (สูงสุดครึ่งหนึ่งของ Max HP ตาม RAW)`));
+  1038→        }
+  1039→      }
+  1040→    } else if (kind === "hide") {
+  1041→      let hadv = hasCheckDisadv(cc) ? "disadvantage" : "none";
+  1042→      if (wornHas(cc, "adv_stealth")) hadv = hadv === "disadvantage" ? "none" : "advantage"; // Cloak/Boots of Elvenkind
+  1043→      const r = rollD20(skillMod(cc, "stealth"), hadv);
+  1044→      const ok = r.total >= 12;
+  1045→      cc.hiddenAdv = ok;
+  1046→      entries.push({ id: nextId(), type: "roll", title: "Hide (Stealth)", roll: r, dc: 12, success: ok, extra: ok ? "การโจมตีครั้งถัดไปได้เปรียบ + Sneak Attack" : null });
+  1047→      // Cunning Action (Rogue Lv.2+): Hide เป็น bonus action
+  1048→      if (hasFeature(cc, "cunning_action") && !cb.bonusUsed) {
+  1049→        cb.bonusUsed = true; endsTurn = false;
+  1050→        entries.push(entrySystem("💨 Cunning Action (bonus action) — ยังโจมตีต่อได้ในเทิร์นนี้"));
+  1051→      }
+  1052→    } else if (kind === "dodge") {
+  1053→      cb.dodge = true;
+  1054→      entries.push(entrySystem(`🌀 Dodge: ศัตรูโจมตีคุณแบบเสียเปรียบจนถึงเทิร์นหน้า`));
+  1055→    } else if (kind === "invisible") {
+  1056→      if ((cc.worn || []).includes("Ring of Invisibility") && !cb.invisible) {
+  1057→        cb.invisible = true;
+  1058→        cc.hiddenAdv = true;
+  1059→        entries.push(entrySystem("🫥 Ring of Invisibility: ร่างของคุณเลือนหายไปในอากาศ — โจมตีครั้งถัดไปได้เปรียบ และศัตรูโจมตีคุณแบบเสียเปรียบ จนกว่าคุณจะลงมือโจมตี"));
+  1060→      }
+  1061→    } else if (kind === "flee") {
+  1062→      const best = cc.abilities.dex >= cc.abilities.str ? "acrobatics" : "athletics";
+  1063→      // Rogue Lv.2+ Cunning Action (Dash/Disengage เป็น bonus action) → หนีแบบได้เปรียบ
+  1064→      let adv = hasCheckDisadv(cc) ? "disadvantage" : "none";
+  1065→      if (hasFeature(cc, "cunning_action")) adv = adv === "disadvantage" ? "none" : "advantage";
+  1066→      const r = rollD20(skillMod(cc, best), adv);
+  1067→      const ok = r.total >= 12;
+  1068→      entries.push({ id: nextId(), type: "roll", title: `หนี (${SKILLS[best].th})${hasFeature(cc, "cunning_action") ? " · Cunning Action: Dash" : ""}`, roll: r, dc: 12, success: ok });
+  1069→      if (ok) fled = true;
+  1070→    }
+  1071→
+  1072→    // Action Surge: แอคชันหลักที่เพิ่งทำไปไม่จบเทิร์น
+  1073→    if (endsTurn && cb.extraAction && ["attack", "attack_ranged", "spell", "item", "dodge"].includes(kind)) {
+  1074→      cb.extraAction = false;
+  1075→      endsTurn = false;
+  1076→      entries.push(entrySystem("⚡ Action Surge ทำงาน — ทำแอคชันได้อีก 1 ครั้ง!"));
+  1077→    }
+  1078→
+  1079→    // combat end check (win)
+  1080→    let endW = checkCombatEnd(cb, cc, entries);
+  1081→    cc = endW.cc;
+  1082→    if (endW.ended || fled) {
+  1083→      const finalLog = [...log0, ...entries];
+  1084→      commitCombat(cc, null, finalLog);
+  1085→      const summary = fled
+  1086→        ? `[จบ combat] ${cc.name} หนีสำเร็จจากการต่อสู้ บรรยายการหลบหนี`
+  1087→        : `[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e) => e.th).join(", ")} บรรยายผลและอาจให้ loot เล็กน้อยผ่าน updates`;
+  1088→      narrateCombatEvent(summary, cc, scene, finalLog, history);
+  1089→      return;
+  1090→    }
+  1091→
+  1092→    // bonus action / Action Surge → ยังเป็นเทิร์นผู้เล่นอยู่ ศัตรูยังไม่ตอบโต้
+  1093→    if (!endsTurn && !fled) {
+  1094→      const finalLog = [...log0, ...entries];
+  1095→      commitCombat(cc, cb, finalLog);
+  1096→      persist(cc, scene, finalLog, cb, history);
+  1097→      return;
+  1098→    }
+  1099→
+  1100→    // enemies act
+  1101→    if (!fled) {
+  1102→      // RAW: surprised creature ขยับไม่ได้ในเทิร์นแรกของ combat — ข้ามเฟสตอบโต้รอบนี้
+  1103→      if (cb.surprise) {
+  1104→        cb.surprise = false;
+  1105→        cb.round += 1;
+  1106→        cb.bonusUsed = false;
+  1107→        cb.extraAction = false;
+  1108→        entries.push(entrySystem("😵 ศัตรู surprised — เสียเทิร์นตอบโต้รอบแรก (Surprise Round จบแล้ว)"));
+  1109→        const finalLog = [...log0, ...entries];
+  1110→        commitCombat(cc, cb, finalLog);
+  1111→        persist(cc, scene, finalLog, cb, history);
+  1112→        return;
+  1113→      }
+  1114→      // Spiritual Weapon โจมตีอัตโนมัติ
+  1115→      if (cb.spiritualWeapon) {
+  1116→        const t = cb.enemies.find((e) => e.hpNow > 0);
+  1117→        if (t) {
+  1118→          const atk = rollD20(spellAtkMod(cc), t.glow ? "advantage" : "none");
+  1119→          if (t.glow) t.glow = false;
+  1120→          const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= t.ac);
+  1121→          let extra = null;
+  1122→          if (hit) {
+  1123→            const dr = rollFormula("1d8");
+  1124→            let dmg = dr.total + mod(cc.abilities[CLASSES[cc.cls].castAbil]);
+  1125→            if (atk.die === 20) dmg += rollFormula("1d8").total;
+  1126→            t.hpNow = Math.max(0, t.hpNow - dmg);
+  1127→            extra = `${dmg} ดาเมจ → ${t.th} ${t.hpNow <= 0 ? "ตาย!" : `เหลือ ${t.hpNow} HP`}`;
+  1128→          }
+  1129→          entries.push({ id: nextId(), type: "roll", title: `⚔️ Spiritual Weapon → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
+  1130→        }
+  1131→      }
+  1132→      // Spiritual Weapon หมดอายุหลัง 10 รอบ (RAW: 1 นาที)
+  1133→      if (cb.spiritualWeapon) {
+  1134→        cb.swRounds = (cb.swRounds ?? 10) - 1;
+  1135→        if (cb.swRounds <= 0) {
+  1136→          cb.spiritualWeapon = false;
+  1137→          entries.push(entrySystem("⚔️ Spiritual Weapon หมดเวลา 1 นาที — อาวุธวิญญาณสลายไป"));
+  1138→        }
+  1139→      }
+  1140→      // Spirit Guardians ทำดาเมจศัตรูทุกตัว (ทอยดาเมจครั้งเดียวใช้กับทุกเป้า ตาม RAW)
+  1141→      if (cb.spiritGuardians) {
+  1142→        const dc = spellDC(cc);
+  1143→        const dr = rollFormula("3d8");
+  1144→        for (const t of cb.enemies) {
+  1145→          if (t.hpNow <= 0) continue;
+  1146→          const sv = rollD20(monSave(t, "wis"));
+  1147→          const failed = sv.total < dc;
+  1148→          const dmg = failed ? dr.total : Math.floor(dr.total / 2);
+  1149→          t.hpNow = Math.max(0, t.hpNow - dmg);
+  1150→          entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow <= 0 ? "ตาย!" : `เหลือ ${t.hpNow} HP`}` });
+  1151→        }
+  1152→      }
+  1153→      // เช็คชนะอีกครั้งหลังเวทอัตโนมัติ
+  1154→      endW = checkCombatEnd(cb, cc, entries);
+  1155→      cc = endW.cc;
+  1156→      if (endW.ended) {
+  1157→        const finalLog = [...log0, ...entries];
+  1158→        commitCombat(cc, null, finalLog);
+  1159→        narrateCombatEvent(`[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e) => e.th).join(", ")} บรรยายผลและอาจให้ loot เล็กน้อยผ่าน updates`, cc, scene, finalLog, history);
+  1160→        return;
+  1161→      }
+  1162→      cc = enemyAttacks(cb, cc, entries);
+  1163→      cb.round += 1;
+  1164→      cb.bonusUsed = false;
+  1165→      cb.extraAction = false;
+  1166→    }
+  1167→
+  1168→    const finalLog = [...log0, ...entries];
+  1169→    commitCombat(cc, cb, finalLog);
+  1170→    persist(cc, scene, finalLog, cb, history);
+  1171→  }
+  1172→
+  1173→  /* -------- narrative turn (DM) -------- */
+  1174→  // คุยกับ DM ระหว่าง combat (free action ตาม RAW — พูด/ตะโกน/ถาม ไม่เสียเทิร์น ศัตรูไม่ตอบโต้)
+  1175→  async function submitCombatTalk(text) {
+  1176→    if (!text.trim() || thinking || !combatRef.current) return;
+  1177→    setInput("");
+  1178→    const cb = combatRef.current;
+  1179→    const cc = cRef.current;
+  1180→    const baseLog = [...logDataRef.current, entryPlayer(text)];
+  1181→    logDataRef.current = baseLog;
+  1182→    setLog(baseLog);
+  1183→    setThinking(true);
+  1184→    try {
+  1185→      const enemiesTxt = cb.enemies.map((e) => `${e.th}${e.hpNow <= 0 ? " (ตายแล้ว)" : ` ${e.hpNow}/${e.hp} HP`}`).join(", ");
+  1186→      const hist = [...history, {
+  1187→        role: "user",
+  1188→        content: `[ระหว่าง COMBAT รอบ ${cb.round} — ศัตรู: ${enemiesTxt} — HP ผู้เล่น ${cc.hp}/${cc.maxHp}]\nผู้เล่นทำ free action (พูด/ตะโกน/ถาม/สังเกต — ไม่ใช้เทิร์น): ${text}\nตอบ narration สั้น 1-3 ประโยค (เช่นคำตอบของศัตรู/สิ่งที่สังเกตเห็น) เท่านั้น ห้ามใช้ requires, ห้าม start_combat, ห้ามแก้ HP/ไอเทม/XP ผ่าน updates และห้ามตัดสินจบ combat — ถ้าผู้เล่นถามสถานะศัตรู ให้บรรยายจากตัวเลขจริงใน context ข้างบนเชิงภาพ (เช่นเลือดเต็ม = ยังไม่บาดเจ็บ) ห้ามแต่งเลขเองและห้ามพูดคำว่า engine/ระบบ`,
+  1189→      }];
+  1190→      const res = await callDM(buildSystemPrompt(cc), hist);
+  1191→      const finalHist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
+  1192→      const finalLog = [...logDataRef.current, entryNarration(res.narration)];
+  1193→      logDataRef.current = finalLog;
+  1194→      setLog(finalLog); setHistory(finalHist);
+  1195→      persist(cRef.current, scene, finalLog, combatRef.current, finalHist);
+  1196→    } catch (e) {
+  1197→      const finalLog = [...logDataRef.current, entrySystem("⚠️ DM ขัดข้อง: " + e.message + " — ลองส่งใหม่")];
+  1198→      logDataRef.current = finalLog;
+  1199→      setLog(finalLog);
+  1200→    } finally { setThinking(false); }
+  1201→  }
+  1202→
+  1203→  async function submitAction(text) {
+  1204→    if (!text.trim() || thinking || combat) return;
+  1205→    setInput("");
+  1206→    const baseLog = [...log, entryPlayer(text)];
+  1207→    setLog(baseLog);
+  1208→    setThinking(true);
+  1209→    try {
+  1210→      const knownPlaces = mapRef.current ? Object.keys(mapRef.current.nodes).slice(0, 40).join(",") : "-";
+  1211→      const status = `[สถานะ: HP ${c.hp}/${c.maxHp}, AC ${c.ac}, Level ${c.level}, ทอง ${c.gold} gp, สถานที่: ${scene || "?"}, ตำแหน่งบนแผนที่(id): ${mapRef.current && mapRef.current.current ? mapRef.current.current : "-"}, สถานที่ที่รู้จัก(id): ${knownPlaces}, conditions: ${c.conditions.join(",") || "-"}, ไอเทมในเป้: ${c.inventory.join(", ") || "-"}${CLASSES[c.cls].caster ? `, spell slots: ${c.slots.join("/")}` : ""}]`;
+  1212→      let hist = [...history, { role: "user", content: `${status}\nผู้เล่น: ${text}` }];
+  1213→      let res = await callDM(buildSystemPrompt(c), hist);
+  1214→      hist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
+  1215→
+  1216→      let entries = [entryNarration(res.narration)];
+  1217→      let cc = applyUpdates(res.updates, c, entries);
+  1218→      let sc = res.scene || scene;
+  1219→      let cb = null;
+  1220→      let mp = applyMapUpdate(res.map_update, mapRef.current, (t) => entries.push(entrySystem(t)));
+  1221→
+  1222→      // phase 2: engine rolls the required check/save
+  1223→      if (res.requires && !res.start_combat) {
+  1224→        const rq = res.requires;
+  1225→        let rollEntry, resultText;
+  1226→        if (rq.type === "check" && SKILLS[rq.skill]) {
+  1227→          let adv = rq.advantage || "none";
+  1228→          if (rq.skill === "stealth" && wornHas(cc, "adv_stealth") && adv !== "advantage") adv = "advantage"; // Cloak/Boots of Elvenkind
+  1229→          if (hasCheckDisadv(cc)) adv = adv === "advantage" ? "none" : "disadvantage"; // RAW: poisoned/frightened/blinded เท่านั้นที่กระทบ check
+  1230→          const r = rollD20(skillMod(cc, rq.skill), adv);
+  1231→          const ok = r.total >= rq.dc;
+  1232→          rollEntry = { id: nextId(), type: "roll", title: `${SKILLS[rq.skill].th} check`, roll: r, dc: rq.dc, success: ok };
+  1233→          resultText = `[ผลทอย] ${rq.skill} check: ทอยได้ ${r.total} vs DC ${rq.dc} → ${ok ? "สำเร็จ" : "ล้มเหลว"}${r.die === 20 ? " (Nat 20!)" : r.die === 1 ? " (Nat 1!)" : ""} บรรยายผลลัพธ์ต่อ`;
+  1234→        } else if (rq.type === "save") {
+  1235→          // RAW: restrained → DEX saving throw เสียเปรียบ
+  1236→          const svAdv = rq.ability === "dex" && cc.conditions.includes("restrained") ? "disadvantage" : "none";
+  1237→          const r = rollD20(saveMod(cc, rq.ability), svAdv);
+  1238→          const ok = r.total >= rq.dc;
+  1239→          let extra = null;
+  1240→          if (rq.on_fail_damage) {
+  1241→            const dr = rollFormula(rq.on_fail_damage);
+  1242→            const dmg = ok ? (rq.half_on_success ? Math.floor(dr.total / 2) : 0) : dr.total;
+  1243→            if (dmg > 0) { cc = { ...cc, hp: Math.max(0, cc.hp - dmg) }; extra = `ดาเมจ ${dmg} → HP ${cc.hp}/${cc.maxHp}`; }
+  1244→          }
+  1245→          rollEntry = { id: nextId(), type: "roll", title: `${ABIL_TH[rq.ability]} saving throw`, roll: r, dc: rq.dc, success: ok, extra };
+  1246→          resultText = `[ผลทอย] ${rq.ability} save: ${r.total} vs DC ${rq.dc} → ${ok ? "สำเร็จ" : "ล้มเหลว"}${extra ? " " + extra : ""} บรรยายผลลัพธ์ต่อ`;
+  1247→        }
+  1248→        if (rollEntry) {
+  1249→          entries.push(rollEntry);
+  1250→          setLog([...baseLog, ...entries]);
+  1251→          hist = [...hist, { role: "user", content: resultText }];
+  1252→          const res2 = await callDM(buildSystemPrompt(cc), hist);
+  1253→          hist = [...hist, { role: "assistant", content: JSON.stringify(res2) }];
+  1254→          entries.push(entryNarration(res2.narration));
+  1255→          cc = applyUpdates(res2.updates, cc, entries);
+  1256→          sc = res2.scene || sc;
+  1257→          mp = applyMapUpdate(res2.map_update, mp, (t) => entries.push(entrySystem(t)));
+  1258→          if (res2.start_combat && res2.start_combat.monsters) cb = await initCombat(res2.start_combat.monsters, cc, entries, res2.start_combat.surprise);
+  1259→        }
+  1260→      }
+  1261→      if (!cb && res.start_combat && res.start_combat.monsters) cb = await initCombat(res.start_combat.monsters, cc, entries, res.start_combat.surprise);
+  1262→
+  1263→      // enemy first strike if they won initiative
+  1264→      if (cb && !cb.playerFirst) { cc = enemyAttacks(cb, cc, entries); cb.round += 1; }
+  1265→
+  1266→      if (cc.hp <= 0 && !cb) cc = { ...cc, hp: 1 }; // narrative damage can't outright kill
+  1267→
+  1268→      const finalLog = [...baseLog, ...entries];
+  1269→      const trimmedHist = hist.length > 26 ? [hist[0], hist[1], ...hist.slice(-22)] : hist;
+  1270→      mapRef.current = mp;
+  1271→      setC(cc); setScene(sc); setCombat(cb); setLog(finalLog); setHistory(trimmedHist); setMap(mp);
+  1272→      persist(cc, sc, finalLog, cb, trimmedHist);
+  1273→    } catch (e) {
+  1274→      setLog((prev) => [...prev, entrySystem("⚠️ DM ขัดข้อง: " + e.message + " — ลองส่งใหม่อีกครั้ง")]);
+  1275→    } finally {
+  1276→      setThinking(false);
+  1277→    }
+  1278→  }
+  1279→
+  1280→  async function longRest() {
+  1281→    if (thinking || combat) return;
+  1282→    const recovered = Math.max(1, Math.floor(c.level / 2));
+  1283→    const cc = {
+  1284→      ...c, hp: c.maxHp, slots: c.slotsMax.slice(), secondWindUsed: false, conditions: [],
+  1285→      actionSurgeUsed: false, preserveLifeUsed: false, arcaneRecoveryUsed: false, venomUsed: false,
+  1286→      deathSaves: { s: 0, f: 0 },
+  1287→      hitDiceLeft: Math.min(c.level, (c.hitDiceLeft || 0) + recovered),
+  1288→    };
+  1289→    const entries = [entrySystem(`🌙 Long Rest: HP เต็ม, spell slots คืน, conditions หาย, Hit Dice คืน ${recovered} (เหลือ ${cc.hitDiceLeft}/${cc.level})`)];
+  1290→    const baseLog = [...log, ...entries];
+  1291→    setC(cc); setLog(baseLog);
+  1292→    narrateCombatEvent(`[Long Rest] ${cc.name} พักผ่อนเต็มคืน บรรยายการพักและเช้าวันใหม่สั้น ๆ (อาจมีเหตุการณ์รบกวนได้ถ้าอยู่ที่อันตราย)`, cc, scene, baseLog, history);
+  1293→  }
+  1294→
+  1295→  function applyAsi() {
+  1296→    if (asiPicks.length !== 2 || !c || !c.pendingAsi) return;
+  1297→    const cc = { ...c, abilities: { ...c.abilities } };
+  1298→    const oldConMod = mod(cc.abilities.con);
+  1299→    asiPicks.forEach((a) => { cc.abilities[a] = Math.min(20, cc.abilities[a] + 1); });
+  1300→    const newConMod = mod(cc.abilities.con);
+  1301→    const entries = [entrySystem(`💪 Ability Score Improvement: ${asiPicks.map((a) => ABIL_TH[a] + " +1").join(", ")}`)];
+  1302→    if (newConMod > oldConMod) {
+  1303→      const diff = (newConMod - oldConMod) * cc.level;
+  1304→      cc.maxHp += diff; cc.hp += diff;
+  1305→      entries.push(entrySystem(`❤️ CON modifier เพิ่ม → Max HP +${diff} (ย้อนหลังทุกเลเวล)`));
+  1306→    }
+  1307→    const oldAc = cc.ac;
+  1308→    cc.ac = computeAC(cc);
+  1309→    if (cc.ac !== oldAc) entries.push(entrySystem(`🛡 AC เปลี่ยน ${oldAc} → ${cc.ac}`));
+  1310→    cc.pendingAsi -= 1;
+  1311→    const finalLog = [...log, ...entries];
+  1312→    setC(cc); setLog(finalLog); setAsiPicks([]);
+  1313→    persist(cc, scene, finalLog, combat, history);
+  1314→  }
+  1315→
+  1316→  function shortRest() {
+  1317→    if (thinking || combat) return;
+  1318→    if ((c.hitDiceLeft || 0) <= 0) {
+  1319→      setLog((prev) => [...prev, entrySystem("⛺ ไม่มี Hit Dice เหลือ — ต้อง Long Rest เพื่อฟื้นคืน")]);
+  1320→      return;
+  1321→    }
+  1322→    const cls = CLASSES[c.cls];
+  1323→    const r = rollFormula(`1d${cls.hitDie}`);
+  1324→    const heal = Math.max(1, r.total + mod(c.abilities.con));
+  1325→    const cc = {
+  1326→      ...c,
+  1327→      hp: Math.min(c.maxHp, c.hp + heal),
+  1328→      hitDiceLeft: c.hitDiceLeft - 1,
+  1329→      secondWindUsed: false,
+  1330→      actionSurgeUsed: false,
+  1331→      preserveLifeUsed: false,
+  1332→    };
+  1333→    const entries = [entrySystem(`⛺ Short Rest: ทอย Hit Die (d${cls.hitDie}=${r.total}${mod(c.abilities.con) !== 0 ? `${mod(c.abilities.con) > 0 ? "+" : ""}${mod(c.abilities.con)} CON` : ""}) ฟื้น ${heal} HP → ${cc.hp}/${cc.maxHp} · Hit Dice เหลือ ${cc.hitDiceLeft}/${cc.level} · ความสามารถต่อ short rest คืนแล้ว`)];
+  1334→    // Arcane Recovery (Wizard Lv.2+) ตาม RAW: คืน slot รวมระดับไม่เกิน ceil(level/2), 1 ครั้ง/long rest
+  1335→    if (hasFeature(cc, "arcane_recovery") && !cc.arcaneRecoveryUsed && cc.slots.some((v, i) => v < cc.slotsMax[i])) {
+  1336→      let budget = Math.ceil(cc.level / 2);
+  1337→      cc.slots = cc.slots.slice();
+  1338→      const recovered = [];
+  1339→      // คืนจาก slot ระดับสูงสุดที่งบพอ ลงมาหาระดับต่ำ
+  1340→      for (let li = cc.slots.length - 1; li >= 0; li--) {
+  1341→        const slotLv = li + 1;
+  1342→        while (budget >= slotLv && cc.slots[li] < cc.slotsMax[li]) {
+  1343→          cc.slots[li] += 1; budget -= slotLv; recovered.push(`Lv${slotLv}`);
+  1344→        }
+  1345→      }
+  1346→      if (recovered.length > 0) {
+  1347→        cc.arcaneRecoveryUsed = true;
+  1348→        entries.push(entrySystem(`📖 Arcane Recovery: คืน spell slot ${recovered.join(", ")} (รวมระดับสูงสุด ${Math.ceil(cc.level / 2)} ตาม RAW)`));
+  1349→      }
+  1350→    }
+  1351→    const finalLog = [...log, ...entries];
+  1352→    setC(cc); setLog(finalLog);
+  1353→    persist(cc, scene, finalLog, null, history);
+  1354→  }
+  1355→
+  1356→  /* -------- new game flow -------- */
+  1357→  async function startNewGame() {
+  1358→    if (!ccName.trim()) return;
+  1359→    const cc = makeCharacter(ccName.trim(), ccRace, ccClass, ccBg);
+  1360→    cRef.current = cc; combatRef.current = null;
+  1361→    const entries = [entrySystem(`สร้างตัวละคร: ${cc.name} — ${RACES[ccRace].th} ${CLASSES[ccClass].th} (${BACKGROUNDS[ccBg].th}) · HP ${cc.hp} · AC ${cc.ac}`)];
+  1362→    setC(cc); setLog(entries); setCombat(null); setScene(""); setHistory([]);
+  1363→    setPhase("play");
+  1364→    setThinking(true);
+  1365→    try {
+  1366→      const hist = [{ role: "user", content: `[เริ่มแคมเปญใหม่] สร้างฉากเปิดที่น่าติดตามสำหรับ ${cc.name} (${RACES[ccRace].th} ${CLASSES[ccClass].th} level 1, ภูมิหลัง ${BACKGROUNDS[ccBg].th}) เริ่มในเมืองเล็กหรือ tavern พร้อม hook ภารกิจแรก ให้ภูมิหลังมีผลกับฉากเปิดด้วย และอย่าลืมลงทะเบียนสถานที่เริ่มต้นผ่าน map_update (add_location + move_to)` }];
+  1367→      const res = await callDM(buildSystemPrompt(cc), hist);
+  1368→      const newHist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
+  1369→      const e2 = [...entries, entryNarration(res.narration)];
+  1370→      const sc = res.scene || "จุดเริ่มต้น";
+  1371→      let mp = applyMapUpdate(res.map_update, null, (t) => e2.push(entrySystem(t)));
+  1372→      if (!mp || !mp.current) {
+  1373→        // DM ไม่ได้ลงทะเบียน → engine สร้าง node เริ่มต้นให้เอง
+  1374→        mp = emptyMap();
+  1375→        mp.nodes.start = { name: sc, type: "town", x: 0, y: 0 };
+  1376→        mp.current = "start";
+  1377→      }
+  1378→      mapRef.current = mp;
+  1379→      setLog(e2); setScene(sc); setHistory(newHist); setMap(mp);
+  1380→      persist(cc, sc, e2, null, newHist);
+  1381→      setHasSave(true);
+  1382→    } catch (e) {
+  1383→      setLog((prev) => [...prev, entrySystem("⚠️ เริ่มแคมเปญไม่สำเร็จ: " + e.message)]);
+  1384→    } finally { setThinking(false); }
+  1385→  }
+  1386→
+  1387→  async function continueGame() {
+  1388→    const save = await loadGame();
+  1389→    if (!save) return;
+  1390→    const cc = save.c ? migrateChar(save.c) : null;
+  1391→    const mp = save.map || null;
+  1392→    mapRef.current = mp;
+  1393→    cRef.current = cc; combatRef.current = save.combat || null; logDataRef.current = save.log || [];
+  1394→    setC(cc); setScene(save.scene); setLog(save.log || []); setCombat(save.combat || null); setHistory(save.history || []); setMap(mp);
+  1395→    idRef.current = Math.max(0, ...(save.log || []).map((e) => e.id || 0));
+  1396→    setPhase(cc && cc.dead ? "dead" : "play");
+  1397→  }
+  1398→
+  1399→  async function resetAll() {
+  1400→    await deleteSave();
+  1401→    mapRef.current = null;
+  1402→    cRef.current = null; combatRef.current = null; logDataRef.current = [];
+  1403→    setHasSave(false); setC(null); setLog([]); setCombat(null); setHistory([]); setScene(""); setMap(null);
+  1404→    setPhase("menu");
+  1405→  }
+  1406→
+  1407→  /* ---------------- RENDER ---------------- */
+  1408→  const css = `
+  1409→    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Sarabun:wght@400;500;600;700&display=swap');
+  1410→    .dnd-root { min-height: 100vh; background: radial-gradient(1200px 600px at 50% -10%, #241C3A 0%, #141020 55%); color: #EAE0CC; font-family: 'Sarabun', sans-serif; display: flex; flex-direction: column; }
+  1411→    .dnd-display { font-family: 'Cinzel', 'Sarabun', serif; letter-spacing: 0.06em; }
+  1412→    .panel { background: rgba(30,24,48,0.85); border: 1px solid #3A3054; border-radius: 12px; }
+  1413→    .hpbar { position: relative; height: 20px; background: #241E38; border: 1px solid #3A3054; border-radius: 10px; overflow: hidden; }
+  1414→    .hpbar-fill { height: 100%; transition: width 0.4s ease; }
+  1415→    .hpbar-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #F5EEDC; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+  1416→    .ticket { display: flex; align-items: center; gap: 10px; background: #1B1530; border: 1px solid #3A3054; border-left: 3px solid #8A7F9E; border-radius: 10px; padding: 8px 10px; margin: 6px 0; }
+  1417→    .ticket.ok { border-left-color: #7FA85C; }
+  1418→    .ticket.bad { border-left-color: #C74B44; }
+  1419→    .ticket-die-wrap { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+  1420→    .ticket-die { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-family: 'Cinzel', serif; font-weight: 800; font-size: 18px; color: #EAE0CC; background: #2A2244; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
+  1421→    .ticket-die.crit { background: #E0A83E; color: #1B1530; box-shadow: 0 0 12px rgba(224,168,62,0.7); }
+  1422→    .ticket-die.fumble { background: #C74B44; }
+  1423→    .ticket-die.ghost { opacity: 0.35; width: 24px; height: 24px; font-size: 11px; }
+  1424→    .ticket-body { flex: 1; min-width: 0; }
+  1425→    .ticket-title { font-size: 13px; font-weight: 700; color: #C9BFE0; }
+  1426→    .ticket-math { font-size: 12px; color: #9C92B8; }
+  1427→    .ticket-adv { color: #E0A83E; font-weight: 700; }
+  1428→    .ticket-extra { font-size: 12px; color: #EAE0CC; margin-top: 2px; }
+  1429→    .stamp { font-family: 'Cinzel', serif; font-weight: 800; font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1.5px solid; transform: rotate(-4deg); white-space: nowrap; }
+  1430→    .s-ok { color: #9CC77A; border-color: #7FA85C; }
+  1431→    .s-bad { color: #E0766D; border-color: #C74B44; }
+  1432→    .msg-dm { background: #1E1830; border: 1px solid #3A3054; border-radius: 12px 12px 12px 4px; padding: 10px 14px; margin: 8px 0; line-height: 1.65; white-space: pre-wrap; }
+  1433→    .msg-player { background: #2C2348; border-radius: 12px 12px 4px 12px; padding: 8px 12px; margin: 8px 0 8px 15%; color: #E9E2F5; }
+  1434→    .msg-system { text-align: center; font-size: 12px; color: #B9A96A; margin: 6px 0; }
+  1435→    .btn { background: #2A2244; border: 1px solid #4A3F6E; color: #EAE0CC; border-radius: 10px; padding: 10px 12px; font-family: 'Sarabun', sans-serif; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.15s; }
+  1436→    .btn:hover:not(:disabled) { background: #3A2F5C; border-color: #E0A83E; }
+  1437→    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  1438→    .btn-gold { background: linear-gradient(180deg, #E0A83E, #B8842A); color: #1B1530; border: none; font-weight: 700; }
+  1439→    .btn-gold:hover:not(:disabled) { background: linear-gradient(180deg, #F0BC55, #C9933A); }
+  1440→    .btn-red { border-color: #7A3B36; color: #E0968F; }
+  1441→    .chip { display: inline-block; font-size: 11px; background: #3A2438; border: 1px solid #7A3B5E; color: #E0A0B8; border-radius: 20px; padding: 2px 8px; margin: 2px; }
+  1442→    .slotpip { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #6FB3AB; display: inline-block; margin-right: 3px; }
+  1443→    .slotpip.used { border-color: #4A4460; background: transparent; }
+  1444→    .slotpip.full { background: #6FB3AB; box-shadow: 0 0 5px rgba(111,179,171,0.6); }
+  1445→    .enemy-card { background: #241528; border: 1px solid #6E3448; border-radius: 10px; padding: 8px 10px; min-width: 130px; }
+  1446→    .enemy-card.dead { opacity: 0.35; }
+  1447→    .cc-opt { border: 1.5px solid #3A3054; border-radius: 12px; padding: 10px; cursor: pointer; background: #1E1830; transition: border-color 0.15s; }
+  1448→    .cc-opt.sel { border-color: #E0A83E; background: #2A2244; }
+  1449→    .input-main { flex: 1; background: #1B1530; border: 1px solid #4A3F6E; border-radius: 10px; color: #EAE0CC; padding: 11px 14px; font-family: 'Sarabun'; font-size: 15px; outline: none; }
+  1450→    .input-main:focus { border-color: #E0A83E; }
+  1451→    .sheet-overlay { position: fixed; inset: 0; background: rgba(10,8,18,0.7); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
+  1452→    .sheet-modal { background: #1A1428; border: 1px solid #4A3F6E; border-radius: 16px 16px 0 0; width: 100%; max-width: 640px; max-height: 82vh; display: flex; flex-direction: column; }
+  1453→    .sheet-tabs { display: flex; border-bottom: 1px solid #3A3054; }
+  1454→    .sheet-tab { flex: 1; padding: 12px 6px; text-align: center; font-size: 13px; font-weight: 700; color: #8A7F9E; cursor: pointer; border-bottom: 2px solid transparent; }
+  1455→    .sheet-tab.active { color: #E0A83E; border-bottom-color: #E0A83E; }
+  1456→    .sheet-body { overflow-y: auto; padding: 14px; }
+  1457→    .abil-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  1458→    .abil-box { background: #221C38; border: 1px solid #3A3054; border-radius: 10px; padding: 8px; text-align: center; }
+  1459→    .abil-box .name { font-family: 'Cinzel', serif; font-size: 11px; color: #E0A83E; }
+  1460→    .abil-box .modv { font-size: 22px; font-weight: 800; }
+  1461→    .abil-box .score { font-size: 11px; color: #8A7F9E; }
+  1462→    .skill-row { display: flex; justify-content: space-between; padding: 6px 4px; font-size: 13px; border-bottom: 1px dashed #2E2748; }
+  1463→    .skill-row .prof { color: #E0A83E; }
+  1464→    .item-row { background: #221C38; border: 1px solid #3A3054; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; }
+  1465→    .sec-label { font-size: 11px; font-weight: 700; color: #B9A96A; letter-spacing: 0.08em; margin: 14px 0 6px; }
+  1466→    .sec-label:first-child { margin-top: 0; }
+  1467→    .thinking-dots span { animation: blink 1.2s infinite; } .thinking-dots span:nth-child(2){animation-delay:0.2s} .thinking-dots span:nth-child(3){animation-delay:0.4s}
+  1468→    @keyframes blink { 0%,100%{opacity:0.2} 50%{opacity:1} }
+  1469→    @media (prefers-reduced-motion: reduce) { .hpbar-fill { transition: none; } .thinking-dots span { animation: none; } }
+  1470→  `;
+  1471→
+  1472→  /* ---- MENU ---- */
+  1473→  if (phase === "loading") {
+  1474→    return (<div className="dnd-root"><style>{css}</style><div style={{ margin: "auto", color: "#8A7F9E" }}>กำลังโหลด...</div></div>);
+  1475→  }
+  1476→
+  1477→  if (phase === "menu") {
+  1478→    return (
+  1479→      <div className="dnd-root">
+  1480→        <style>{css}</style>
+  1481→        <div style={{ margin: "auto", textAlign: "center", padding: 24, maxWidth: 420, width: "100%" }}>
+  1482→          <div className="dnd-display" style={{ fontSize: 15, color: "#E0A83E" }}>SOLO CAMPAIGN</div>
+  1483→          <h1 className="dnd-display" style={{ fontSize: 40, margin: "6px 0 4px", color: "#EAE0CC" }}>D&D 5e</h1>
+  1484→          <div style={{ color: "#8A7F9E", fontSize: 14, marginBottom: 28 }}>Claude เป็น DM · เต๋าและกฎคำนวณด้วย engine ตายตัว</div>
+  1485→          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+  1486→            {hasSave && <button className="btn btn-gold" style={{ padding: 14 }} onClick={continueGame}>▶ เล่นต่อจากเซฟ</button>}
+  1487→            <button className="btn" style={{ padding: 14 }} onClick={() => setPhase("create")}>✦ เริ่มแคมเปญใหม่</button>
+  1488→            <button className="btn" onClick={async () => {
+  1489→              const s = await loadGame();
+  1490→              setIoText(s ? JSON.stringify(s) : "");
+  1491→              setIoMsg(s ? "นี่คือเซฟปัจจุบัน — คัดลอกเก็บไว้เป็นสำรอง หรือวางเซฟจากเวอร์ชันอื่นทับแล้วกดนำเข้า" : "ยังไม่มีเซฟในเวอร์ชันนี้ — วางเซฟที่ส่งออกจากเวอร์ชันอื่นแล้วกดนำเข้า");
+  1492→              setIoOpen(true);
+  1493→            }}>💾 ส่งออก / นำเข้าเซฟ</button>
+  1494→            {hasSave && <button className="btn btn-red" onClick={resetAll}>ลบเซฟทั้งหมด</button>}
+  1495→          </div>
+  1496→          <div style={{ fontSize: 11, color: "#6B6284", marginTop: 16 }}>
+  1497→            เซฟผูกกับ artifact แต่ละตัว — ถ้าอัปเดตเป็นเวอร์ชันใหม่ ให้ส่งออกเซฟจากตัวเก่าแล้วนำเข้าที่ตัวใหม่
+  1498→          </div>
+  1499→          <div style={{ fontSize: 11, marginTop: 6, color: srdStatus === "online" ? "#7FB069" : "#6B6284" }}>
+  1500→            {srdStatus === "checking" ? "🌐 กำลังเช็ค SRD API..." : srdStatus === "online" ? "🌐 D&D 5e SRD API: เชื่อมต่อแล้ว — DM ใช้มอนสเตอร์ SRD ได้ 334 ตัว" : "🌐 SRD API: เข้าถึงไม่ได้ (CSP/ออฟไลน์) — ใช้ bestiary ภายใน 12 ตัว"}
+  1501→          </div>
+  1502→          {ioOpen && (
+  1503→            <div className="sheet-overlay" onClick={() => setIoOpen(false)}>
+  1504→              <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+  1505→                <div style={{ padding: 16, textAlign: "left" }}>
+  1506→                  <div className="dnd-display" style={{ fontSize: 17, color: "#E0A83E", marginBottom: 6 }}>💾 ส่งออก / นำเข้าเซฟ</div>
+  1507→                  <div style={{ fontSize: 12, color: "#8A7F9E", marginBottom: 10 }}>{ioMsg}</div>
+  1508→                  <textarea
+  1509→                    value={ioText}
+  1510→                    onChange={(e) => setIoText(e.target.value)}
+  1511→                    placeholder='วางเซฟ JSON ที่นี่ เช่น {"c":{...},"scene":...}'
+  1512→                    style={{ width: "100%", boxSizing: "border-box", height: 150, background: "#1B1530", border: "1px solid #4A3F6E", borderRadius: 10, color: "#EAE0CC", padding: 10, fontSize: 11, fontFamily: "monospace", outline: "none", resize: "vertical" }}
+  1513→                  />
+  1514→                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+  1515→                    <button className="btn" disabled={!ioText} onClick={async () => {
+  1516→                      try {
+  1517→                        await navigator.clipboard.writeText(ioText);
+  1518→                        setIoMsg("✅ คัดลอกแล้ว — เก็บไว้ในโน้ต/แชตส่วนตัวเพื่อสำรอง");
+  1519→                      } catch (e) {
+  1520→                        setIoMsg("คัดลอกอัตโนมัติไม่ได้ — กดค้างในช่องข้อความแล้วเลือกทั้งหมดเพื่อคัดลอกเอง");
+  1521→                      }
+  1522→                    }}>📋 คัดลอก</button>
+  1523→                    <button className="btn btn-gold" style={{ flex: 1 }} disabled={!ioText.trim()} onClick={async () => {
+  1524→                      try {
+  1525→                        const data = JSON.parse(ioText.trim());
+  1526→                        if (!data || !data.c || !data.c.name || !CLASSES[data.c.cls]) throw new Error("โครงสร้างไม่ใช่เซฟของเกมนี้");
+  1527→                        data.c = migrateChar(data.c); // เผื่อเซฟมาจากเวอร์ชันเก่า เติมฟิลด์ใหม่ให้ครบ
+  1528→                        await saveGame(data);
+  1529→                        setHasSave(true);
+  1530→                        setIoMsg(`✅ นำเข้าเซฟของ ${data.c.name} (Lv.${data.c.level}) สำเร็จ — กด "เล่นต่อจากเซฟ" ได้เลย`);
+  1531→                      } catch (e) {
+  1532→                        setIoMsg("⚠️ นำเข้าไม่สำเร็จ: " + e.message);
+  1533→                      }
+  1534→                    }}>📥 นำเข้าเซฟ</button>
+  1535→                    <button className="btn" onClick={() => setIoOpen(false)}>ปิด</button>
+  1536→                  </div>
+  1537→                </div>
+  1538→              </div>
+  1539→            </div>
+  1540→          )}
+  1541→        </div>
+  1542→      </div>
+  1543→    );
+  1544→  }
+  1545→
+  1546→  /* ---- CREATE ---- */
+  1547→  if (phase === "create") {
+  1548→    const preview = makeCharacter(ccName || "?", ccRace, ccClass, ccBg);
+  1549→    const pvMelee = WEAPONS[CLASSES[ccClass].weapon];
+  1550→    const pvRanged = CLASSES[ccClass].ranged ? WEAPONS[CLASSES[ccClass].ranged] : null;
+  1551→    return (
+  1552→      <div className="dnd-root">
+  1553→        <style>{css}</style>
+  1554→        <div style={{ maxWidth: 480, width: "100%", margin: "0 auto", padding: 16 }}>
+  1555→          <h2 className="dnd-display" style={{ color: "#E0A83E", fontSize: 22 }}>สร้างตัวละคร</h2>
+  1556→          <input className="input-main" style={{ width: "100%", boxSizing: "border-box", marginBottom: 14 }} placeholder="ชื่อตัวละคร..." value={ccName} onChange={(e) => setCcName(e.target.value)} />
+  1557→          <div style={{ fontSize: 13, color: "#8A7F9E", marginBottom: 6 }}>เผ่า (Race)</div>
+  1558→          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+  1559→            {Object.entries(RACES).map(([k, r]) => (
+  1560→              <div key={k} className={"cc-opt" + (ccRace === k ? " sel" : "")} onClick={() => setCcRace(k)}>
+  1561→                <b>{r.th}</b>
+  1562→                <div style={{ fontSize: 11, color: "#8A7F9E" }}>{Object.entries(r.bonus).map(([a, v]) => `${ABIL_TH[a]}+${v}`).join(" ")}</div>
+  1563→              </div>
+  1564→            ))}
+  1565→          </div>
+  1566→          <div style={{ fontSize: 13, color: "#8A7F9E", marginBottom: 6 }}>อาชีพ (Class)</div>
+  1567→          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+  1568→            {Object.entries(CLASSES).map(([k, cl]) => (
+  1569→              <div key={k} className={"cc-opt" + (ccClass === k ? " sel" : "")} onClick={() => setCcClass(k)}>
+  1570→                <b>{cl.th}</b>
+  1571→                <div style={{ fontSize: 11, color: "#8A7F9E" }}>{cl.feature}</div>
+  1572→              </div>
+  1573→            ))}
+  1574→          </div>
+  1575→          <div style={{ fontSize: 13, color: "#8A7F9E", marginBottom: 6 }}>ภูมิหลัง (Background) — ให้ skill เพิ่ม 2 อย่าง</div>
+  1576→          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+  1577→            {Object.entries(BACKGROUNDS).map(([k, b]) => (
+  1578→              <div key={k} className={"cc-opt" + (ccBg === k ? " sel" : "")} onClick={() => setCcBg(k)}>
+  1579→                <b style={{ fontSize: 13 }}>{b.th}</b>
+  1580→                <div style={{ fontSize: 11, color: "#8A7F9E" }}>{b.skills.map((s) => SKILLS[s].th).join(", ")}</div>
+  1581→              </div>
+  1582→            ))}
+  1583→          </div>
+  1584→          <div className="panel" style={{ padding: 12, marginBottom: 16, fontSize: 13 }}>
+  1585→            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#C9BFE0" }}>
+  1586→              {ABILS.map((a) => (<span key={a}><b style={{ color: "#E0A83E" }}>{ABIL_TH[a]}</b> {preview.abilities[a]} ({mod(preview.abilities[a]) >= 0 ? "+" : ""}{mod(preview.abilities[a])})</span>))}
+  1587→            </div>
+  1588→            <div style={{ marginTop: 6, color: "#8A7F9E" }}>
+  1589→              HP {preview.maxHp} · AC {preview.ac} · ⚔️ {pvMelee.th} ({pvMelee.dmg}){pvRanged ? ` · 🏹 ${pvRanged.th} (${pvRanged.dmg})` : ""}
+  1590→            </div>
+  1591→          </div>
+  1592→          <div style={{ display: "flex", gap: 10 }}>
+  1593→            <button className="btn" onClick={() => setPhase("menu")}>กลับ</button>
+  1594→            <button className="btn btn-gold" style={{ flex: 1 }} disabled={!ccName.trim()} onClick={startNewGame}>⚔️ เริ่มการผจญภัย</button>
+  1595→          </div>
+  1596→        </div>
+  1597→      </div>
+  1598→    );
+  1599→  }
+  1600→
+  1601→  /* ---- DEAD ---- */
+  1602→  if (phase === "dead") {
+  1603→    return (
+  1604→      <div className="dnd-root">
+  1605→        <style>{css}</style>
+  1606→        <div style={{ margin: "auto", textAlign: "center", padding: 24 }}>
+  1607→          <div style={{ fontSize: 56 }}>☠️</div>
+  1608→          <h1 className="dnd-display" style={{ color: "#C74B44" }}>{c ? c.name : "ฮีโร่"} จบตำนานลงแล้ว</h1>
+  1609→          <div style={{ color: "#8A7F9E", marginBottom: 20 }}>{c ? `Level ${c.level} · ${c.xp} XP` : ""}</div>
+  1610→          <button className="btn btn-gold" onClick={resetAll}>เริ่มตำนานบทใหม่</button>
+  1611→        </div>
+  1612→      </div>
+  1613→    );
+  1614→  }
+  1615→
+  1616→  /* ---- PLAY ---- */
+  1617→  const cls = c ? CLASSES[c.cls] : null;
+  1618→  const mySpells = c && cls && cls.caster ? Object.entries(SPELLS).filter(([, s]) => s.cls === c.cls && c.level >= (s.minLv || 1)) : [];
+  1619→  const lockedSpells = c && cls && cls.caster ? Object.values(SPELLS).filter((s) => s.cls === c.cls && c.level < (s.minLv || 1)) : [];
+  1620→  const downed = c && c.hp <= 0 && !c.dead;
+  1621→  const meleeW = c ? getMelee(c) : null;
+  1622→  const rangedW = c ? getRanged(c) : null;
+  1623→  const combatItems = c ? c.inventory.filter((it) => CONSUMABLES[it] && CONSUMABLES[it].combat) : [];
+  1624→
+  1625→  return (
+  1626→    <div className="dnd-root">
+  1627→      <style>{css}</style>
+  1628→      {/* HEADER */}
+  1629→      <div style={{ padding: "10px 14px", borderBottom: "1px solid #3A3054", background: "rgba(20,16,32,0.9)", position: "sticky", top: 0, zIndex: 10 }}>
+  1630→        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+  1631→          <div>
+  1632→            <span className="dnd-display" style={{ fontSize: 17, color: "#E0A83E" }}>{c.name}</span>
+  1633→            <span style={{ fontSize: 12, color: "#8A7F9E", marginLeft: 8 }}>{RACES[c.race].th} {cls.th} · Lv.{c.level} · {c.xp} XP</span>
+  1634→          </div>
+  1635→          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+  1636→            <span style={{ fontSize: 12, color: "#B9A96A" }}>📍 {scene || "—"}</span>
+  1637→            <button className="btn" style={{ padding: "4px 10px", fontSize: 13 }} onClick={() => setMapOpen(true)}>🗺️</button>
+  1638→            <button className="btn" style={{ padding: "4px 10px", fontSize: 13 }} onClick={() => setSheetOpen(true)}>📜 ตัวละคร</button>
+  1639→          </div>
+  1640→        </div>
+  1641→        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+  1642→          <div style={{ flex: 1 }}><HPBar hp={c.hp} maxHp={c.maxHp} /></div>
+  1643→          <div style={{ fontSize: 13, color: "#C9BFE0", whiteSpace: "nowrap" }}>🛡 AC {c.ac} · 💰 {c.gold}</div>
+  1644→        </div>
+  1645→        {(cls.caster || c.conditions.length > 0) && (
+  1646→          <div style={{ marginTop: 5, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+  1647→            {cls.caster && c.slotsMax.map((max, li) => (
+  1648→              <span key={li} style={{ fontSize: 11, color: "#6FB3AB" }}>
+  1649→                Lv{li + 1}: {Array.from({ length: max }).map((_, i) => (<span key={i} className={"slotpip " + (i < c.slots[li] ? "full" : "used")} />))}
+  1650→              </span>
+  1651→            ))}
+  1652→            {c.conditions.map((cd) => <span key={cd} className="chip">{CONDITIONS_TH[cd] || cd}</span>)}
+  1653→          </div>
+  1654→        )}
+  1655→      </div>
+  1656→
+  1657→      {/* LOG */}
+  1658→      <div ref={logRef} style={{ flex: 1, overflowY: "auto", padding: "10px 14px", maxWidth: 640, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+  1659→        {log.map((e) => {
+  1660→          if (e.type === "dm") return <div key={e.id} className="msg-dm">{e.text}</div>;
+  1661→          if (e.type === "player") return <div key={e.id} className="msg-player">{e.text}</div>;
+  1662→          if (e.type === "roll") return <RollTicket key={e.id} entry={e} />;
+  1663→          return <div key={e.id} className="msg-system">— {e.text} —</div>;
+  1664→        })}
+  1665→        {thinking && <div className="msg-system thinking-dots">DM กำลังคิด<span>.</span><span>.</span><span>.</span></div>}
+  1666→      </div>
+  1667→
+  1668→      {/* ASI MODAL */}
+  1669→      {c.pendingAsi > 0 && (
+  1670→        <div className="sheet-overlay">
+  1671→          <div className="sheet-modal" style={{ maxWidth: 440 }}>
+  1672→            <div style={{ padding: "14px 16px" }}>
+  1673→              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>💪 Ability Score Improvement</span>
+  1674→              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>
+  1675→                เลือกเพิ่มค่า +1 สองครั้ง (เลือกค่าเดิมซ้ำ = +2) · สูงสุด 20
+  1676→              </div>
+  1677→              {ABILS.map((a) => {
+  1678→                const picks = asiPicks.filter((p) => p === a).length;
+  1679→                const atMax = c.abilities[a] + picks >= 20;
+  1680→                return (
+  1681→                  <div key={a} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 4px", borderBottom: "1px dashed #2E2748", fontSize: 14 }}>
+  1682→                    <span><b style={{ color: "#E0A83E" }}>{ABIL_TH[a]}</b> {c.abilities[a]}{picks > 0 ? ` → ${c.abilities[a] + picks}` : ""}</span>
+  1683→                    <button className="btn" style={{ padding: "3px 14px" }} disabled={asiPicks.length >= 2 || atMax} onClick={() => setAsiPicks([...asiPicks, a])}>+1</button>
+  1684→                  </div>
+  1685→                );
+  1686→              })}
+  1687→              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+  1688→                <button className="btn" disabled={asiPicks.length === 0} onClick={() => setAsiPicks([])}>ล้าง</button>
+  1689→                <button className="btn btn-gold" style={{ flex: 1 }} disabled={asiPicks.length !== 2} onClick={applyAsi}>ยืนยัน ({asiPicks.length}/2)</button>
+  1690→              </div>
+  1691→            </div>
+  1692→          </div>
+  1693→        </div>
+  1694→      )}
+  1695→
+  1696→      {/* MAP MODAL */}
+  1697→      {mapOpen && (
+  1698→        <div className="sheet-overlay" onClick={() => setMapOpen(false)}>
+  1699→          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
+  1700→            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
+  1701→              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🗺️ แผนที่</span>
+  1702→              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setMapOpen(false)}>✕</button>
+  1703→            </div>
+  1704→            <div className="sheet-body" style={{ overflow: "auto" }}>
+  1705→              {!map || Object.keys(map.nodes).length === 0 ? (
+  1706→                <div style={{ fontSize: 13, color: "#8A7F9E", textAlign: "center", padding: 30 }}>
+  1707→                  ยังไม่มีสถานที่บนแผนที่ — ออกสำรวจเพื่อค้นพบโลก
+  1708→                </div>
+  1709→              ) : (() => {
+  1710→                const nodes = Object.entries(map.nodes);
+  1711→                const CELL = 92, PAD = 60;
+  1712→                const xs = nodes.map(([, n]) => n.x), ys = nodes.map(([, n]) => n.y);
+  1713→                const minX = Math.min(...xs), minY = Math.min(...ys);
+  1714→                const W = (Math.max(...xs) - minX + 1) * CELL + PAD * 2;
+  1715→                const H = (Math.max(...ys) - minY + 1) * CELL + PAD * 2;
+  1716→                const px = (n) => (n.x - minX) * CELL + PAD;
+  1717→                const py = (n) => (n.y - minY) * CELL + PAD;
+  1718→                return (
+  1719→                  <svg width={Math.max(W, 300)} height={Math.max(H, 200)} style={{ display: "block", margin: "0 auto" }}>
+  1720→                    {map.edges.map(([a, b], i) => {
+  1721→                      const na = map.nodes[a], nb = map.nodes[b];
+  1722→                      if (!na || !nb) return null;
+  1723→                      return <line key={i} x1={px(na)} y1={py(na)} x2={px(nb)} y2={py(nb)} stroke="#4A3F6E" strokeWidth="2.5" strokeDasharray="5 4" />;
+  1724→                    })}
+  1725→                    {nodes.map(([id, n]) => {
+  1726→                      const cur = id === map.current;
+  1727→                      return (
+  1728→                        <g key={id}>
+  1729→                          {cur && <circle cx={px(n)} cy={py(n)} r="26" fill="none" stroke="#E0A83E" strokeWidth="2.5" opacity="0.9" />}
+  1730→                          <circle cx={px(n)} cy={py(n)} r="20" fill={cur ? "#3A2F5C" : "#221C38"} stroke={cur ? "#E0A83E" : "#3A3054"} strokeWidth="1.5" />
+  1731→                          <text x={px(n)} y={py(n) + 6} textAnchor="middle" fontSize="17">{MAP_ICON[n.type] || "📍"}</text>
+  1732→                          <text x={px(n)} y={py(n) + 38} textAnchor="middle" fontSize="11" fill={cur ? "#E0A83E" : "#C9BFE0"} fontFamily="Sarabun" fontWeight={cur ? "700" : "500"}>{n.name}</text>
+  1733→                        </g>
+  1734→                      );
+  1735→                    })}
+  1736→                  </svg>
+  1737→                );
+  1738→              })()}
+  1739→              <div style={{ fontSize: 11, color: "#8A7F9E", textAlign: "center", marginTop: 8 }}>
+  1740→                🏘️ เมือง · 🏠 อาคาร · ▦ ห้อง · 🕳️ ดันเจี้ยน · 🌲 ธรรมชาติ — วงทองคือตำแหน่งปัจจุบัน
+  1741→              </div>
+  1742→            </div>
+  1743→          </div>
+  1744→        </div>
+  1745→      )}
+  1746→
+  1747→      {/* CHARACTER SHEET MODAL */}
+  1748→      {sheetOpen && (
+  1749→        <div className="sheet-overlay" onClick={() => setSheetOpen(false)}>
+  1750→          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
+  1751→            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px 0" }}>
+  1752→              <div>
+  1753→                <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>{c.name}</span>
+  1754→                <span style={{ fontSize: 12, color: "#8A7F9E", marginLeft: 8 }}>{RACES[c.race].th} {cls.th} · Level {c.level}{c.background && BACKGROUNDS[c.background] ? ` · ${BACKGROUNDS[c.background].th}` : ""}</span>
+  1755→              </div>
+  1756→              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setSheetOpen(false)}>✕</button>
+  1757→            </div>
+  1758→            <div className="sheet-tabs">
+  1759→              {[["stats", "ค่าสถานะ"], ["skills", "Skills"], ["items", "อุปกรณ์"]].map(([k, label]) => (
+  1760→                <div key={k} className={"sheet-tab" + (sheetTab === k ? " active" : "")} onClick={() => setSheetTab(k)}>{label}</div>
+  1761→              ))}
+  1762→            </div>
+  1763→            <div className="sheet-body">
+  1764→              {sheetTab === "stats" && (
+  1765→                <div>
+  1766→                  <div className="abil-grid">
+  1767→                    {ABILS.map((a) => (
+  1768→                      <div key={a} className="abil-box">
+  1769→                        <div className="name">{ABIL_TH[a]}</div>
+  1770→                        <div className="modv">{mod(c.abilities[a]) >= 0 ? "+" : ""}{mod(c.abilities[a])}</div>
+  1771→                        <div className="score">{c.abilities[a]}</div>
+  1772→                      </div>
+  1773→                    ))}
+  1774→                  </div>
+  1775→                  <div className="sec-label">การต่อสู้</div>
+  1776→                  <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+  1777→                    🛡 AC <b>{c.ac}</b> · ❤️ HP <b>{c.hp}/{c.maxHp}</b> · Proficiency <b>+{profByLevel(c.level)}</b> · ⛺ Hit Dice <b>{c.hitDiceLeft}/{c.level}</b> (d{cls.hitDie})<br />
+  1778→                    ⚔️ {meleeW.th}: to-hit <b>+{attackMod(c, meleeW)}</b>, damage <b>{meleeW.dmg}{mod(c.abilities[meleeW.abil]) >= 0 ? "+" : ""}{mod(c.abilities[meleeW.abil])}</b>
+  1779→                    {rangedW && (<><br />🏹 {rangedW.th}: to-hit <b>+{attackMod(c, rangedW)}</b>, damage <b>{rangedW.dmg}{mod(c.abilities[rangedW.abil]) >= 0 ? "+" : ""}{mod(c.abilities[rangedW.abil])}</b></>)}
+  1780→                    {cls.caster && (<><br />✨ Spell attack <b>+{spellAtkMod(c)}</b> · Spell save DC <b>{spellDC(c)}</b></>)}
+  1781→                  </div>
+  1782→                  <div className="sec-label">Saving Throws</div>
+  1783→                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, fontSize: 13 }}>
+  1784→                    {ABILS.map((a) => (
+  1785→                      <div key={a}>
+  1786→                        <span className={CLASSES[c.cls].saves.includes(a) ? "prof" : ""} style={CLASSES[c.cls].saves.includes(a) ? { color: "#E0A83E" } : {}}>
+  1787→                          {CLASSES[c.cls].saves.includes(a) ? "◆" : "◇"} {ABIL_TH[a]}
+  1788→                        </span> {saveMod(c, a) >= 0 ? "+" : ""}{saveMod(c, a)}
+  1789→                      </div>
+  1790→                    ))}
+  1791→                  </div>
+  1792→                  <div className="sec-label">ความสามารถประจำคลาส (Lv.1-5)</div>
+  1793→                  <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+  1794→                    {[1, 2, 3, 4, 5].map((lv) => (FEATURES[c.cls][lv] || []).map((f) => {
+  1795→                      const unlocked = c.level >= lv;
+  1796→                      let status = null;
+  1797→                      if (unlocked) {
+  1798→                        if (f.k === "second_wind") status = c.secondWindUsed ? "ใช้แล้ว" : "พร้อมใช้";
+  1799→                        if (f.k === "action_surge") status = c.actionSurgeUsed ? "ใช้แล้ว" : "พร้อมใช้";
+  1800→                        if (f.k === "preserve_life") status = c.preserveLifeUsed ? "ใช้แล้ว" : "พร้อมใช้";
+  1801→                        if (f.k === "arcane_recovery") status = c.arcaneRecoveryUsed ? "ใช้แล้ว" : "พร้อมใช้";
+  1802→                        if (f.k === "sneak_attack") status = `ปัจจุบัน +${sneakDice(c.level)}d6`;
+  1803→                      }
+  1804→                      return (
+  1805→                        <div key={f.k} style={{ marginBottom: 8, opacity: unlocked ? 1 : 0.45 }}>
+  1806→                          <b style={{ color: unlocked ? "#E0A83E" : "#8A7F9E" }}>{unlocked ? "◆" : "🔒"} Lv.{lv} — {f.th}</b>
+  1807→                          {status && <span style={{ fontSize: 11, color: status.includes("ใช้แล้ว") ? "#C74B44" : "#7FA85C", marginLeft: 6 }}>[{status}]</span>}
+  1808→                          <div style={{ fontSize: 12, color: "#9C92B8" }}>{f.desc}</div>
+  1809→                        </div>
+  1810→                      );
+  1811→                    }))}
+  1812→                    {cls.caster && (
+  1813→                      <div>Spell slots: {c.slotsMax.map((m, i) => `Lv${i + 1} ${c.slots[i]}/${m}`).join(" · ")}</div>
+  1814→                    )}
+  1815→                    {c.cls === "rogue" && c.hiddenAdv && <div style={{ color: "#7FA85C" }}>🌫️ กำลังซ่อนตัว — โจมตีถัดไปได้เปรียบ</div>}
+  1816→                  </div>
+  1817→                  <div className="sec-label">สถานะ (Conditions)</div>
+  1818→                  <div style={{ fontSize: 13 }}>
+  1819→                    {c.conditions.length === 0 ? <span style={{ color: "#7FA85C" }}>ปกติดี ไม่มีสถานะผิดปกติ</span>
+  1820→                      : c.conditions.map((cd) => <span key={cd} className="chip">{CONDITIONS_TH[cd] || cd}</span>)}
+  1821→                    {c.deathSaves.s + c.deathSaves.f > 0 && <div style={{ color: "#C74B44" }}>Death Saves: {c.deathSaves.s}✓ / {c.deathSaves.f}✗</div>}
+  1822→                  </div>
+  1823→                  <div className="sec-label">ความคืบหน้า</div>
+  1824→                  <div style={{ fontSize: 13 }}>
+  1825→                    XP {c.xp}{c.level < 5 ? ` / ${XP_THRESHOLDS[c.level]} (อีก ${XP_THRESHOLDS[c.level] - c.xp} ถึง Level ${c.level + 1})` : " (Level สูงสุดแล้ว)"}
+  1826→                  </div>
+  1827→                </div>
+  1828→              )}
+  1829→              {sheetTab === "skills" && (
+  1830→                <div>
+  1831→                  <div style={{ fontSize: 12, color: "#8A7F9E", marginBottom: 8 }}>◆ = proficient (+{profByLevel(c.level)})</div>
+  1832→                  {Object.entries(SKILLS).map(([k, s]) => {
+  1833→                    const prof = CLASSES[c.cls].skills.includes(k) || (c.extraSkills || []).includes(k);
+  1834→                    const fromBg = !CLASSES[c.cls].skills.includes(k) && (c.extraSkills || []).includes(k);
+  1835→                    const m = skillMod(c, k);
+  1836→                    return (
+  1837→                      <div key={k} className="skill-row">
+  1838→                        <span className={prof ? "prof" : ""}>{prof ? "◆" : "◇"} {s.th} <span style={{ color: "#6B6284", fontSize: 11 }}>({ABIL_TH[s.abil]}{fromBg ? " · จากภูมิหลัง" : ""})</span></span>
+  1839→                        <b>{m >= 0 ? "+" : ""}{m}</b>
+  1840→                      </div>
+  1841→                    );
+  1842→                  })}
+  1843→                </div>
+  1844→              )}
+  1845→              {sheetTab === "items" && (
+  1846→                <div>
+  1847→                  <div className="sec-label">สวมใส่ / ถืออยู่</div>
+  1848→                  <div className="item-row">⚔️ <b>{meleeW.th}</b> — {meleeW.dmg} ({ABIL_TH[meleeW.abil]}){meleeW.plus ? ` · +${meleeW.plus} โจมตี/ดาเมจ` : ""}{meleeW.venom ? ` · 🐍 พิษ ${c.venomUsed ? "ใช้แล้ว (คืนตอน long rest)" : "พร้อมใช้"}` : ""}</div>
+  1849→                  {rangedW && <div className="item-row">🏹 <b>{rangedW.th}</b> — {rangedW.dmg} ({ABIL_TH[rangedW.abil]}){rangedW.plus ? ` · +${rangedW.plus}` : ""}</div>}
+  1850→                  <div className="item-row">🛡 {(c.worn || []).find((n) => MAGIC_ITEMS[n] && MAGIC_ITEMS[n].slot === "armor") || "เกราะประจำคลาส"} — AC {c.ac}</div>
+  1851→                  {(c.worn || []).filter((n) => !(MAGIC_ITEMS[n] && MAGIC_ITEMS[n].slot === "armor")).map((n) => (
+  1852→                    <div key={n} className="item-row">✨ <b>{n}</b> <span style={{ fontSize: 11, color: "#8A7F9E" }}>— {MAGIC_ITEMS[n] ? MAGIC_ITEMS[n].desc : ""}</span></div>
+  1853→                  ))}
+  1854→                  <div className="sec-label">เป้สัมภาระ ({c.inventory.length})</div>
+  1855→                  {c.inventory.length === 0 ? <div style={{ fontSize: 13, color: "#8A7F9E" }}>ว่างเปล่า</div>
+  1856→                    : c.inventory.map((it, i) => {
+  1857→                      const wEntry = weaponByName(it);
+  1858→                      const consum = CONSUMABLES[it];
+  1859→                      const magic = MAGIC_ITEMS[it];
+  1860→                      const isEquipped = wEntry && (wEntry[0] === c.weapon || wEntry[0] === c.ranged);
+  1861→                      const isWorn = (c.worn || []).includes(it);
+  1862→                      return (
+  1863→                        <div key={i} className="item-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+  1864→                          <span>
+  1865→                            {wEntry ? (wEntry[1].ranged ? "🏹" : "⚔️") : magic ? "✨" : consum ? "🧪" : "🎒"} {it}{isEquipped ? " (ถืออยู่)" : ""}{isWorn ? " (สวมอยู่)" : ""}
+  1866→                            {magic && <span style={{ display: "block", fontSize: 11, color: "#8A7F9E" }}>{magic.desc}</span>}
+  1867→                          </span>
+  1868→                          {wEntry && !isEquipped && (
+  1869→                            <button className="btn" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => {
+  1870→                              const [wk, w] = wEntry;
+  1871→                              const cc = w.ranged ? { ...c, ranged: wk } : { ...c, weapon: wk };
+  1872→                              const finalLog = [...log, entrySystem(`สลับอาวุธ: ถือ ${w.th}`)];
+  1873→                              setC(cc); setLog(finalLog); persist(cc, scene, finalLog, combat, history);
+  1874→                            }}>ถือ</button>
+  1875→                          )}
+  1876→                          {magic && (
+  1877→                            <button className="btn" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => {
+  1878→                              let worn = [...(c.worn || [])];
+  1879→                              const entries = [];
+  1880→                              if (isWorn) {
+  1881→                                worn = worn.filter((n) => n !== it);
+  1882→                                entries.push(entrySystem(`ถอด ${it}`));
+  1883→                              } else {
+  1884→                                if (magic.slot === "armor") {
+  1885→                                  const old = worn.find((n) => MAGIC_ITEMS[n] && MAGIC_ITEMS[n].slot === "armor");
+  1886→                                  if (old) { worn = worn.filter((n) => n !== old); entries.push(entrySystem(`ถอด ${old}`)); }
+  1887→                                }
+  1888→                                worn.push(it);
+  1889→                                entries.push(entrySystem(`✨ สวม ${it} — ${magic.desc}`));
+  1890→                              }
+  1891→                              const cc = { ...c, worn };
+  1892→                              const oldAc = cc.ac;
+  1893→                              cc.ac = computeAC(cc);
+  1894→                              if (cc.ac !== oldAc) entries.push(entrySystem(`🛡 AC เปลี่ยน ${oldAc} → ${cc.ac}`));
+  1895→                              const finalLog = [...log, ...entries];
+  1896→                              setC(cc); setLog(finalLog); persist(cc, scene, finalLog, combat, history);
+  1897→                            }}>{isWorn ? "ถอด" : "สวม"}</button>
+  1898→                          )}
+  1899→                          {consum && !combat && !thinking && (
+  1900→                            <button className="btn" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => {
+  1901→                              const cc = { ...c, inventory: [...c.inventory] };
+  1902→                              cc.inventory.splice(i, 1);
+  1903→                              const entries = [];
+  1904→                              if (consum.heal) {
+  1905→                                const h = rollFormula(consum.heal);
+  1906→                                cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+  1907→                                entries.push(entrySystem(`🧪 ใช้ ${it}: ฟื้น ${h.total} HP → ${cc.hp}/${cc.maxHp}`));
+  1908→                              }
+  1909→                              if (consum.cure) {
+  1910→                                const ci = cc.conditions.indexOf(consum.cure);
+  1911→                                cc.conditions = [...cc.conditions];
+  1912→                                if (ci >= 0) { cc.conditions.splice(ci, 1); entries.push(entrySystem(`🧪 ใช้ ${it}: หายจากสถานะ ${consum.cure}`)); }
+  1913→                                else entries.push(entrySystem(`🧪 ใช้ ${it}: ไม่มีสถานะให้แก้ (เสียของฟรี)`));
+  1914→                              }
+  1915→                              const finalLog = [...log, ...entries];
+  1916→                              setC(cc); setLog(finalLog); persist(cc, scene, finalLog, combat, history);
+  1917→                            }}>ใช้</button>
+  1918→                          )}
+  1919→                        </div>
+  1920→                      );
+  1921→                    })}
+  1922→                  <div className="sec-label">ทรัพย์สิน</div>
+  1923→                  <div className="item-row">💰 {c.gold} gold pieces</div>
+  1924→                  <div style={{ fontSize: 12, color: "#8A7F9E", marginTop: 10 }}>
+  1925→                    ซื้อ/ขายของได้โดยพิมพ์บอก DM เมื่ออยู่ในร้านค้า เช่น "ซื้อ Potion of Healing" — ไอเทมอื่น ๆ ใช้ผ่านการพิมพ์ เช่น "จุดคบเพลิง"
+  1926→                  </div>
+  1927→                </div>
+  1928→              )}
+  1929→            </div>
+  1930→          </div>
+  1931→        </div>
+  1932→      )}
+  1933→
+  1934→      {/* COMBAT PANEL */}
+  1935→      {combat && (
+  1936→        <div style={{ borderTop: "1px solid #6E3448", background: "#1A0F1C", padding: "10px 14px" }}>
+  1937→          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+  1938→            <span className="dnd-display" style={{ color: "#C74B44", fontSize: 14 }}>⚔ COMBAT · ROUND {combat.round}</span>
+  1939→          </div>
+  1940→          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8 }}>
+  1941→            {combat.enemies.map((e) => (
+  1942→              <div key={e.uid} className={"enemy-card" + (e.hpNow <= 0 ? " dead" : "")}>
+  1943→                <div style={{ fontSize: 13, fontWeight: 700 }}>{e.hpNow <= 0 ? "💀 " : ""}{e.th}</div>
+  1944→                <div style={{ fontSize: 11, color: "#8A7F9E" }}>AC {e.ac}</div>
+  1945→                <div className="hpbar" style={{ height: 12, marginTop: 4 }}>
+  1946→                  <div className="hpbar-fill" style={{ width: Math.max(0, (e.hpNow / e.hp) * 100) + "%", background: "#C74B44" }} />
+  1947→                  <span className="hpbar-label" style={{ fontSize: 9 }}>{e.hpNow}/{e.hp}</span>
+  1948→                </div>
+  1949→              </div>
+  1950→            ))}
+  1951→          </div>
+  1952→          {downed ? (
+  1953→            <button className="btn btn-red" style={{ width: "100%", padding: 13 }} disabled={thinking} onClick={() => playerCombatAction("deathsave")}>
+  1954→              💀 ทอย Death Saving Throw ({c.deathSaves.s}✓ / {c.deathSaves.f}✗)
+  1955→            </button>
+  1956→          ) : combatMenu === "spell" ? (
+  1957→            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+  1958→              {mySpells.map(([k, s]) => {
+  1959→                const noSlot = s.slot > 0 && (c.slots[s.slot - 1] || 0) <= 0;
+  1960→                return (
+  1961→                  <button key={k} className="btn" style={{ textAlign: "left" }} disabled={thinking || noSlot} onClick={() => playerCombatAction("spell", k)}>
+  1962→                    ✨ <b>{s.th}</b> <span style={{ fontSize: 11, color: "#B9A96A" }}>{s.slot > 0 ? `slot ${s.slot}` : "cantrip"}</span>
+  1963→                    <div style={{ fontSize: 11, color: "#9C92B8", fontWeight: 400 }}>{s.desc}</div>
+  1964→                  </button>
+  1965→                );
+  1966→              })}
+  1967→              {lockedSpells.map((s) => (
+  1968→                <div key={s.th} className="btn" style={{ textAlign: "left", opacity: 0.4, cursor: "default" }}>
+  1969→                  🔒 <b>{s.th}</b> <span style={{ fontSize: 11 }}>ปลดที่ Lv.{s.minLv}</span>
+  1970→                </div>
+  1971→              ))}
+  1972→              <button className="btn" onClick={() => setCombatMenu("")}>← กลับ</button>
+  1973→            </div>
+  1974→          ) : combatMenu === "item" ? (
+  1975→            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+  1976→              {combatItems.length === 0 && <div style={{ fontSize: 13, color: "#8A7F9E", gridColumn: "1 / -1" }}>ไม่มีไอเทมที่ใช้ใน combat ได้</div>}
+  1977→              {combatItems.map((it, i) => (
+  1978→                <button key={it + i} className="btn" disabled={thinking} onClick={() => playerCombatAction("item", it)}>🧪 {it}</button>
+  1979→              ))}
+  1980→              <button className="btn" onClick={() => setCombatMenu("")}>← กลับ</button>
+  1981→            </div>
+  1982→          ) : (
+  1983→            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+  1984→              <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack")}>⚔️ โจมตี ({meleeW.th})</button>
+  1985→              {rangedW && <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack_ranged")}>🏹 ยิง ({rangedW.th})</button>}
+  1986→              {cls.caster && <button className="btn" disabled={thinking} onClick={() => setCombatMenu("spell")}>✨ ร่ายเวท</button>}
+  1987→              <button className="btn" disabled={thinking || combatItems.length === 0} onClick={() => setCombatMenu("item")}>🧪 ใช้ไอเทม ({combatItems.length})</button>
+  1988→              {c.cls === "fighter" && <button className="btn" disabled={thinking || c.secondWindUsed} onClick={() => playerCombatAction("second_wind")}>🛡️ Second Wind</button>}
+  1989→              {hasFeature(c, "action_surge") && <button className="btn" disabled={thinking || c.actionSurgeUsed} onClick={() => playerCombatAction("action_surge")}>⚡ Action Surge</button>}
+  1990→              {hasFeature(c, "preserve_life") && <button className="btn" disabled={thinking || c.preserveLifeUsed} onClick={() => playerCombatAction("preserve_life")}>🕊️ Preserve Life</button>}
+  1991→              {c.cls === "rogue" && <button className="btn" disabled={thinking} onClick={() => playerCombatAction("hide")}>🌫️ Hide</button>}
+  1992→              <button className="btn" disabled={thinking} onClick={() => playerCombatAction("dodge")}>🌀 Dodge</button>
+  1993→              {(c.worn || []).includes("Ring of Invisibility") && !combat.invisible && (
+  1994→                <button className="btn" disabled={thinking} onClick={() => playerCombatAction("invisible")}>🫥 ล่องหน (Ring)</button>
+  1995→              )}
+  1996→              <button className="btn btn-red" disabled={thinking} onClick={() => playerCombatAction("flee")}>🏃 หนี</button>
+  1997→            </div>
+  1998→          )}
+  1999→        </div>
+  2000→      )}
+
+[showing lines 1-2000 of 2028; use offset=2001 with limit to continue reading]

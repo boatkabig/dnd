@@ -1,0 +1,726 @@
+     1→/**
+     2→ * ============================================================================
+     3→ * D&D Engine Design Document — Chapter 10: Rest & Recovery
+     4→ * ============================================================================
+     5→ *
+     6→ * Version: 1.0
+     7→ * Target: D&D 5e / 2024 Compatible
+     8→ * Architecture: Rest Pipeline + Recovery Rules + Downtime Activities
+     9→ *
+    10→ * Core Principles:
+    11→ *   1. RestType = Short Rest (1 hr) or Long Rest (8 hr).
+    12→ *   2. Short Rest: spend Hit Dice to heal, recover class resources (Action Surge,
+    13→ *      Bardic Inspiration, Second Wind), refresh Pact Magic slots.
+    14→ *   3. Long Rest: restore HP to max, recover **ALL** Hit Dice (2024 change from 5e's "half"),
+    15→ *      restore all standard spell slots, clear short/long-rest effects, reduce exhaustion by 1.
+    16→ *   4. Rest requirements: safe location, no interruptions (combat breaks rest).
+    17→ *   5. Rest interruption: any combat or strenuous activity cancels the rest.
+    18→ *   6. Recovery rules: HP (Hit Dice), spell slots (long rest), features (per-rest
+    19→ *      refresh), resources (Action Surge, Superiority Dice, etc.), exhaustion.
+    20→ *   7. Downtime activities: crafting, training, research, work, recuperating,
+    21→ *      carousing — each is a data-driven definition.
+    22→ *
+    23→ * Rest Pipeline:
+    24→ *   1. canRest(character, restType, environment) → validate (safe? at least 1 hr free?)
+    25→ *   2. performShortRest / performLongRest → apply recovery rules
+    26→ *   3. checkInterruption() → if interrupted, rest fails (no benefits)
+    27→ *   4. trigger on_rest event (Effects system clears until_short_rest effects)
+    28→ *
+    29→ * Recovery Rules:
+    30→ *   - HP (Short Rest): spend Hit Dice (max = character level); each die = class
+    31→ *     hit die + CON mod; player chooses how many to spend.
+    32→ *   - HP (Long Rest): restore to max HP (no HD spend needed).
+    33→ *   - Hit Dice (Long Rest): recover **ALL** spent Hit Dice (D&D 2024 change from 5e's "half total, min 1").
+    34→ *   - Spell Slots (Long Rest): restore all standard slots to max.
+    35→ *   - Pact Magic (Short Rest): restore pact magic slots.
+    36→ *   - Features (per-rest): refresh per their definition (Short Rest or Long Rest).
+    37→ *   - Exhaustion (Long Rest): reduce by 1 level.
+    38→ *
+    39→ * Cross-References:
+    40→ *   - Character.ts (Chapter 01) → HP, max HP, Hit Dice, level, exhaustion
+    41→ *   - Magic.ts (Chapter 04) → SpellSlotState, restoreAllSlots, restorePactMagicSlots
+    42→ *   - Effects.ts (Chapter 06) → clearOnShortRest, clearOnLongRest
+    43→ *   - ActionEconomy.ts (Chapter 02) → extraResources reset per rest
+    44→ * ============================================================================
+    45→ */
+    46→
+    47→import type { AbilityName } from "./character";
+    48→import type { SpellSlotState } from "./magic";
+    49→import {
+    50→  restoreAllSlots,
+    51→  restorePactMagicSlots,
+    52→} from "./magic";
+    53→import type { ActiveEffect } from "./effects";
+    54→import { clearOnShortRest, clearOnLongRest } from "./effects";
+    55→import { rollDamage } from "./dice";
+    56→
+    57→// ============================================================================
+    58→// 1. REST TYPES
+    59→// ============================================================================
+    60→
+    61→export type RestType = "short_rest" | "long_rest";
+    62→
+    63→export interface RestTypeDef {
+    64→  type: RestType;
+    65→  name: string;
+    66→  /** Required duration in minutes (Short = 60, Long = 480). */
+    67→  durationMinutes: number;
+    68→  description: string;
+    69→}
+    70→
+    71→export const REST_TYPES: Record<RestType, RestTypeDef> = {
+    72→  short_rest: {
+    73→    type: "short_rest",
+    74→    name: "Short Rest",
+    75→    durationMinutes: 60,
+    76→    description: "1 hour of rest. Spend Hit Dice to recover HP. Refresh short-rest resources.",
+    77→  },
+    78→  long_rest: {
+    79→    type: "long_rest",
+    80→    name: "Long Rest",
+    81→    durationMinutes: 480,
+    82→    description: "8 hours of rest (6 sleeping, 2 light activity). Restore HP to max, recover half Hit Dice, refresh all spell slots, reduce exhaustion by 1.",
+    83→  },
+    84→};
+    85→
+    86→// ============================================================================
+    87→// 2. HIT DICE TRACKING
+    88→// ============================================================================
+    89→
+    90→/**
+    91→ * Per-character Hit Dice pool.
+    92→ * Each class level grants 1 Hit Die of that class's hit die type (d6/d8/d10/d12).
+    93→ * Multiclass characters have a mixed pool.
+    94→ */
+    95→export interface HitDicePool {
+    96→  /** Total hit dice by die size (e.g. { "d8": 5, "d6": 2 }). */
+    97→  bySize: Record<string, { max: number; current: number }>;
+    98→  /** Total hit dice across all sizes. */
+    99→  totalMax: number;
+   100→  totalCurrent: number;
+   101→}
+   102→
+   103→/**
+   104→ * Create a HitDicePool from a list of class levels.
+   105→ * Each entry: { classLevel: number, hitDie: number (6/8/10/12) }
+   106→ */
+   107→export function createHitDicePool(
+   108→  classLevels: Array<{ level: number; hitDie: number }>,
+   109→): HitDicePool {
+   110→  const bySize: Record<string, { max: number; current: number }> = {};
+   111→  let totalMax = 0;
+   112→  for (const cl of classLevels) {
+   113→    const size = `d${cl.hitDie}`;
+   114→    if (!bySize[size]) bySize[size] = { max: 0, current: 0 };
+   115→    bySize[size].max += cl.level;
+   116→    bySize[size].current += cl.level;
+   117→    totalMax += cl.level;
+   118→  }
+   119→  return { bySize, totalMax, totalCurrent: totalMax };
+   120→}
+   121→
+   122→/**
+   123→ * Spend a Hit Die during a Short Rest.
+   124→ * Returns the heal amount (die roll + CON mod) and the updated pool.
+   125→ */
+   126→export function spendHitDie(
+   127→  pool: HitDicePool,
+   128→  dieSize: string,
+   129→  conModifier: number,
+   130→  seed?: number,
+   131→): { heal: number; newPool: HitDicePool } {
+   132→  const entry = pool.bySize[dieSize];
+   133→  if (!entry || entry.current <= 0) {
+   134→    return { heal: 0, newPool: pool };
+   135→  }
+   136→  const heal = rollDamage(`1${dieSize}`, false, { seed }).total + conModifier;
+   137→  const newPool: HitDicePool = {
+   138→    bySize: {
+   139→      ...pool.bySize,
+   140→      [dieSize]: { ...entry, current: entry.current - 1 },
+   141→    },
+   142→    totalMax: pool.totalMax,
+   143→    totalCurrent: pool.totalCurrent - 1,
+   144→  };
+   145→  return { heal: Math.max(1, heal), newPool };
+   146→}
+   147→
+   148→/**
+   149→ * Recover Hit Dice after a Long Rest: D&D 2024 — restore ALL spent Hit Dice.
+   150→ * Source: D&D Beyond Free Rules 2024 — "Long Rest": "You regain all lost Hit Points
+   151→ * and all spent Hit Point Dice."
+   152→ *
+   153→ * 5e (2014) recovered only half total (min 1). 2024 restores everything for faster pacing.
+   154→ */
+   155→export function recoverHitDice(pool: HitDicePool): HitDicePool {
+   156→  // D&D 2024: restore ALL Hit Dice to max
+   157→  const bySize: Record<string, { max: number; current: number }> = {};
+   158→  let totalCurrent = 0;
+   159→  for (const [size, entry] of Object.entries(pool.bySize)) {
+   160→    bySize[size] = { max: entry.max, current: entry.max };
+   161→    totalCurrent += entry.max;
+   162→  }
+   163→  return { bySize, totalMax: pool.totalMax, totalCurrent };
+   164→}
+   165→
+   166→// ============================================================================
+   167→// 3. REST REQUIREMENTS — Validation
+   168→// ============================================================================
+   169→
+   170→export interface RestEnvironment {
+   171→  /** Is the location safe from random encounters? */
+   172→  isSafe: boolean;
+   173→  /** Is the location comfortable (bed, fire)? Affects some optional rules. */
+   174→  isComfortable: boolean;
+   175→  /** Weather conditions (affects interruption chance). */
+   176→  weather: "clear" | "rain" | "storm" | "snow" | "extreme";
+   177→  /** Hostile creatures nearby? */
+   178→  hasHostilesNearby: boolean;
+   179→}
+   180→
+   181→export interface RestRequirement {
+   182→  valid: boolean;
+   183→  reason?: string;
+   184→  /** Required duration in minutes. */
+   185→  requiredMinutes: number;
+   186→}
+   187→
+   188→/**
+   189→ * Check if a character can rest in the given environment.
+   190→ *
+   191→ * D&D 2024 (D&D Beyond Free Rules — "Long Rest"): "After you finish a Long Rest, you must
+   192→ * wait at least **16 hours** before starting another one."
+   193→ * (5e used "1 per 24 hours" — 2024 changed this to "16 hours between rests".)
+   194→ *
+   195→ * D&D 2024 interruption triggers (D&D Beyond Free Rules — "Short Rest" & "Long Rest"):
+   196→ *   - Rolling Initiative (combat)
+   197→ *   - Casting a spell other than a cantrip
+   198→ *   - Taking any damage (new in 2024 — did not exist in 5e)
+   199→ *   - 1 hour of walking or other physical exertion (Long Rest only)
+   200→ *
+   201→ * Short Rest interruption: first three triggers — no benefits conferred, no resume possible.
+   202→ * Long Rest interruption: all four triggers; if rested ≥1 hour before, gain Short Rest benefits;
+   203→ * can resume with +1 hour per interruption.
+   204→ */
+   205→export function canRest(
+   206→  restType: RestType,
+   207→  environment: RestEnvironment,
+   208→  lastLongRestHoursAgo: number = 17,
+   209→): RestRequirement {
+   210→  const def = REST_TYPES[restType];
+   211→  if (restType === "long_rest") {
+   212→    // D&D 2024: must wait at least 16 hours between Long Rests (was 24 in 5e)
+   213→    if (lastLongRestHoursAgo < 16) {
+   214→      return {
+   215→        valid: false,
+   216→        reason: `ต้องรออย่างน้อย 16 ชั่วโมงหลัง Long Rest ก่อนหน้า (D&D 2024 — เหลือ ${16 - lastLongRestHoursAgo} ชม.)`,
+   217→        requiredMinutes: def.durationMinutes,
+   218→      };
+   219→    }
+   220→    if (environment.weather === "extreme") {
+   221→      return {
+   222→        valid: false,
+   223→        reason: "Extreme weather makes long rest impossible without shelter.",
+   224→        requiredMinutes: def.durationMinutes,
+   225→      };
+   226→    }
+   227→    if (environment.hasHostilesNearby) {
+   228→      return {
+   229→        valid: false,
+   230→        reason: "Cannot rest safely with hostile creatures nearby.",
+   231→        requiredMinutes: def.durationMinutes,
+   232→      };
+   233→    }
+   234→  }
+   235→  if (restType === "short_rest") {
+   236→    if (environment.hasHostilesNearby) {
+   237→      return {
+   238→        valid: false,
+   239→        reason: "Cannot short rest with hostile creatures nearby.",
+   240→        requiredMinutes: def.durationMinutes,
+   241→      };
+   242→    }
+   243→  }
+   244→  return { valid: true, requiredMinutes: def.durationMinutes };
+   245→}
+   246→
+   247→// ============================================================================
+   248→// 4. REST INTERRUPTION
+   249→// ============================================================================
+   250→
+   251→export type InterruptionType =
+   252→  | "combat"               // Rolling Initiative (D&D 2024: cancels both Short & Long Rest)
+   253→  | "non_cantrip_spell"    // Casting a spell other than a cantrip (D&D 2024: cancels)
+   254→  | "damage_taken"         // Taking any damage (D&D 2024 NEW: cancels — did not exist in 5e)
+   255→  | "strenuous_activity"   // 1 hour of walking or other physical exertion (Long Rest only)
+   256→  | "environmental_hazard"
+   257→  | "noise"
+   258→  | "hostile_encounter"
+   259→  | "magical_disturbance"
+   260→  | "none";
+   261→
+   262→export interface RestInterruption {
+   263→  type: InterruptionType;
+   264→  description: string;
+   265→  /** Minutes into the rest when interruption occurred. */
+   266→  minutesIntoRest: number;
+   267→  /** Does this completely cancel the rest? (D&D 2024: more interruptions cancel than 5e.) */
+   268→  cancelsRest: boolean;
+   269→  /** D&D 2024 Long Rest only: if interrupted after ≥1 hr, gain Short Rest benefits. */
+   270→  grantsShortRestBenefitsInstead: boolean;
+   271→  /** D&D 2024 Long Rest only: can resume with +1 hour per interruption. */
+   272→  canResume: boolean;
+   273→}
+   274→
+   275→/**
+   276→ * Check if a rest is interrupted by a given event.
+   277→ *
+   278→ * D&D 2024 (D&D Beyond Free Rules — "Short Rest" & "Long Rest"):
+   279→ *   Short Rest interrupted by: Rolling Initiative / non-cantrip spell / any damage.
+   280→ *   → No benefits, NO resume possible.
+   281→ *
+   282→ *   Long Rest interrupted by: Rolling Initiative / non-cantrip spell / any damage / 1 hr exertion.
+   283→ *   → If rested ≥1 hr before interruption → gain Short Rest benefits.
+   284→ *   → Can resume with +1 hour per interruption.
+   285→ */
+   286→export function checkInterruption(
+   287→  restType: RestType,
+   288→  interruption: InterruptionType,
+   289→  minutesIntoRest: number,
+   290→  totalInterruptionMinutes: number = 0,
+   291→): RestInterruption {
+   292→  if (interruption === "none") {
+   293→    return {
+   294→      type: "none", description: "No interruption.",
+   295→      minutesIntoRest, cancelsRest: false,
+   296→      grantsShortRestBenefitsInstead: false, canResume: false,
+   297→    };
+   298→  }
+   299→  const descriptions: Record<Exclude<InterruptionType, "none">, string> = {
+   300→    combat: "Rolling Initiative (combat) — D&D 2024: hard-interrupts any rest.",
+   301→    non_cantrip_spell: "Casting a non-cantrip spell — D&D 2024: hard-interrupts any rest.",
+   302→    damage_taken: "Taking damage — D&D 2024 NEW: hard-interrupts any rest.",
+   303→    strenuous_activity: "1 hour of walking or physical exertion — D&D 2024: interrupts Long Rest.",
+   304→    environmental_hazard: "Environmental hazard (storm, earthquake) interrupted the rest.",
+   305→    noise: "Loud noise disturbed the rest.",
+   306→    hostile_encounter: "A hostile creature was encountered.",
+   307→    magical_disturbance: "A magical disturbance (telepathic intrusion, etc.) disrupted rest.",
+   308→  };
+   309→
+   310→  // D&D 2024 hard-interrupt triggers (cancel both Short & Long Rest)
+   311→  const hardInterrupts: InterruptionType[] = ["combat", "non_cantrip_spell", "damage_taken"];
+   312→  const isHardInterrupt = hardInterrupts.includes(interruption);
+   313→
+   314→  let cancelsRest = false;
+   315→  let grantsShortRestBenefitsInstead = false;
+   316→  let canResume = false;
+   317→
+   318→  if (restType === "short_rest") {
+   319→    // Short Rest: any hard interrupt cancels — no benefits, no resume
+   320→    if (isHardInterrupt) cancelsRest = true;
+   321→    if (interruption === "environmental_hazard" || interruption === "magical_disturbance") {
+   322→      cancelsRest = true; // DM-fiat environmental effects
+   323→    }
+   324→  } else {
+   325→    // Long Rest
+   326→    if (isHardInterrupt) {
+   327→      cancelsRest = true;
+   328→      // D&D 2024: if rested ≥1 hour before interruption → gain Short Rest benefits
+   329→      if (minutesIntoRest >= 60) {
+   330→        grantsShortRestBenefitsInstead = true;
+   331→      }
+   332→      // D&D 2024: can resume with +1 hour per interruption
+   333→      canResume = true;
+   334→    } else if (interruption === "strenuous_activity") {
+   335→      // 1 hour of walking/physical exertion — only interrupts Long Rest
+   336→      cancelsRest = totalInterruptionMinutes + 60 > 60; // cancels if total strenuous time exceeds threshold
+   337→      if (cancelsRest && minutesIntoRest >= 60) grantsShortRestBenefitsInstead = true;
+   338→      canResume = true;
+   339→    } else if (interruption === "environmental_hazard" || interruption === "magical_disturbance") {
+   340→      cancelsRest = true;
+   341→      canResume = true;
+   342→    }
+   343→  }
+   344→
+   345→  return {
+   346→    type: interruption,
+   347→    description: descriptions[interruption as Exclude<InterruptionType, "none">],
+   348→    minutesIntoRest,
+   349→    cancelsRest,
+   350→    grantsShortRestBenefitsInstead,
+   351→    canResume,
+   352→  };
+   353→}
+   354→
+   355→// ============================================================================
+   356→// 5. SHORT REST — Recovery rules
+   357→// ============================================================================
+   358→
+   359→export interface ShortRestRequest {
+   360→  characterId: string;
+   361→  /** Hit dice to spend (player chooses how many). */
+   362→  hitDiceToSpend: Array<{ dieSize: string; count: number }>;
+   363→  conModifier: number;
+   364→  currentHP: number;
+   365→  maxHP: number;
+   366→  hitDicePool: HitDicePool;
+   367→  /** Resources that refresh on short rest (e.g. Action Surge, Bardic Inspiration). */
+   368→  shortRestResources: Array<{ id: string; max: number }>;
+   369→  /** Pact magic slots (Warlock). */
+   370→  spellSlots?: SpellSlotState;
+   371→  /** Active effects. */
+   372→  activeEffects: ActiveEffect[];
+   373→  seed?: number;
+   374→}
+   375→
+   376→export interface ShortRestResult {
+   377→  newHP: number;
+   378→  hpRegained: number;
+   379→  newHitDicePool: HitDicePool;
+   380→  /** Resources restored to max. */
+   381→  restoredResources: string[];
+   382→  newSpellSlots?: SpellSlotState;
+   383→  newActiveEffects: ActiveEffect[];
+   384→  logSummary: string;
+   385→}
+   386→
+   387→/**
+   388→ * Perform a Short Rest.
+   389→ * Pipeline:
+   390→ *   1. Spend Hit Dice (heal = sum of rolls + CON mod each)
+   391→ *   2. Restore short-rest resources to max
+   392→ *   3. Restore Pact Magic slots (if Warlock)
+   393→ *   4. Clear effects with duration "until_short_rest"
+   394→ *
+   395→ * D&D 5e: a character can choose to spend 0 Hit Dice if they wish.
+   396→ */
+   397→export function performShortRest(req: ShortRestRequest): ShortRestResult {
+   398→  let hp = req.currentHP;
+   399→  let hitDicePool = req.hitDicePool;
+   400→  let totalHeal = 0;
+   401→  const healLog: string[] = [];
+   402→  let seedCounter = req.seed ?? 0;
+   403→
+   404→  // Spend Hit Dice
+   405→  for (const { dieSize, count } of req.hitDiceToSpend) {
+   406→    for (let i = 0; i < count; i++) {
+   407→      const result = spendHitDie(hitDicePool, dieSize, req.conModifier, seedCounter);
+   408→      if (result.heal > 0) {
+   409→        totalHeal += result.heal;
+   410→        hitDicePool = result.newPool;
+   411→        healLog.push(`${dieSize}=${result.heal}`);
+   412→      }
+   413→      seedCounter++;
+   414→    }
+   415→  }
+   416→  hp = Math.min(req.maxHP, hp + totalHeal);
+   417→
+   418→  // Restore Pact Magic slots
+   419→  let newSpellSlots = req.spellSlots;
+   420→  if (req.spellSlots?.pactMagicSlots) {
+   421→    newSpellSlots = restorePactMagicSlots(req.spellSlots);
+   422→  }
+   423→
+   424→  // Restore short-rest resources
+   425→  const restoredResources = req.shortRestResources.map(r => r.id);
+   426→
+   427→  // Clear until_short_rest effects
+   428→  const newActiveEffects = clearOnShortRest(req.activeEffects);
+   429→
+   430→  return {
+   431→    newHP: hp,
+   432→    hpRegained: totalHeal,
+   433→    newHitDicePool: hitDicePool,
+   434→    restoredResources,
+   435→    newSpellSlots,
+   436→    newActiveEffects,
+   437→    logSummary: `Short rest: healed ${totalHeal} HP [${healLog.join(", ") || "no HD spent"}], restored ${restoredResources.length} resources.`,
+   438→  };
+   439→}
+   440→
+   441→// ============================================================================
+   442→// 6. LONG REST — Recovery rules
+   443→// ============================================================================
+   444→
+   445→export interface LongRestRequest {
+   446→  characterId: string;
+   447→  currentHP: number;
+   448→  maxHP: number;
+   449→  hitDicePool: HitDicePool;
+   450→  /** Resources that refresh on long rest (includes short-rest resources). */
+   451→  longRestResources: Array<{ id: string; max: number }>;
+   452→  /** All spell slots (standard + pact magic). */
+   453→  spellSlots?: SpellSlotState;
+   454→  /** Active effects. */
+   455→  activeEffects: ActiveEffect[];
+   456→  /** Current exhaustion level (0 = none, 6 = dead). */
+   457→  exhaustionLevel: number;
+   458→  seed?: number;
+   459→}
+   460→
+   461→export interface LongRestResult {
+   462→  newHP: number;
+   463→  hpRegained: number;
+   464→  newHitDicePool: HitDicePool;
+   465→  restoredResources: string[];
+   466→  newSpellSlots?: SpellSlotState;
+   467→  newActiveEffects: ActiveEffect[];
+   468→  newExhaustionLevel: number;
+   469→  logSummary: string;
+   470→}
+   471→
+   472→/**
+   473→ * Perform a Long Rest.
+   474→ * Pipeline:
+   475→ *   1. Restore HP to max (no Hit Dice spend needed)
+   476→ *   2. Recover ALL spent Hit Dice (D&D 2024 change — was half in 5e)
+   477→ *   3. Restore ALL spell slots (standard + pact magic)
+   478→ *   4. Restore all long-rest resources to max
+   479→ *   5. Clear effects with duration "until_short_rest" or "until_long_rest"
+   480→ *   6. Reduce exhaustion by 1 (min 0)
+   481→ */
+   482→export function performLongRest(req: LongRestRequest): LongRestResult {
+   483→  // HP restoration
+   484→  const newHP = req.maxHP;
+   485→  const hpRegained = newHP - req.currentHP;
+   486→
+   487→  // Hit Dice recovery: D&D 2024 — restore ALL spent Hit Dice (was "half total, min 1" in 5e)
+   488→  const newHitDicePool = recoverHitDice(req.hitDicePool);
+   489→
+   490→  // Spell slot restoration
+   491→  let newSpellSlots = req.spellSlots;
+   492→  if (req.spellSlots) {
+   493→    newSpellSlots = restoreAllSlots(req.spellSlots);
+   494→    if (newSpellSlots?.pactMagicSlots) {
+   495→      newSpellSlots = restorePactMagicSlots(newSpellSlots);
+   496→    }
+   497→  }
+   498→
+   499→  // Restore resources
+   500→  const restoredResources = req.longRestResources.map(r => r.id);
+   501→
+   502→  // Clear effects
+   503→  const newActiveEffects = clearOnLongRest(req.activeEffects);
+   504→
+   505→  // Reduce exhaustion by 1 (min 0)
+   506→  const newExhaustionLevel = Math.max(0, req.exhaustionLevel - 1);
+   507→
+   508→  return {
+   509→    newHP,
+   510→    hpRegained,
+   511→    newHitDicePool,
+   512→    restoredResources,
+   513→    newSpellSlots,
+   514→    newActiveEffects,
+   515→    newExhaustionLevel,
+   516→    logSummary: `Long rest: HP ${req.currentHP}→${newHP}, HD ${req.hitDicePool.totalCurrent}→${newHitDicePool.totalCurrent}, exhaustion ${req.exhaustionLevel}→${newExhaustionLevel}.`,
+   517→  };
+   518→}
+   519→
+   520→// ============================================================================
+   521→// 7. DOWNTIME ACTIVITIES — Data-Driven
+   522→// ============================================================================
+   523→
+   524→export type DowntimeType =
+   525→  | "crafting"
+   526→  | "training"
+   527→  | "research"
+   528→  | "work"
+   529→  | "recuperating"
+   530→  | "carousing"
+   531→  | "spell_scribing"
+   532→  | "exploration"
+   533→  | "religious_service"
+   534→  | "custom";
+   535→
+   536→export interface DowntimeDef {
+   537→  type: DowntimeType;
+   538→  name: string;
+   539→  description: string;
+   540→  /** Required days to complete one unit of activity. */
+   541→  daysRequired: number;
+   542→  /** Cost in gold per day. */
+   543→  costPerDay: number;
+   544→  /** Required proficiency (e.g. "smiths_tools" for crafting armor). */
+   545→  requiredProficiency?: string;
+   546→  /** Outcome: what the activity produces. */
+   547→  outcome: {
+   548→    type: "item" | "gold" | "xp" | "skill_proficiency" | "feature" | "information" | "favor" | "custom";
+   549→    /** ID of the produced item/feature/etc. */
+   550→    id?: string;
+   551→    /** Amount of gold earned (for "work"). */
+   552→    goldAmount?: number;
+   553→    /** XP earned (rare; usually milestone). */
+   554→    xpAmount?: number;
+   555→    /** Description of the outcome (for "information" or "favor"). */
+   556→    description?: string;
+   557→  };
+   558→}
+   559→
+   560→/**
+   561→ * Standard downtime activities. Adding new types = appending to this array.
+   562→ */
+   563→export const STANDARD_DOWNTIME: DowntimeDef[] = [
+   564→  {
+   565→    type: "crafting", name: "Crafting",
+   566→    description: "Craft a non-magical item using appropriate tools.",
+   567→    daysRequired: 1, costPerDay: 0,
+   568→    outcome: { type: "item" },
+   569→  },
+   570→  {
+   571→    type: "training", name: "Training",
+   572→    description: "Learn a new language, tool proficiency, or skill.",
+   573→    daysRequired: 250, costPerDay: 1,
+   574→    outcome: { type: "skill_proficiency" },
+   575→  },
+   576→  {
+   577→    type: "research", name: "Research",
+   578→    description: "Research lore, spells, or information in a library.",
+   579→    daysRequired: 7, costPerDay: 5,
+   580→    outcome: { type: "information" },
+   581→  },
+   582→  {
+   583→    type: "work", name: "Work",
+   584→    description: "Perform skilled or unskilled labor for wages.",
+   585→    daysRequired: 1, costPerDay: 0,
+   586→    outcome: { type: "gold", goldAmount: 5 },
+   587→  },
+   588→  {
+   589→    type: "recuperating", name: "Recuperating",
+   590→    description: "Recover from disease, poison, or frailty.",
+   591→    daysRequired: 3, costPerDay: 2,
+   592→    outcome: { type: "custom", description: "Cures disease, poison, or frailty condition." },
+   593→  },
+   594→  {
+   595→    type: "carousing", name: "Carousing",
+   596→    description: "Socialize, drink, and make friends in town.",
+   597→    daysRequired: 5, costPerDay: 10,
+   598→    outcome: { type: "favor" },
+   599→  },
+   600→  {
+   601→    type: "spell_scribing", name: "Spell Scribing",
+   602→    description: "Scribe a spell scroll into a spellbook (Wizard).",
+   603→    daysRequired: 2, costPerDay: 10,
+   604→    requiredProficiency: "arcana",
+   605→    outcome: { type: "item" },
+   606→  },
+   607→  {
+   608→    type: "religious_service", name: "Religious Service",
+   609→    description: "Perform religious service at a temple.",
+   610→    daysRequired: 1, costPerDay: 0,
+   611→    outcome: { type: "favor" },
+   612→  },
+   613→];
+   614→
+   615→export function getDowntimeDef(type: DowntimeType): DowntimeDef | undefined {
+   616→  return STANDARD_DOWNTIME.find(d => d.type === type);
+   617→}
+   618→
+   619→// ============================================================================
+   620→// 8. RECOVERY RULES — Data-driven
+   621→// ============================================================================
+   622→
+   623→/**
+   624→ * What gets recovered on a rest. Each class/feature declares its recovery type.
+   625→ */
+   626→export type RecoveryType = "short_rest" | "long_rest" | "per_use" | "permanent";
+   627→
+   628→export interface ResourceDef {
+   629→  id: string;
+   630→  name: string;
+   631→  max: number;
+   632→  recovery: RecoveryType;
+   633→  /** Description of what this resource does. */
+   634→  description?: string;
+   635→}
+   636→
+   637→/**
+   638→ * Standard D&D 5e resources with their recovery types.
+   639→ */
+   640→export const STANDARD_RESOURCES: ResourceDef[] = [
+   641→  { id: "action_surge", name: "Action Surge", max: 1, recovery: "short_rest", description: "Take an additional action on your turn (Fighter L2)." },
+   642→  { id: "action_surge_improved", name: "Action Surge (Improved)", max: 2, recovery: "short_rest", description: "Two uses per short rest (Fighter L17)." },
+   643→  { id: "second_wind", name: "Second Wind", max: 1, recovery: "short_rest", description: "Bonus action heal 1d10+Fighter level HP (Fighter L1)." },
+   644→  { id: "bardic_inspiration", name: "Bardic Inspiration", max: 1, recovery: "long_rest", description: "Grant an ally a 1d6 bonus die (Bard L1). D&D 2024: short rest at L5+." },
+   645→  { id: "superiority_dice", name: "Superiority Dice", max: 4, recovery: "short_rest", description: "Maneuver dice (Battle Master L3)." },
+   646→  { id: "ki", name: "Ki Points", max: 1, recovery: "short_rest", description: "Monk resource for Flurry of Patient Defense (Monk L2)." },
+   647→  { id: "channel_divinity", name: "Channel Divinity", max: 1, recovery: "short_rest", description: "Cleric/Paladin special ability (L1)." },
+   648→  { id: "lay_on_hands", name: "Lay on Hands", max: 5, recovery: "long_rest", description: "Heal pool = 5 × Paladin level HP (Paladin L1)." },
+   649→  { id: "rage", name: "Rage", max: 2, recovery: "long_rest", description: "Barbarian rage uses (L1: 2, L20: unlimited)." },
+   650→  { id: "wild_shape", name: "Wild Shape", max: 2, recovery: "short_rest", description: "Druid shapechange (L2)." },
+   651→  { id: "indomitable", name: "Indomitable", max: 1, recovery: "long_rest", description: "Reroll a failed save (Fighter L9)." },
+   652→  { id: "arcane_recovery", name: "Arcane Recovery", max: 1, recovery: "long_rest", description: "Recover spell slots on short rest once per day (Wizard L1)." },
+   653→];
+   654→
+   655→export function getResourceDef(resourceId: string): ResourceDef | undefined {
+   656→  return STANDARD_RESOURCES.find(r => r.id === resourceId);
+   657→}
+   658→
+   659→/**
+   660→ * Filter resources by recovery type (for rest pipelines).
+   661→ */
+   662→export function getResourcesByRecovery(
+   663→  resources: ResourceDef[],
+   664→  recovery: RecoveryType,
+   665→): ResourceDef[] {
+   666→  return resources.filter(r => r.recovery === recovery);
+   667→}
+   668→
+   669→// ============================================================================
+   670→// 9. EXHAUSTION SYSTEM
+   671→// ============================================================================
+   672→
+   673→export interface ExhaustionLevel {
+   674→  level: number;                    // 0-6 (6 = death)
+   675→  effects: string[];
+   676→  speedMultiplier: number;          // 1 at L0, 0.5 at L1, 0 at L5
+   677→  /** HP max multiplier (1.0 normal, 0.5 at L4). */
+   678→  hpMaxMultiplier: number;
+   679→}
+   680→
+   681→export const EXHAUSTION_LEVELS: ExhaustionLevel[] = [
+   682→  { level: 0, effects: [], speedMultiplier: 1, hpMaxMultiplier: 1 },
+   683→  { level: 1, effects: ["Ability checks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
+   684→  { level: 2, effects: ["Speed halved", "Ability checks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
+   685→  { level: 3, effects: ["Speed halved", "Ability checks + attacks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
+   686→  { level: 4, effects: ["Speed halved", "Disadvantage on attacks/saves/checks", "HP max halved"], speedMultiplier: 0.5, hpMaxMultiplier: 0.5 },
+   687→  { level: 5, effects: ["Speed 0", "Disadvantage on attacks/saves/checks", "HP max halved"], speedMultiplier: 0, hpMaxMultiplier: 0.5 },
+   688→  { level: 6, effects: ["Death"], speedMultiplier: 0, hpMaxMultiplier: 0 },
+   689→];
+   690→
+   691→export function getExhaustionLevel(level: number): ExhaustionLevel {
+   692→  return EXHAUSTION_LEVELS[Math.max(0, Math.min(6, level))];
+   693→}
+   694→
+   695→// ============================================================================
+   696→// 10. SUMMARY — For AI DM / UI
+   697→// ============================================================================
+   698→
+   699→/** Summarize a rest result for the player. */
+   700→export function summarizeRestResult(
+   701→  restType: RestType,
+   702→  result: ShortRestResult | LongRestResult,
+   703→): string {
+   704→  const restName = REST_TYPES[restType].name;
+   705→  return `${restName}: ${result.logSummary}`;
+   706→}
+   707→
+   708→/** Summarize a character's hit dice pool. */
+   709→export function summarizeHitDice(pool: HitDicePool): string {
+   710→  const parts: string[] = [];
+   711→  for (const [size, entry] of Object.entries(pool.bySize)) {
+   712→    parts.push(`${size}:${entry.current}/${entry.max}`);
+   713→  }
+   714→  return parts.length > 0 ? `HD ${pool.totalCurrent}/${pool.totalMax} [${parts.join(" ")}]` : "No Hit Dice";
+   715→}
+   716→
+   717→/** Summarize a character's available downtime options. */
+   718→export function summarizeDowntimeOptions(
+   719→  resources: ResourceDef[],
+   720→): string {
+   721→  return resources
+   722→    .filter(r => r.recovery === "short_rest" || r.recovery === "long_rest")
+   723→    .map(r => `${r.name} (${r.recovery})`)
+   724→    .join(" · ");
+   725→}
+   726→

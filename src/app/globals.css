@@ -1,0 +1,386 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ============================================================
+   D&D Solo — Dark Fantasy Theme (centralized from DnDSolo.tsx)
+   ============================================================ */
+:root {
+  --dnd-bg: #0D0A14;
+  --dnd-bg2: #141020;
+  --dnd-bg3: #1A1528;
+  --dnd-panel: rgba(30,24,48,0.85);
+  --dnd-border: #3A3054;
+  --dnd-border-light: #4A3F6E;
+  --dnd-text: #EAE0CC;
+  --dnd-text-dim: #C9BFE0;
+  --dnd-text-mute: #9C92B8;
+  --dnd-text-faint: #8A7F9E;
+  --dnd-gold: #E0A83E;
+  --dnd-gold-dim: #B8842A;
+  --dnd-purple: #7C5CBF;
+  --dnd-green: #7FA85C;
+  --dnd-red: #C74B44;
+  --dnd-blue: #6B9BD2;
+  --dnd-teal: #6FB3AB;
+  --dnd-font-display: var(--font-cinzel), 'Cinzel', serif;
+  --dnd-font-body: var(--font-sarabun), 'Sarabun', sans-serif;
+}
+
+.dnd-root {
+  height: 100dvh; /* UX fix: was min-height:100vh → content pushed input off-screen */
+  overflow: hidden; /* contain everything — only log scrolls internally */
+  background: radial-gradient(1200px 600px at 50% -10%, #241C3A 0%, #141020 55%);
+  color: var(--dnd-text);
+  font-family: var(--dnd-font-body);
+  display: flex;
+  flex-direction: column;
+}
+.dnd-display { font-family: var(--dnd-font-display); letter-spacing: 0.06em; }
+
+/* Panels */
+.panel { background: var(--dnd-panel); border: 1px solid var(--dnd-border); border-radius: 12px; }
+
+/* HP Bar */
+.hpbar { position: relative; height: 20px; background: #241E38; border: 1px solid var(--dnd-border); border-radius: 10px; overflow: hidden; }
+.hpbar-fill { height: 100%; transition: width 0.4s ease; }
+.hpbar-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #F5EEDC; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+
+/* Roll Tickets */
+.ticket { display: flex; align-items: center; gap: 10px; background: #1B1530; border: 1px solid var(--dnd-border); border-left: 3px solid var(--dnd-text-faint); border-radius: 10px; padding: 8px 10px; margin: 6px 0; }
+.ticket.ok { border-left-color: var(--dnd-green); }
+.ticket.bad { border-left-color: var(--dnd-red); }
+.ticket-die-wrap { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+.ticket-die { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-family: var(--dnd-font-display); font-weight: 800; font-size: 18px; color: var(--dnd-text); background: #2A2244; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
+.ticket-die.crit { background: var(--dnd-gold); color: #1B1530; box-shadow: 0 0 12px rgba(224,168,62,0.7); }
+.ticket-die.fumble { background: var(--dnd-red); }
+.ticket-die.ghost { opacity: 0.35; width: 24px; height: 24px; font-size: 11px; }
+.ticket-body { flex: 1; min-width: 0; }
+.ticket-title { font-size: 13px; font-weight: 700; color: var(--dnd-text-dim); }
+.ticket-math { font-size: 12px; color: var(--dnd-text-mute); }
+.ticket-adv { color: var(--dnd-gold); font-weight: 700; }
+.ticket-extra { font-size: 12px; color: var(--dnd-text); margin-top: 2px; }
+
+/* Stamps */
+.stamp { font-family: var(--dnd-font-display); font-weight: 800; font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1.5px solid; transform: rotate(-4deg); white-space: nowrap; }
+.s-ok { color: #9CC77A; border-color: var(--dnd-green); }
+.s-bad { color: #E0766D; border-color: var(--dnd-red); }
+
+/* Messages */
+.msg-dm { background: #1E1830; border: 1px solid var(--dnd-border); border-radius: 12px 12px 12px 4px; padding: 10px 14px; margin: 8px 0; line-height: 1.65; white-space: pre-wrap; }
+.msg-player { background: #2C2348; border-radius: 12px 12px 4px 12px; padding: 8px 12px; margin: 8px 0 8px 15%; color: #E9E2F5; }
+.msg-system { text-align: center; font-size: 12px; color: #B9A96A; margin: 6px 0; }
+
+/* Buttons */
+.btn { background: #2A2244; border: 1px solid var(--dnd-border-light); color: var(--dnd-text); border-radius: 10px; padding: 10px 12px; font-family: var(--dnd-font-body); font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.15s; min-height: 44px; }
+.btn:hover:not(:disabled) { background: #3A2F5C; border-color: var(--dnd-gold); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-gold { background: linear-gradient(180deg, var(--dnd-gold), var(--dnd-gold-dim)); color: #1B1530; border: none; font-weight: 700; }
+.btn-gold:hover:not(:disabled) { background: linear-gradient(180deg, #F0BC55, #C9933A); }
+.btn-red { border-color: #7A3B36; color: #E0968F; }
+
+/* Chips & Pips */
+.chip { display: inline-block; font-size: 11px; background: #3A2438; border: 1px solid #7A3B5E; color: #E0A0B8; border-radius: 20px; padding: 2px 8px; margin: 2px; }
+.slotpip { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--dnd-teal); display: inline-block; margin-right: 3px; }
+.slotpip.used { border-color: #4A4460; background: transparent; }
+.slotpip.full { background: var(--dnd-teal); box-shadow: 0 0 5px rgba(111,179,171,0.6); }
+
+/* Enemy cards */
+.enemy-card { background: #241528; border: 1px solid #6E3448; border-radius: 10px; padding: 8px 10px; min-width: 130px; }
+.enemy-card.dead { opacity: 0.35; }
+
+/* Character creation */
+.cc-opt { border: 1.5px solid var(--dnd-border); border-radius: 12px; padding: 10px; cursor: pointer; background: #1E1830; transition: border-color 0.15s; }
+.cc-opt.sel { border-color: var(--dnd-gold); background: #2A2244; }
+
+/* Inputs */
+.input-main { flex: 1; background: #1B1530; border: 1px solid var(--dnd-border-light); border-radius: 10px; color: var(--dnd-text); padding: 11px 14px; font-family: var(--dnd-font-body); font-size: 15px; outline: none; min-height: 44px; }
+.input-main:focus { border-color: var(--dnd-gold); }
+
+/* Sheet/Modal */
+.sheet-overlay { position: fixed; inset: 0; background: rgba(10,8,18,0.7); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
+.sheet-modal { background: #1A1428; border: 1px solid var(--dnd-border-light); border-radius: 16px 16px 0 0; width: 100%; max-width: 640px; max-height: 82vh; display: flex; flex-direction: column; }
+.sheet-tabs { display: flex; border-bottom: 1px solid var(--dnd-border); overflow-x: auto; }
+.sheet-tab { flex: 1; padding: 12px 6px; text-align: center; font-size: 13px; font-weight: 700; color: var(--dnd-text-faint); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+.sheet-tab.active { color: var(--dnd-gold); border-bottom-color: var(--dnd-gold); }
+.sheet-body { overflow-y: auto; padding: 14px; }
+
+/* Ability grid */
+.abil-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.abil-box { background: #221C38; border: 1px solid var(--dnd-border); border-radius: 10px; padding: 8px; text-align: center; }
+.abil-box .name { font-family: var(--dnd-font-display); font-size: 11px; color: var(--dnd-gold); }
+.abil-box .modv { font-size: 22px; font-weight: 800; }
+.abil-box .score { font-size: 11px; color: var(--dnd-text-faint); }
+
+/* Skills & Items */
+.skill-row { display: flex; justify-content: space-between; padding: 6px 4px; font-size: 13px; border-bottom: 1px dashed #2E2748; }
+.skill-row .prof { color: var(--dnd-gold); }
+.item-row { background: #221C38; border: 1px solid var(--dnd-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; }
+.sec-label { font-size: 11px; font-weight: 700; color: #B9A96A; letter-spacing: 0.08em; margin: 14px 0 6px; }
+.sec-label:first-child { margin-top: 0; }
+
+/* Thinking dots */
+.thinking-dots span { animation: blink 1.2s infinite; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%,100% { opacity: 0.2; } 50% { opacity: 1; } }
+
+/* Spell rows */
+.spell-row { background: #221C38; border: 1px solid var(--dnd-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; cursor: pointer; transition: border-color 0.15s; }
+.spell-row:hover { border-color: var(--dnd-gold); }
+.spell-row.known { border-left: 3px solid var(--dnd-teal); }
+
+/* Animations */
+@media (prefers-reduced-motion: reduce) {
+  .hpbar-fill { transition: none; }
+  .thinking-dots span { animation: none; }
+}
+
+/* ============================================================
+   Responsive — Mobile-First (P1.3 + P1.4)
+   ============================================================ */
+
+/* Mobile-first: <768px */
+@media (max-width: 767px) {
+  .dnd-root { font-size: 13px; }
+  .btn { padding: 8px 10px; font-size: 13px; min-height: 44px; }
+  .btn:disabled { min-height: 44px; }
+  .sheet-modal { max-width: 100%; border-radius: 16px 16px 0 0; max-height: 85vh; }
+  .abil-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .abil-box { padding: 6px; }
+  .abil-box .modv { font-size: 18px; }
+  .ticket { padding: 6px 8px; gap: 8px; }
+  .ticket-die { width: 36px; height: 36px; font-size: 16px; }
+  .msg-dm { padding: 8px 10px; font-size: 13px; }
+  .msg-player { padding: 6px 10px; font-size: 13px; margin-left: 10%; }
+  .input-main { font-size: 14px; padding: 10px 12px; }
+  .sheet-tab { font-size: 12px; padding: 10px 4px; }
+}
+
+/* Tablet: 768px - 1023px */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .dnd-root { font-size: 14px; }
+  .sheet-modal { max-width: 600px; }
+}
+
+/* Desktop: >=1024px */
+@media (min-width: 1024px) {
+  .dnd-root { font-size: 15px; }
+  .sheet-modal { max-width: 640px; max-height: 80vh; }
+}
+
+/* ============================================================
+   P2.4: Combat Grid Responsive — scrollable + bigger cells
+   ============================================================ */
+.combat-grid-wrap {
+  overflow: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #3A3054 #1B1530;
+}
+.combat-grid-wrap::-webkit-scrollbar { height: 6px; width: 6px; }
+.combat-grid-wrap::-webkit-scrollbar-track { background: #1B1530; }
+.combat-grid-wrap::-webkit-scrollbar-thumb { background: #3A3054; border-radius: 3px; }
+
+/* P2.5: Initiative timeline — compact cards */
+.init-card {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 4px 6px; border-radius: 6px; font-size: 11px;
+  min-width: 44px; min-height: 44px; justify-content: center;
+  transition: all 0.2s;
+}
+.init-card.current {
+  box-shadow: 0 0 8px rgba(224,168,62,0.4);
+  animation: pulse-glow 2s infinite;
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(224,168,62,0.4); }
+  50% { box-shadow: 0 0 14px rgba(224,168,62,0.7); }
+}
+
+/* P3.2: Narration fade-in */
+@keyframes narration-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg-dm { animation: narration-fade-in 0.4s ease-out; }
+.msg-system { animation: narration-fade-in 0.3s ease-out; }
+
+/* P3.2: Combat action buttons — grid responsive */
+.combat-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (max-width: 767px) {
+  .combat-actions { grid-template-columns: 1fr 1fr; gap: 6px; }
+}
+
+/* P2.2: Mobile bottom nav */
+.bottom-nav {
+  display: none;
+}
+@media (max-width: 767px) {
+  .bottom-nav {
+    display: flex;
+    position: sticky;
+    bottom: 0;
+    background: rgba(13,10,20,0.95);
+    border-top: 1px solid #3A3054;
+    padding: 6px;
+    z-index: 30;
+    justify-content: space-around;
+    backdrop-filter: blur(8px);
+  }
+  .bottom-nav-item {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 6px 10px; border-radius: 8px; cursor: pointer;
+    color: #8A7F9E; font-size: 10px; transition: all 0.15s;
+    min-height: 44px; justify-content: center; flex: 1;
+  }
+  .bottom-nav-item.active { color: #E0A83E; background: rgba(224,168,62,0.1); }
+  .bottom-nav-item:active { background: rgba(224,168,62,0.2); }
+}
+
+/* P3.3: Onboarding overlay */
+.onboarding-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(10,8,18,0.85);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.onboarding-card {
+  background: #1A1428; border: 1px solid #4A3F6E;
+  border-radius: 16px; padding: 28px 24px;
+  max-width: 380px; width: 90%; text-align: center;
+  animation: narration-fade-in 0.3s ease-out;
+}
+.onboarding-icon { font-size: 48px; margin-bottom: 16px; }
+.onboarding-title {
+  font-family: var(--dnd-font-display); font-size: 20px; font-weight: 700;
+  color: var(--dnd-gold); margin-bottom: 12px;
+}
+.onboarding-text { font-size: 14px; color: var(--dnd-text-dim); line-height: 1.7; margin-bottom: 20px; }
+.onboarding-dots { display: flex; justify-content: center; gap: 6px; margin-bottom: 16px; }
+.onboarding-dot { width: 8px; height: 8px; border-radius: 50%; background: #3A3054; transition: all 0.2s; }
+.onboarding-dot.active { background: var(--dnd-gold); width: 24px; border-radius: 4px; }

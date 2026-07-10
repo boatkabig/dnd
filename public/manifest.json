@@ -1,0 +1,21 @@
+{
+  "name": "D&D 5e Solo Campaign — AI DM",
+  "short_name": "D&D Solo DM",
+  "description": "A solo D&D 5e adventure: an AI is your Dungeon Master while a deterministic engine rolls the dice and enforces the rules.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0D0A14",
+  "theme_color": "#0D0A14",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["games", "entertainment"],
+  "lang": "th",
+  "dir": "ltr"
+}

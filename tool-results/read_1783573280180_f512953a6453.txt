@@ -1,0 +1,402 @@
+   200→    flaws: ["I am too enamored of ale, wine, and other intoxicants.", "There's no room for caution in a life lived to the fullest."],
+   201→  },
+   202→  charlatan: {
+   203→    th: "Charlatan (นักต้ม)",
+   204→    skills: ["deception", "sleight_of_hand"],
+   205→    originFeat: "alert",
+   206→    asi: { primary: ["cha", "dex"], secondary: ["int"] },
+   207→    tool: "Disguise Kit",
+   208→    equipment: ["Fine Clothes", "Disguise Kit", "Tools of Con", "15 gp"],
+   209→    personality: ["I fall in and out of love easily, and am always pursuing someone.", "I'm a born gambler who can't resist taking a risk for a potential payoff."],
+   210→    ideals: ["Independence. I am a free spirit — no one tells me what to do.", "Fairness. I never target people who can't afford to lose a few coins."],
+   211→    bonds: ["I fleeced the wrong person and must ensure that they never cross paths with me again.", "I owe everything to my mentor — a horrible person who's probably rotting in jail somewhere."],
+   212→    flaws: ["I can't resist a pretty face.", "I'm always in debt. I spend my ill-gotten gains on decadent luxuries faster than I bring them in."],
+   213→  },
+   214→  entertainer: {
+   215→    th: "Entertainer (นักแสดง)",
+   216→    skills: ["acrobatics", "performance"],
+   217→    originFeat: "musician",
+   218→    asi: { primary: ["cha", "dex"], secondary: ["con"] },
+   219→    tool: "One Musical Instrument",
+   220→    equipment: ["Musical Instrument", "Admirer's Token", "Costume", "15 gp"],
+   221→    personality: ["I know a story relevant to almost every situation.", "Whenever I come to a new place, I collect local rumors and spread gossip."],
+   222→    ideals: ["Beauty. When I perform, I bring the world to life in motion and sound.", "People. I like seeing the smiles on people's faces when I perform."],
+   223→    bonds: ["My instrument is my soulmate, my most treasured possession.", "I want to be famous, whatever it takes."],
+   224→    flaws: ["I'm a sucker for a pretty face.", "I forget that my talents can be used for ill as easily as for good."],
+   225→  },
+   226→  guild_artisan: {
+   227→    th: "Guild Artisan (ช่างกิลด์)",
+   228→    skills: ["insight", "persuasion"],
+   229→    originFeat: "skilled",
+   230→    asi: { primary: ["int", "cha"], secondary: ["wis"] },
+   231→    tool: "Artisan's Tools (your choice)",
+   232→    equipment: ["Artisan's Tools", "Letter of Introduction", "Traveler's Clothes", "15 gp"],
+   233→    personality: ["I believe that anything worth doing is worth doing right.", "I'm a snob who looks down on those who can't appreciate fine art."],
+   234→    ideals: ["Community. It is the duty of all civilized people to strengthen the bonds of community.", "Excellence. My craft is my life, and I will master it."],
+   235→    bonds: ["The workshop where I learned my trade is the most important place in the world to me.", "I owe my guild a great debt for elevating me from poverty."],
+   236→    flaws: ["I'm never satisfied with what I have — I always want more.", "I'm hidebound by the traditions of my craft."],
+   237→  },
+   238→};
+   239→
+   240→/* ---------------- SPECIES (D&D 2024 PHB — 10 species, NO ability score bonuses) ---------------- */
+   241→// D&D 2024 CHANGE: Ability Score bonuses are NO LONGER tied to species — they come from Background.
+   242→// Source: D&D Beyond "The 10 Species in the 2024 Player's Handbook":
+   243→//   "A huge change to species in the 2024 Player's Handbook is that your ability score
+   244→//   adjustments will no longer be tied to them. Your ability score adjustments now come
+   245→//   from your background."
+   246→// 5e (2014) had race-based ASIs; 2024 removed them entirely.
+   247→// We retain the `bonus` field for backwards-compatible save loading but set all bonuses to 0.
+   248→// Subraces are also gone in 2024 (replaced by Lineages within species — not yet implemented here).
+   249→export const RACES: Record<string, any> = {
+   250→  human:      { th: "Human (มนุษย์)",         bonus: {}, speed: 30, size: "Medium", languages: ["Common"], traits: ["Versatile: +1 to all abilities (D&D 2014 only — 2024: bonus comes from Background)"] },
+   251→  elf:        { th: "Elf (เอลฟ์)",            bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Elvish"], traits: ["Darkvision 60 ft", "Fey Ancestry (advantage vs charm)", "Trance (4h sleep)"] },
+   252→  dwarf:      { th: "Dwarf (คนแคระ)",         bonus: {}, speed: 25, size: "Medium", languages: ["Common", "Dwarvish"], traits: ["Darkvision 60 ft", "Dwarven Resilience (adv vs poison)", "Stonecunning"] },
+   253→  halfling:   { th: "Halfling (ฮาฟลิง)",      bonus: {}, speed: 25, size: "Small",  languages: ["Common", "Halfling"], traits: ["Lucky (reroll 1s)", "Brave (adv vs fear)", "Halfling Nimbleness"] },
+   254→  dragonborn: { th: "Dragonborn (มังกรมนุษย์)", bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Draconic"], traits: ["Breath Weapon", "Damage Resistance (by ancestry)"] },
+   255→  gnome:      { th: "Gnome (โนม)",            bonus: {}, speed: 25, size: "Small",  languages: ["Common", "Gnomish"], traits: ["Darkvision 60 ft", "Gnome Cunning (adv vs magic)"] },
+   256→  half_elf:   { th: "Half-Elf (ฮาฟ์เอลฟ์)",    bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Elvish"], traits: ["Darkvision 60 ft", "Fey Ancestry"] },
+   257→  half_orc:   { th: "Half-Orc (ฮาฟ์ออร์ค)",    bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Orc"], traits: ["Darkvision 60 ft", "Relentless Endurance", "Savage Attacks"] },
+   258→  tiefling:   { th: "Tiefling (ไทฟลิง)",       bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Infernal"], traits: ["Darkvision 60 ft", "Hellish Resistance (fire)", "Infernal Legacy"] },
+   259→  aasimar:    { th: "Aasimar (อาซิมาร์)",      bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Celestial"], traits: ["Darkvision 60 ft", "Celestial Resistance (radiant/necrotic)", "Healing Hands"] },
+   260→  goliath:    { th: "Goliath (โกลิแอธ)",      bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Giant"], traits: ["Giant Ancestry (cloud/frost/stone/etc.)", "Large Form (Lv5)", "Mountain Born"] },
+   261→  orc:        { th: "Orc (ออร์ค)",            bonus: {}, speed: 30, size: "Medium", languages: ["Common", "Orc"], traits: ["Darkvision 60 ft", "Adrenaline Rush (temp HP + dash)", "Relentless Endurance"] },
+   262→};
+   263→
+   264→/* ---------------- ALIGNMENTS (D&D 5e 9 alignments) ---------------- */
+   265→export const ALIGNMENTS: Array<{ id: string; th: string; abbr: string }> = [
+   266→  { id: "lawful_good", th: "Lawful Good (จริงธรรม)", abbr: "LG" },
+   267→  { id: "neutral_good", th: "Neutral Good (กลางธรรม)", abbr: "NG" },
+   268→  { id: "chaotic_good", th: "Chaotic Good (วิถีธรรม)", abbr: "CG" },
+   269→  { id: "lawful_neutral", th: "Lawful Neutral (จริงกลาง)", abbr: "LN" },
+   270→  { id: "true_neutral", th: "True Neutral (กลางแท้)", abbr: "TN" },
+   271→  { id: "chaotic_neutral", th: "Chaotic Neutral (วิถีกลาง)", abbr: "CN" },
+   272→  { id: "lawful_evil", th: "Lawful Evil (จริงชั่ว)", abbr: "LE" },
+   273→  { id: "neutral_evil", th: "Neutral Evil (กลางชั่ว)", abbr: "NE" },
+   274→  { id: "chaotic_evil", th: "Chaotic Evil (วิถีชั่ว)", abbr: "CE" },
+   275→];
+   276→
+   277→/* ---------------- LANGUAGES (D&D 5e standard + exotic) ---------------- */
+   278→export const LANGUAGES: Array<{ id: string; th: string; exotic?: boolean }> = [
+   279→  { id: "common", th: "Common" },
+   280→  { id: "dwarvish", th: "Dwarvish" },
+   281→  { id: "elvish", th: "Elvish" },
+   282→  { id: "giant", th: "Giant" },
+   283→  { id: "gnomish", th: "Gnomish" },
+   284→  { id: "goblin", th: "Goblin" },
+   285→  { id: "halfling", th: "Halfling" },
+   286→  { id: "orc", th: "Orc" },
+   287→  { id: "abyssal", th: "Abyssal", exotic: true },
+   288→  { id: "celestial", th: "Celestial", exotic: true },
+   289→  { id: "draconic", th: "Draconic", exotic: true },
+   290→  { id: "deep_speech", th: "Deep Speech", exotic: true },
+   291→  { id: "infernal", th: "Infernal", exotic: true },
+   292→  { id: "primordial", th: "Primordial", exotic: true },
+   293→  { id: "sylvan", th: "Sylvan", exotic: true },
+   294→  { id: "undercommon", th: "Undercommon", exotic: true },
+   295→];
+   296→
+   297→/* ---------------- ORIGIN FEATS (D&D 2024 PHB — 10 official Origin Feats from backgrounds) ---------------- */
+   298→// Source: D&D Beyond "The Backgrounds and Origin Feats in the 2024 Player's Handbook".
+   299→// D&D 2024 Origin Feats use the character's Proficiency Bonus (PB) — NOT fixed numbers like 5e.
+   300→export const ORIGIN_FEATS: Record<string, { th: string; description: string; descriptionTh: string }> = {
+   301→  alert: {
+   302→    th: "Alert",
+   303→    description: "Add your Proficiency Bonus when you roll Initiative. You can also swap your Initiative with a willing ally in the same combat.",
+   304→    descriptionTh: "+PB ในการทอย Initiative, สลับ Initiative กับพันธมิตรที่ยินยอมใน combat เดียวกันได้",
+   305→  },
+   306→  crafter: {
+   307→    th: "Crafter",
+   308→    description: "Gain proficiency with three different sets of Artisan's Tools. Gain a 20 percent discount on nonmagical items. Can craft an item from a Fast Crafting table, which lasts until you finish another Long Rest.",
+   309→    descriptionTh: "เครื่องมือช่าง 3 อย่าง, ลด 20% ราคาของ non-magical, คราฟต์ของจาก Fast Crafting table (หายไปหลัง Long Rest)",
+   310→  },
+   311→  healer: {
+   312→    th: "Healer",
+   313→    description: "When you Utilize a Healer's Kit as an action, a creature can expend one of its Hit Point Dice to heal. Your Proficiency Bonus is added to the roll. The creature also gains 1 Hit Die at the end of the next Short Rest.",
+   314→    descriptionTh: "ใช้ Healer's Kit เป็น action: สัตว์เป้าหมายเสีย HD 1 ลูกเพื่อฟื้น HP +PB, และได้ HD 1 ลูกคืนหลัง Short Rest ถัดไป",
+   315→  },
+   316→  lucky: {
+   317→    th: "Lucky",
+   318→    description: "After finishing a Long Rest, you have a number of Luck Points equal to your Proficiency Bonus. You can expend one when you make a D20 Test to give yourself Advantage on the roll.",
+   319→    descriptionTh: "PB Luck Points ต่อ Long Rest — ใช้ 1 point เพื่อให้ Advantage ใน D20 Test",
+   320→  },
+   321→  magic_initiate: {
+   322→    th: "Magic Initiate",
+   323→    description: "You gain two cantrips and one level 1 spell from the Cleric, Druid, or Wizard spell list. You choose Wisdom, Intelligence, or Charisma as your spellcasting modifier. You can cast the level 1 spell once per Long Rest without a slot, or with a slot if you have one.",
+   324→    descriptionTh: "2 cantrips + 1 เวท Lv.1 จาก Cleric/Druid/Wizard — เลือก WIS/INT/CHA เป็น spellcasting mod, ร่าย Lv.1 ได้ 1 ครั้ง/Long Rest ฟรี",
+   325→  },
+   326→  musician: {
+   327→    th: "Musician",
+   328→    description: "Gain proficiency with three musical instruments of your choice. At the end of a Short or Long Rest, you may play the instrument and grant Heroic Inspiration to a number of allies equal to your Proficiency Bonus.",
+   329→    descriptionTh: "ดนตรี 3 ชนิด, หลัง Short/Long Rest มอบ Heroic Inspiration ให้พันธมิตร PB ตัว",
+   330→  },
+   331→  savage_attacker: {
+   332→    th: "Savage Attacker",
+   333→    description: "Once per turn, when you hit a target with a weapon attack, you can roll the weapon damage dice twice and use either roll against the target.",
+   334→    descriptionTh: "1 ครั้ง/เทิร์น เมื่อโจมตีอาวุธโดน — ทอย damage เต๋า 2 รอบแล้วเลือกค่าที่ดีกว่า",
+   335→  },
+   336→  skilled: {
+   337→    th: "Skilled",
+   338→    description: "Gain proficiency in any combination of three skills or tools of your choice. You can take this feat more than once.",
+   339→    descriptionTh: "+3 skill/tool proficiencies ตามเลือก (เลือกซ้ำได้)",
+   340→  },
+   341→  tavern_brawler: {
+   342→    th: "Tavern Brawler",
+   343→    description: "When you hit with an Unarmed Strike and deal damage, you can deal 1d4 + your Strength modifier Bludgeoning damage instead of the normal damage. You have proficiency with improvised weapons. When you hit a creature with an Unarmed Strike or an improvised weapon, you can roll a d4 and add it to the damage roll.",
+   344→    descriptionTh: "Unarmed Strike 1d4+STR, ถนัดอาวุธส้อม, โจมตี Unarmed/Improvised โดนแล้ว +1d4 damage",
+   345→  },
+   346→  tough: {
+   347→    th: "Tough",
+   348→    description: "When you first gain this Origin feat, your Hit Point maximum increases by twice your character level. Thereafter, your Hit Point maximum increases by 2 each time you level up.",
+   349→    descriptionTh: "+2 HP ต่อเลเวล (Lv.1 = +2 HP, สะสมทุกเลเวล)",
+   350→  },
+   351→};
+   352→
+   353→/* ---------------- ALL 12 SRD CLASSES ---------------- */
+   354→export const CLASSES: Record<string, any> = {
+   355→  barbarian: {
+   356→    th: "Barbarian (บาร์บาเรียน)", hitDie: 12, caster: false,
+   357→    array: { str: 15, dex: 13, con: 14, int: 8, wis: 12, cha: 10 },
+   358→    acCalc: (c: any) => 10 + mod(c.abilities.con) + mod(c.abilities.dex), // Unarmored Defense
+   359→    weapon: "greataxe", ranged: "handaxe",
+   360→    skills: ["athletics", "intimidation", "perception", "survival"],
+   361→    saves: ["str", "con"],
+   362→    feature: "Rage: ได้เปรียบ STR check, +2 ดาเมจโจมตีระยะประชิด, ต้านทาน bludgeoning/piercing/slashing (2 ครั้ง/วันที่ Lv.1)",
+   363→  },
+   364→  bard: {
+   365→    th: "Bard (บาร์ด)", hitDie: 8, caster: true, castAbil: "cha",
+   366→    array: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha: 15 },
+   367→    acCalc: (c: any) => 12 + mod(c.abilities.dex), // light armor
+   368→    weapon: "rapier", ranged: "shortbow",
+   369→    skills: ["deception", "performance", "persuasion", "stealth"],
+   370→    saves: ["dex", "cha"],
+   371→    feature: "Spellcasting (CHA): Vicious Mockery, Healing Word, Charm Person · Bardic Inspiration (เต๋าโบนัส 1d6)",
+   372→  },
+   373→  cleric: {
+   374→    th: "Cleric (พระ)", hitDie: 8, caster: true, castAbil: "wis",
+   375→    array: { str: 14, dex: 10, con: 13, int: 8, wis: 15, cha: 12 },
+   376→    acCalc: () => 16, // chain mail
+   377→    weapon: "mace", ranged: null,
+   378→    skills: ["insight", "religion", "medicine", "persuasion"],
+   379→    saves: ["wis", "cha"],
+   380→    feature: "Spellcasting (WIS): Sacred Flame, Cure Wounds, Guiding Bolt · Channel Divinity: Turn Undead / Preserve Life",
+   381→  },
+   382→  druid: {
+   383→    th: "Druid (ดรูอิด)", hitDie: 8, caster: true, castAbil: "wis",
+   384→    array: { str: 10, dex: 14, con: 13, int: 12, wis: 15, cha: 10 },
+   385→    acCalc: (c: any) => 11 + mod(c.abilities.dex), // leather
+   386→    weapon: "mace", ranged: null,
+   387→    skills: ["arcana", "nature", "medicine", "perception"],
+   388→    saves: ["int", "wis"],
+   389→    feature: "Spellcasting (WIS): Produce Flame, Cure Wounds, Entangle · Wild Shape (แปลงร่างเป็นสัตว์)",
+   390→  },
+   391→  fighter: {
+   392→    th: "Fighter (นักรบ)", hitDie: 10, caster: false,
+   393→    array: { str: 15, dex: 13, con: 14, int: 8, wis: 12, cha: 10 },
+   394→    acCalc: () => 16, // chain mail
+   395→    weapon: "longsword", ranged: "light_crossbow",
+   396→    skills: ["athletics", "perception", "intimidation"],
+   397→    saves: ["str", "con"],
+   398→    feature: "Second Wind: ฟื้น 1d10+level (1 ครั้ง/short rest) · Fighting Style",
+   399→  },
+   400→  monk: {
+   401→    th: "Monk (นักพรต)", hitDie: 8, caster: false,
+   402→    array: { str: 12, dex: 15, con: 13, int: 10, wis: 14, cha: 8 },
+   403→    acCalc: (c: any) => 10 + mod(c.abilities.dex) + mod(c.abilities.wis), // Unarmored Defense
+   404→    weapon: "shortsword", ranged: null,
+   405→    skills: ["acrobatics", "athletics", "insight", "stealth"],
+   406→    saves: ["str", "dex"],
+   407→    feature: "Martial Arts: ต่อยมือเปล่า 1d4+DEX, bonus action ต่อยมือเปล่า · Flurry of Blows (ต่อย 2 ครั้ง, ใช้ 1 ki)",
+   408→  },
+   409→  paladin: {
+   410→    th: "Paladin (พลาเดิน)", hitDie: 10, caster: true, castAbil: "cha",
+   411→    array: { str: 15, dex: 10, con: 14, int: 8, wis: 12, cha: 13 },
+   412→    acCalc: () => 16, // chain mail
+   413→    weapon: "longsword", ranged: null,
+   414→    skills: ["athletics", "insight", "intimidation", "persuasion"],
+   415→    saves: ["wis", "cha"],
+   416→    feature: "Divine Sense · Lay on Hands (ฟื้น 5×level HP, หรือแก้โรค/พิษ) · Spellcasting ที่ Lv.2",
+   417→  },
+   418→  ranger: {
+   419→    th: "Ranger (เรนเจอร์)", hitDie: 10, caster: true, castAbil: "wis",
+   420→    array: { str: 13, dex: 15, con: 14, int: 10, wis: 12, cha: 8 },
+   421→    acCalc: (c: any) => 12 + mod(c.abilities.dex), // studded leather
+   422→    weapon: "shortsword", ranged: "longbow",
+   423→    skills: ["animal_handling", "athletics", "perception", "survival", "stealth"],
+   424→    saves: ["str", "dex"],
+   425→    feature: "Favored Enemy (ได้เปรียบติดตาม) · Natural Explorer · Spellcasting ที่ Lv.2",
+   426→  },
+   427→  rogue: {
+   428→    th: "Rogue (โรค)", hitDie: 8, caster: false,
+   429→    array: { str: 8, dex: 15, con: 13, int: 12, wis: 10, cha: 14 },
+   430→    acCalc: (c: any) => 11 + mod(c.abilities.dex), // leather
+   431→    weapon: "shortsword", ranged: "shortbow",
+   432→    skills: ["stealth", "acrobatics", "deception", "perception", "investigation"],
+   433→    saves: ["dex", "int"],
+   434→    feature: "Sneak Attack: +Xd6 เมื่อโจมตีแบบได้เปรียบ (ซ่อนก่อน) · Expertise (เพิ่ม prof x2 ใน 2 สกิล)",
+   435→  },
+   436→  sorcerer: {
+   437→    th: "Sorcerer (เซอร์เซอเรอร์)", hitDie: 6, caster: true, castAbil: "cha",
+   438→    array: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha: 15 },
+   439→    acCalc: (c: any) => 10 + mod(c.abilities.dex), // no armor
+   440→    weapon: "dagger", ranged: null,
+   441→    skills: ["arcana", "deception", "intimidation", "persuasion"],
+   442→    saves: ["con", "cha"],
+   443→    feature: "Spellcasting (CHA): Fire Bolt, Magic Missile, Burning Hands · Sorcery Points (metamagic ที่ Lv.3)",
+   444→  },
+   445→  warlock: {
+   446→    th: "Warlock (วอร์ล็อค)", hitDie: 8, caster: true, castAbil: "cha",
+   447→    array: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha: 15 },
+   448→    acCalc: (c: any) => 11 + mod(c.abilities.dex), // light armor
+   449→    weapon: "dagger", ranged: "light_crossbow",
+   450→    skills: ["arcana", "deception", "history", "intimidation"],
+   451→    saves: ["wis", "cha"],
+   452→    feature: "Pact Magic (CHA): Eldritch Blast, Hex · Otherworldly Patron (Lv.1) · Eldritch Invocations (Lv.2)",
+   453→  },
+   454→  wizard: {
+   455→    th: "Wizard (พ่อมด)", hitDie: 6, caster: true, castAbil: "int",
+   456→    array: { str: 8, dex: 14, con: 13, int: 15, wis: 12, cha: 10 },
+   457→    acCalc: (c: any) => 10 + mod(c.abilities.dex),
+   458→    weapon: "dagger", ranged: null,
+   459→    skills: ["arcana", "investigation", "history", "religion"],
+   460→    saves: ["int", "wis"],
+   461→    feature: "Spellcasting (INT): Fire Bolt, Magic Missile, Burning Hands · Arcane Recovery (คืน slot ตอน short rest)",
+   462→  },
+   463→};
+   464→
+   465→/* ---------------- CLASS FEATURES BY LEVEL (expanded for all 12 classes) ---------------- */
+   466→export const FEATURES: Record<string, Record<number, any[]>> = {
+   467→  barbarian: {
+   468→    1: [
+   469→      { k: "rage", th: "Rage (ความเกรี้ยวกราด)", desc: "Bonus action: ได้เปรียบ STR check, +2 ดาเมจโจมตีระยะประชิด, ต้านทาน bludgeoning/piercing/slashing. 2 ครั้ง/long rest ที่ Lv.1" },
+   470→      { k: "unarmored_defense", th: "Unarmored Defense (เกราะธรรมชาติ)", desc: "AC = 10 + DEX + CON ขณะไม่สวมเกราะ" },
+   471→    ],
+   472→    2: [{ k: "reckless_attack", th: "Reckless Attack (โจมตีบ้าบิ่น)", desc: "ได้เปรียบการโจมตี STR ระยะประชิด แต่ศัตรูโจมตีคุณได้เปรียบ" }],
+   473→    3: [{ k: "primal_path", th: "Primal Path", desc: "เลือก subclass: Berserker (Frenzy) หรือ Totem Warrior" }],
+   474→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 ค่า ability หนึ่งค่า หรือ +1 สองค่า (สูงสุด 20)" }],
+   475→    5: [
+   476→      { k: "extra_attack", th: "Extra Attack (โจมตีเพิ่ม)", desc: "โจมตี 2 ครั้งต่อ 1 Attack action" },
+   477→      { k: "fast_movement", th: "Fast Movement", desc: "ความเร็ว +10 ฟุต ขณะไม่สวมเกราะหนัก" },
+   478→    ],
+   479→  },
+   480→  bard: {
+   481→    1: [
+   482→      { k: "spellcasting", th: "Spellcasting", desc: "Cast bard spells (CHA). Cantrips: Vicious Mockery, Prestidigitation. Spells: Healing Word, Charm Person" },
+   483→      { k: "bardic_inspiration", th: "Bardic Inspiration", desc: "Bonus action: give ally a 1d6 to add to one attack/save/ability check within 10 min. Cha mod/long rest" },
+   484→    ],
+   485→    2: [{ k: "jack_of_all_trades", th: "Jack of All Trades", desc: "Add half proficiency to ability checks you're not proficient in" }],
+   486→    3: [{ k: "expertise", th: "Expertise", desc: "Double proficiency bonus in 2 chosen skills · Cutting Words (subclass: Lore)" }],
+   487→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   488→    5: [{ k: "font_of_inspiration", th: "Font of Inspiration", desc: "Regain Bardic Inspiration on short rest · Inspiration die becomes 1d8" }],
+   489→  },
+   490→  cleric: {
+   491→    1: [{ k: "spellcasting", th: "Spellcasting (ร่ายเวท)", desc: "Sacred Flame, Cure Wounds, Healing Word, Guiding Bolt · Divine Domain feature" }],
+   492→    2: [{ k: "channel_divinity", th: "Channel Divinity (พลังพระเจ้า)", desc: "Turn Undead (ไล่ undead หนี) หรือ Preserve Life (ฟื้น 5×level, ไม่เกินครึ่ง Max HP). 1 ครั้ง/short rest" }],
+   493→    3: [{ k: "lv2_spells", th: "เวทระดับ 2", desc: "ปลด Spiritual Weapon, Hold Person, Aid" }],
+   494→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 ค่า ability หนึ่งค่า หรือ +1 สองค่า (สูงสุด 20)" }],
+   495→    5: [{ k: "lv3_spells", th: "เวทระดับ 3", desc: "ปลด Spirit Guardians, Revivify, Mass Healing Word" }],
+   496→  },
+   497→  druid: {
+   498→    1: [
+   499→      { k: "spellcasting", th: "Spellcasting", desc: "Druidcraft, Produce Flame, Cure Wounds, Entangle" },
+   500→      { k: "wild_shape", th: "Wild Shape", desc: "Turn into a beast CR ≤ 1/4 (no flying/swimming at Lv.1). 2/short rest" },
+   501→    ],
+   502→    2: [{ k: "wild_shape_improved", th: "Wild Shape (CR 1/2)", desc: "Can now transform into CR 1/2 beasts" }],
+   503→    3: [{ k: "lv2_spells", th: "Level 2 Spells", desc: "Unlocks Moonbeam, Barkskin, Spike Growth" }],
+   504→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   505→    5: [{ k: "lv3_spells", th: "Level 3 Spells", desc: "Unlocks Call Lightning, Conjure Animals" }],
+   506→  },
+   507→  fighter: {
+   508→    1: [
+   509→      { k: "second_wind", th: "Second Wind (ลมหายใจที่สอง)", desc: "Bonus action: ฟื้น 1d10+level. 1 ครั้ง/short rest" },
+   510→      { k: "fighting_style", th: "Fighting Style (สไตล์การต่อสู้)", desc: "เลือก: Defense (+1 AC), Dueling (+2 ดาเมจมือเดียว), Great Weapon, Protection, Archery (+2 โจมตีระยะไกล)" },
+   511→    ],
+   512→    2: [{ k: "action_surge", th: "Action Surge (พุ่งแรง)", desc: "ทำ action เพิ่ม 1 ครั้งในเทิร์นเดียว. 1 ครั้ง/short rest" }],
+   513→    3: [{ k: "martial_archetype", th: "Martial Archetype", desc: "เลือก: Champion (crit 19-20), Battle Master (maneuvers), Eldritch Knight" }, { k: "improved_critical", th: "Improved Critical (Champion)", desc: "Critical hit on 19-20 (Champion archetype)" }],
+   514→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 ค่า ability หนึ่งค่า หรือ +1 สองค่า (สูงสุด 20)" }],
+   515→    5: [{ k: "extra_attack", th: "Extra Attack (โจมตีเพิ่ม)", desc: "โจมตี 2 ครั้งต่อ 1 Attack action" }],
+   516→  },
+   517→  monk: {
+   518→    1: [
+   519→      { k: "martial_arts", th: "Martial Arts", desc: "Unarmed strike 1d4+DEX. Bonus action unarmed strike after Attack action" },
+   520→      { k: "unarmored_defense", th: "Unarmored Defense", desc: "AC = 10 + DEX + WIS while unarmored" },
+   521→    ],
+   522→    2: [
+   523→      { k: "ki", th: "Ki", desc: "Ki points = level. Flurry of Blows (2 unarmed, 1 ki), Patient Defense (Disengage+Dodge, 1 ki), Step of the Wind (Dash+Disengage, 1 ki)" },
+   524→    ],
+   525→    3: [{ k: "monastic_tradition", th: "Monastic Tradition", desc: "Choose: Open Hand, Shadow, Four Elements" }],
+   526→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20) · Slow Fall (halve fall damage)" }],
+   527→    5: [{ k: "extra_attack", th: "Extra Attack", desc: "Attack twice per Attack action · Stunning Strike (1 ki to force CON save, stun on fail)" }],
+   528→  },
+   529→  paladin: {
+   530→    1: [
+   531→      { k: "divine_sense", th: "Divine Sense", desc: "Detect celestials/fiends/undead within 60 ft. Cha mod/long rest" },
+   532→      { k: "lay_on_hands", th: "Lay on Hands", desc: "Heal pool = 5×level HP (action to touch-heal). Or cure 1 disease/poison per 5 HP spent" },
+   533→    ],
+   534→    2: [
+   535→      { k: "spellcasting", th: "Spellcasting", desc: "Half-caster (CHA). Smite spells, Bless, Cure Wounds" },
+   536→      { k: "divine_smite", th: "Divine Smite", desc: "When you hit with melee weapon, spend 1 spell slot for extra 2d8 radiant (+1d8 per slot level above 1)" },
+   537→      { k: "fighting_style", th: "Fighting Style", desc: "Choose: Defense, Dueling, Great Weapon, Protection" },
+   538→    ],
+   539→    3: [{ k: "sacred_oath", th: "Sacred Oath", desc: "Choose: Devotion, Ancients, Vengeance · Channel Divinity options" }],
+   540→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   541→    5: [{ k: "extra_attack", th: "Extra Attack", desc: "Attack twice per Attack action" }],
+   542→  },
+   543→  ranger: {
+   544→    1: [
+   545→      { k: "favored_enemy", th: "Favored Enemy", desc: "Advantage on Survival to track, and on Int checks to recall info about chosen type" },
+   546→      { k: "natural_explorer", th: "Natural Explorer", desc: "Double proficiency on Survival in favored terrain; no slow from difficult terrain" },
+   547→    ],
+   548→    2: [
+   549→      { k: "spellcasting", th: "Spellcasting", desc: "Half-caster (WIS). Hunter's Mark, Cure Wounds, Pass Without Trace" },
+   550→      { k: "fighting_style", th: "Fighting Style", desc: "Choose: Archery, Defense, Dueling, Two-Weapon" },
+   551→    ],
+   552→    3: [{ k: "ranger_conclave", th: "Ranger Conclave", desc: "Choose: Hunter, Beast Master · Primeval Awareness" }],
+   553→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   554→    5: [{ k: "extra_attack", th: "Extra Attack", desc: "Attack twice per Attack action" }],
+   555→  },
+   556→  rogue: {
+   557→    1: [
+   558→      { k: "sneak_attack", th: "Sneak Attack (โจมตีลอบ)", desc: "+1d6 (Lv.1), +2d6 (Lv.3), +3d6 (Lv.5) เมื่อโจมตีแบบได้เปรียบ หรือมีพันธมิตรอยู่ใกล้เป้า" },
+   559→      { k: "expertise", th: "Expertise (ความเชี่ยวชาญ)", desc: "เพิ่ม proficiency x2 ใน 2 สกิลที่เลือก (Stealth + Thieves' Tools ทั่วไป)" },
+   560→    ],
+   561→    2: [{ k: "cunning_action", th: "Cunning Action (แอคชั่นเจ้าเล่ห์)", desc: "Dash/Disengage/Hide เป็น bonus action" }],
+   562→    3: [{ k: "roguish_archetype", th: "Roguish Archetype", desc: "เลือก: Thief (Fast Hands - ใช้ไอเทมเป็น bonus action), Assassin, Arcane Trickster" }],
+   563→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 ค่า ability หนึ่งค่า หรือ +1 สองค่า (สูงสุด 20)" }],
+   564→    5: [{ k: "uncanny_dodge", th: "Uncanny Dodge (หลบหลีกประหลาด)", desc: "Reaction: ลดดาเมจครึ่งหนึ่งจากผู้โจมตีที่มองเห็น. 1 ครั้ง/รอบ" }],
+   565→  },
+   566→  sorcerer: {
+   567→    1: [
+   568→      { k: "spellcasting", th: "Spellcasting", desc: "Sorcerer spells (CHA). Cantrips: Fire Bolt, Light. Spells: Magic Missile, Burning Hands" },
+   569→      { k: "sorcerous_origin", th: "Sorcerous Origin", desc: "Choose: Draconic (extra HP, elemental affinity) or Wild Magic" },
+   570→    ],
+   571→    2: [{ k: "font_of_magic", th: "Font of Magic", desc: "Sorcery Points = level. Create spell slot (2 SP = Lv1 slot) or convert slot to SP" }],
+   572→    3: [{ k: "metamagic", th: "Metamagic", desc: "Choose 2: Quickened (bonus action), Twinned (2 targets), Empowered (reroll dmg), Subtle" }],
+   573→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   574→    5: [{ k: "metamagic_2", th: "Additional Metamagic", desc: "Learn 1 more Metamagic option" }],
+   575→  },
+   576→  warlock: {
+   577→    1: [
+   578→      { k: "pact_magic", th: "Pact Magic", desc: "Warlock spells (CHA). Cantrips: Eldritch Blast. Spells: Hex, Hellish Rebuke" },
+   579→      { k: "otherworldly_patron", th: "Otherworldly Patron", desc: "Choose: Archfey, Fiend, Great Old One · Patron feature" },
+   580→    ],
+   581→    2: [{ k: "eldritch_invocations", th: "Eldritch Invocations", desc: "Choose 2: Agonizing Blast (+CHA to Eldritch Blast), Devil's Sight, Mask of Many Faces" }],
+   582→    3: [{ k: "pact_boon", th: "Pact Boon", desc: "Choose: Pact of the Chain (familiar), Blade (weapon), Tome (rituals)" }],
+   583→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 to one ability or +1 to two (max 20)" }],
+   584→    5: [{ k: "eldritch_invocations_2", th: "Additional Invocation", desc: "Learn 1 more Eldritch Invocation · Lv3 slots" }],
+   585→  },
+   586→  wizard: {
+   587→    1: [
+   588→      { k: "spellcasting", th: "Spellcasting (ร่ายเวท)", desc: "เวท Wizard (INT). Cantrips: Fire Bolt, Mage Hand, Light. Spells: Magic Missile, Burning Hands, Shield" },
+   589→      { k: "arcane_recovery", th: "Arcane Recovery (ฟื้นเวท)", desc: "1 ครั้ง/long rest ตอน short rest คืน spell slot รวมระดับไม่เกิน level/2 (ปัดขึ้น)" },
+   590→    ],
+   591→    2: [{ k: "arcane_tradition", th: "Arcane Tradition", desc: "เลือก: Evocation (Sculpt Spells), Abjuration (Ward), Conjuration, Divination, Enchantment, Illusion, Necromancy, Transmutation" }],
+   592→    3: [{ k: "lv2_spells", th: "เวทระดับ 2", desc: "ปลด Scorching Ray, Misty Step, Web, Invisibility" }],
+   593→    4: [{ k: "asi", th: "Ability Score Improvement", desc: "+2 ค่า ability หนึ่งค่า หรือ +1 สองค่า (สูงสุด 20)" }],
+   594→    5: [{ k: "lv3_spells", th: "เวทระดับ 3", desc: "ปลด Fireball, Counterspell, Fly, Lightning Bolt" }],
+   595→  },
+   596→};
+   597→
+   598→/* ---------------- WEAPONS (D&D 2024 PHB — with 8 official Masteries + Versatile dmg + Reach) ---------------- */
+   599→// D&D 2024 weapon properties: Ammunition, Finesse, Heavy, Light, Loading, Range, Reach, Special, Thrown, Two-Handed, Versatile
+
+[showing lines 200-599 of 962; use offset=600 with limit to continue reading]

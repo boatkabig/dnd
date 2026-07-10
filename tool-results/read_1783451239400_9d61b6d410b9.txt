@@ -1,0 +1,946 @@
+     1→/**
+     2→ * ============================================================================
+     3→ * D&D Engine Design Document — Chapter 01: Character System
+     4→ * ============================================================================
+     5→ *
+     6→ * Version: 1.0
+     7→ * Target: D&D 5e / 2024 Compatible
+     8→ * Architecture: Data Driven + AI DM Ready
+     9→ *
+    10→ * Core Principles:
+    11→ *   1. Character = Aggregate Root — เก็บข้อมูลเท่านั้น, ไม่มี logic ของเกม
+    12→ *   2. Character เป็นเพียง Owner ของข้อมูล — อ้างอิงไปยังระบบอื่น (Combat, Magic, Inventory, Effects)
+    13→ *   3. ทุกสิ่งที่มี HP + Ability Score + ใช้ Action = Character (Player, NPC, Monster, Summon, Companion, Boss)
+    14→ *   4. ECS-style: Character มี Character Type ที่กำหนดว่ามี component อะไรบ้าง
+    15→ *   5. Data-Driven: เพิ่ม Class/Species/Homebrew ได้โดยไม่ต้องแก้โค้ดหลัก
+    16→ *   6. AI DM จัดการทุกสิ่งผ่านอินเทอร์เฟซเดียว
+    17→ *
+    18→ * Character Architecture:
+    19→ *   Character
+    20→ *   ├── Identity
+    21→ *   ├── Species
+    22→ *   ├── Classes[]
+    23→ *   ├── Background
+    24→ *   ├── Level
+    25→ *   ├── Ability Scores
+    26→ *   ├── Skills
+    27→ *   ├── Saving Throws
+    28→ *   ├── Languages
+    29→ *   ├── Speed
+    30→ *   ├── Size
+    31→ *   ├── Creature Type
+    32→ *   ├── Tags
+    33→ *   ├── Relationships
+    34→ *   ├── Inventory Ref
+    35→ *   ├── Equipment Ref
+    36→ *   ├── Feature Ref
+    37→ *   ├── Spellbook Ref
+    38→ *   ├── Resource Ref
+    39→ *   ├── Effect Ref
+    40→ *   ├── Condition Ref
+    41→ *   └── Metadata
+    42→ * ============================================================================
+    43→ */
+    44→
+    45→// ============================================================================
+    46→// 4. IDENTITY
+    47→// ============================================================================
+    48→
+    49→export interface CharacterIdentity {
+    50→  characterId: string;          // unique UUID
+    51→  name: string;                 // "Gandalf"
+    52→  displayName?: string;         // "Gandalf the Grey" (for UI)
+    53→  portrait?: string;            // image URL
+    54→  token?: string;               // token image URL for grid
+    55→  playerId?: string;            // if player character, which player owns it
+    56→  ownerId?: string;             // for summons/companions: who summoned them
+    57→  // Metadata
+    58→  age?: string;
+    59→  gender?: string;
+    60→  height?: string;
+    61→  weight?: string;
+    62→  faith?: string;
+    63→  alignment?: string;           // D&D 2024: optional, reduced role
+    64→  // Extensible — new fields can be added without breaking
+    65→  [key: string]: unknown;
+    66→}
+    67→
+    68→// ============================================================================
+    69→// 5. CHARACTER TYPE
+    70→// ============================================================================
+    71→
+    72→export type CharacterType =
+    73→  | "player"
+    74→  | "npc"
+    75→  | "monster"
+    76→  | "summon"
+    77→  | "companion"
+    78→  | "vehicle"
+    79→  | "object_creature";
+    80→
+    81→/**
+    82→ * Each CharacterType determines which components are active.
+    83→ * Monster: no inventory (simplified), has AI behavior
+    84→ * Player: has inventory, equipment, spellbook
+    85→ * Summon: has ownerId, limited lifespan
+    86→ */
+    87→export interface CharacterTypeConfig {
+    88→  type: CharacterType;
+    89→  hasInventory: boolean;
+    90→  hasEquipment: boolean;
+    91→  hasSpellbook: boolean;
+    92→  hasResources: boolean;
+    93→  hasFeatures: boolean;
+    94→  hasAI: boolean;               // tactical AI for combat decisions
+    95→  hasRelationships: boolean;
+    96→  canLevelUp: boolean;
+    97→  canMulticlass: boolean;
+    98→  canDie: boolean;              // summons might just disappear
+    99→  canRest: boolean;
+   100→}
+   101→
+   102→export const CHARACTER_TYPE_CONFIGS: Record<CharacterType, CharacterTypeConfig> = {
+   103→  player: {
+   104→    type: "player", hasInventory: true, hasEquipment: true, hasSpellbook: true,
+   105→    hasResources: true, hasFeatures: true, hasAI: false, hasRelationships: true,
+   106→    canLevelUp: true, canMulticlass: true, canDie: true, canRest: true,
+   107→  },
+   108→  npc: {
+   109→    type: "npc", hasInventory: true, hasEquipment: true, hasSpellbook: true,
+   110→    hasResources: true, hasFeatures: true, hasAI: true, hasRelationships: true,
+   111→    canLevelUp: false, canMulticlass: false, canDie: true, canRest: true,
+   112→  },
+   113→  monster: {
+   114→    type: "monster", hasInventory: false, hasEquipment: false, hasSpellbook: false,
+   115→    hasResources: true, hasFeatures: true, hasAI: true, hasRelationships: false,
+   116→    canLevelUp: false, canMulticlass: false, canDie: true, canRest: false,
+   117→  },
+   118→  summon: {
+   119→    type: "summon", hasInventory: false, hasEquipment: false, hasSpellbook: false,
+   120→    hasResources: false, hasFeatures: true, hasAI: true, hasRelationships: false,
+   121→    canLevelUp: false, canMulticlass: false, canDie: false, canRest: false,
+   122→  },
+   123→  companion: {
+   124→    type: "companion", hasInventory: true, hasEquipment: true, hasSpellbook: false,
+   125→    hasResources: true, hasFeatures: true, hasAI: true, hasRelationships: true,
+   126→    canLevelUp: true, canMulticlass: false, canDie: true, canRest: true,
+   127→  },
+   128→  vehicle: {
+   129→    type: "vehicle", hasInventory: false, hasEquipment: false, hasSpellbook: false,
+   130→    hasResources: false, hasFeatures: false, hasAI: false, hasRelationships: false,
+   131→    canLevelUp: false, canMulticlass: false, canDie: true, canRest: false,
+   132→  },
+   133→  object_creature: {
+   134→    type: "object_creature", hasInventory: false, hasEquipment: false, hasSpellbook: false,
+   135→    hasResources: false, hasFeatures: false, hasAI: false, hasRelationships: false,
+   136→    canLevelUp: false, canMulticlass: false, canDie: true, canRest: false,
+   137→  },
+   138→};
+   139→
+   140→// ============================================================================
+   141→// 6. CHARACTER LIFECYCLE (State Machine)
+   142→// ============================================================================
+   143→
+   144→export type CharacterLifecycleState =
+   145→  | "created"     // just created, not yet spawned
+   146→  | "spawned"     // placed in world, ready to act
+   147→  | "active"      // normal operating state
+   148→  | "downed"      // HP <= 0, making death saves
+   149→  | "dead"        // HP <= 0 + 3 death save failures
+   150→  | "removed";    // removed from the game world
+   151→
+   152→export const LIFECYCLE_TRANSITIONS: Record<CharacterLifecycleState, CharacterLifecycleState[]> = {
+   153→  created: ["spawned", "removed"],
+   154→  spawned: ["active", "removed"],
+   155→  active: ["downed", "dead", "removed"],
+   156→  downed: ["active", "dead", "removed"],  // can be revived or die
+   157→  dead: ["removed"],                       // dead can only be removed (or resurrected externally)
+   158→  removed: [],                             // terminal state
+   159→};
+   160→
+   161→export function canTransition(from: CharacterLifecycleState, to: CharacterLifecycleState): boolean {
+   162→  return LIFECYCLE_TRANSITIONS[from]?.includes(to) ?? false;
+   163→}
+   164→
+   165→// ============================================================================
+   166→// 8. SPECIES
+   167→// ============================================================================
+   168→
+   169→export type CreatureSize = "tiny" | "small" | "medium" | "large" | "huge" | "gargantuan";
+   170→
+   171→export type CreatureType =
+   172→  | "aberration" | "beast" | "celestial" | "construct" | "dragon"
+   173→  | "elemental" | "fey" | "fiend" | "giant" | "humanoid"
+   174→  | "monstrosity" | "ooze" | "plant" | "undead";
+   175→
+   176→export interface SpeedSet {
+   177→  walk: number;       // ft
+   178→  fly?: number;       // ft (hover if same as walk)
+   179→  swim?: number;      // ft
+   180→  climb?: number;     // ft
+   181→  burrow?: number;    // ft
+   182→  // Modifiers (from effects, conditions, armor)
+   183→  walkModifier?: number;
+   184→  flyModifier?: number;
+   185→}
+   186→
+   187→export interface SpeciesDef {
+   188→  id: string;
+   189→  name: string;
+   190→  nameTh?: string;
+   191→  size: CreatureSize;
+   192→  creatureType: CreatureType;
+   193→  speed: SpeedSet;
+   194→  // Traits (Darkvision, Fey Ancestry, etc.) — each is a Feature reference
+   195→  traitIds: string[];
+   196→  // Languages granted by species
+   197→  languages: string[];
+   198→  // Ability score bonuses (D&D 2024: species give fixed bonuses, not choice)
+   199→  abilityBonuses?: Partial<Record<AbilityName, number>>;
+   200→  // Subspecies (High Elf, Hill Dwarf, etc.)
+   201→  subspecies?: Array<{
+   202→    id: string;
+   203→    name: string;
+   204→    traitIds: string[];
+   205→    abilityBonuses?: Partial<Record<AbilityName, number>>;
+   206→  }>;
+   207→}
+   208→
+   209→// ============================================================================
+   210→// 9. BACKGROUND
+   211→// ============================================================================
+   212→
+   213→export interface BackgroundDef {
+   214→  id: string;
+   215→  name: string;
+   216→  nameTh?: string;
+   217→  // Skills granted
+   218→  skillProficiencies: string[];
+   219→  // Tool proficiencies
+   220→  toolProficiencies: string[];
+   221→  // Languages granted
+   222→  languages: string[];
+   223→  // Starting equipment
+   224→  equipment: string[];
+   225→  // D&D 2024: Origin Feat
+   226→  originFeatId?: string;
+   227→  // D&D 2024: ASI (player chooses +2/+1 or +1/+1/+1 from suggested abilities)
+   228→  suggestedAsi?: {
+   229→    primary: AbilityName[];   // +2 (or first +1)
+   230→    secondary: AbilityName[]; // +1
+   231→  };
+   232→  // Roleplay suggestions
+   233→  personalityTraits?: string[];
+   234→  ideals?: string[];
+   235→  bonds?: string[];
+   236→  flaws?: string[];
+   237→}
+   238→
+   239→// ============================================================================
+   240→// 10-11. CLASS & SUBCLASS
+   241→// ============================================================================
+   242→
+   243→export interface ClassDef {
+   244→  id: string;
+   245→  name: string;
+   246→  nameTh?: string;
+   247→  hitDie: number;           // d6, d8, d10, d12
+   248→  savingThrows: AbilityName[];
+   249→  // Spellcasting
+   250→  spellcasting?: {
+   251→    ability: AbilityName;
+   252→    ritualCasting: boolean;
+   253→    spellbookType: "spellbook" | "prepared" | "known" | "pact_magic";
+   254→  };
+   255→  // Proficiencies
+   256→  armorProficiencies: string[];
+   257→  weaponProficiencies: string[];
+   258→  toolProficiencies: string[];
+   259→  skillChoices: { count: number; from: string[] };
+   260→  // Starting equipment
+   261→  startingEquipment: string[];
+   262→  // Feature progression: level → feature IDs
+   263→  featuresByLevel: Record<number, string[]>;
+   264→  // Subclass options at level 1, 2, or 3
+   265→  subclassLevel: number;
+   266→  subclasses: string[]; // subclass IDs
+   267→}
+   268→
+   269→export interface SubclassDef {
+   270→  id: string;
+   271→  name: string;
+   272→  parentClassId: string;
+   273→  featuresByLevel: Record<number, string[]>;
+   274→}
+   275→
+   276→// ============================================================================
+   277→// 12-13. LEVEL & EXPERIENCE
+   278→// ============================================================================
+   279→
+   280→export type ExperienceSystem = "xp" | "milestone" | "story" | "custom";
+   281→
+   282→export interface ClassLevelEntry {
+   283→  classId: string;
+   284→  className: string;
+   285→  level: number;
+   286→  subclassId?: string;
+   287→}
+   288→
+   289→export interface LevelData {
+   290→  // Total character level (sum of all class levels)
+   291→  totalLevel: number;
+   292→  // Individual class levels (supports multiclass)
+   293→  classLevels: ClassLevelEntry[];
+   294→  // Experience
+   295→  xpSystem: ExperienceSystem;
+   296→  xp: number;
+   297→  xpToNextLevel: number;
+   298→  // Proficiency bonus (derived from totalLevel, but stored for quick access)
+   299→  proficiencyBonus: number;
+   300→}
+   301→
+   302→// ============================================================================
+   303→// 14-15. ABILITY SCORES
+   304→// ============================================================================
+   305→
+   306→export type AbilityName = "str" | "dex" | "con" | "int" | "wis" | "cha";
+   307→
+   308→export interface AbilityScore {
+   309→  name: AbilityName;
+   310→  base: number;              // natural score (e.g. 15)
+   311→  // Override: sets score to a fixed value (e.g. Belt of Giant Strength sets STR to 21)
+   312→  override?: number;         // if set, this replaces base for modifier calculation
+   313→  // Temporary bonuses (from effects — e.g. Bull's Strength +2d4)
+   314→  temporaryBonuses: Array<{
+   315→    source: string;          // effect ID
+   316→    value: number;           // +2, +1d4, etc.
+   317→    durationType: "rounds" | "minutes" | "hours" | "until_long_rest" | "permanent";
+   318→    duration?: number;
+   319→  }>;
+   320→}
+   321→
+   322→/**
+   323→ * Calculate effective ability score:
+   324→ *   1. Start with base
+   325→ *   2. If override exists, use override instead of base
+   326→ *   3. Add all temporary bonuses
+   327→ *   4. Cap at 30 (D&D 5e max) unless overridden by effect
+   328→ */
+   329→export function getEffectiveScore(score: AbilityScore): number {
+   330→  const effective = score.override ?? score.base;
+   331→  const bonuses = score.temporaryBonuses.reduce((sum, b) => sum + b.value, 0);
+   332→  return Math.min(30, effective + bonuses);
+   333→}
+   334→
+   335→/**
+   336→ * Calculate ability modifier: floor((score - 10) / 2)
+   337→ * Never store modifier — always compute from score
+   338→ */
+   339→export function getAbilityModifier(score: AbilityScore): number {
+   340→  return Math.floor((getEffectiveScore(score) - 10) / 2);
+   341→}
+   342→
+   343→// ============================================================================
+   344→// 16. PROFICIENCY BONUS
+   345→// ============================================================================
+   346→
+   347→/** Proficiency bonus table by total character level */
+   348→export const PROFICIENCY_BONUS_TABLE: Record<number, number> = {
+   349→  1: 2, 2: 2, 3: 2, 4: 2,
+   350→  5: 3, 6: 3, 7: 3, 8: 3,
+   351→  9: 4, 10: 4, 11: 4, 12: 4,
+   352→  13: 5, 14: 5, 15: 5, 16: 5,
+   353→  17: 6, 18: 6, 19: 6, 20: 6,
+   354→};
+   355→
+   356→export function getProficiencyBonus(totalLevel: number): number {
+   357→  return PROFICIENCY_BONUS_TABLE[Math.min(20, Math.max(1, totalLevel))] ?? 2;
+   358→}
+   359→
+   360→// ============================================================================
+   361→// 17. SAVING THROWS
+   362→// ============================================================================
+   363→
+   364→export interface SavingThrow {
+   365→  ability: AbilityName;
+   366→  proficient: boolean;
+   367→  expertise: boolean;        // double proficiency (rare, but exists)
+   368→  // Override modifiers (from effects — e.g. Ring of Protection +1)
+   369→  overrideModifiers: Array<{
+   370→    source: string;
+   371→    value: number;
+   372→  }>;
+   373→}
+   374→
+   375→export function getSaveModifier(
+   376→  save: SavingThrow,
+   377→  abilityModifier: number,
+   378→  proficiencyBonus: number,
+   379→): number {
+   380→  let mod = abilityModifier;
+   381→  if (save.proficient) mod += proficiencyBonus;
+   382→  if (save.expertise) mod += proficiencyBonus; // double prof
+   383→  mod += save.overrideModifiers.reduce((s, m) => s + m.value, 0);
+   384→  return mod;
+   385→}
+   386→
+   387→// ============================================================================
+   388→// 18. SKILLS (Object, not flat field)
+   389→// ============================================================================
+   390→
+   391→export interface SkillInstance {
+   392→  skillId: string;           // "stealth", "athletics", etc.
+   393→  ability: AbilityName;      // which ability this skill uses
+   394→  proficient: boolean;
+   395→  expertise: boolean;        // double proficiency
+   396→  // Override ability (some skills can use different abilities)
+   397→  abilityOverride?: AbilityName;  // e.g. Athletics with STR vs DEX
+   398→  // Effect modifiers (Guidance +1d4, Jack of All Trades +half prof, etc.)
+   399→  modifiers: Array<{
+   400→    source: string;          // effect ID or feature ID
+   401→    value: number;           // flat bonus
+   402→    diceBonus?: string;      // "1d4" for Guidance
+   403→    type: "bonus" | "advantage" | "disadvantage";
+   404→  }>;
+   405→}
+   406→
+   407→export function getSkillModifier(
+   408→  skill: SkillInstance,
+   409→  abilityModifier: number,
+   410→  proficiencyBonus: number,
+   411→): number {
+   412→  let mod = abilityModifier;
+   413→  if (skill.proficient) mod += proficiencyBonus;
+   414→  if (skill.expertise) mod += proficiencyBonus;
+   415→  mod += skill.modifiers
+   416→    .filter(m => m.type === "bonus")
+   417→    .reduce((s, m) => s + m.value, 0);
+   418→  return mod;
+   419→}
+   420→
+   421→export function hasSkillAdvantage(skill: SkillInstance): boolean {
+   422→  return skill.modifiers.some(m => m.type === "advantage");
+   423→}
+   424→
+   425→export function hasSkillDisadvantage(skill: SkillInstance): boolean {
+   426→  return skill.modifiers.some(m => m.type === "disadvantage");
+   427→}
+   428→
+   429→// ============================================================================
+   430→// 19. LANGUAGES
+   431→// ============================================================================
+   432→
+   433→export interface LanguageKnowledge {
+   434→  languageId: string;        // "common", "elvish", "draconic"
+   435→  source: "species" | "background" | "class" | "feat" | "learned";
+   436→  // AI DM uses this to determine if NPC can communicate with player
+   437→}
+   438→
+   439→// ============================================================================
+   440→// 20. SIZE
+   441→// ============================================================================
+   442→
+   443→export const SIZE_SPACE: Record<CreatureSize, number> = {
+   444→  tiny: 2.5, small: 5, medium: 5, large: 10, huge: 15, gargantuan: 20,
+   445→};
+   446→
+   447→export const SIZE_REACH: Record<CreatureSize, number> = {
+   448→  tiny: 0, small: 5, medium: 5, large: 5, huge: 10, gargantuan: 15,
+   449→};
+   450→
+   451→// ============================================================================
+   452→// 22. CREATURE TYPE
+   453→// ============================================================================
+   454→
+   455→export type CreatureTag =
+   456→  | "fire" | "holy" | "undead" | "boss" | "quest" | "summoned"
+   457→  | "elite" | "minion" | "legendary" | "lair" | "friendly" | "hostile"
+   458→  | "neutral" | "vendor" | "quest_giver" | "immortal" | "shapechanger"
+   459→  | string; // extensible
+   460→
+   461→// ============================================================================
+   462→// 24. CHARACTER STATUS (not Condition)
+   463→// ============================================================================
+   464→
+   465→export type CharacterStatus =
+   466→  | "alive"
+   467→  | "dead"
+   468→  | "stable"         // downed but stable (3 death save successes)
+   469→  | "unconscious"    // downed, making death saves
+   470→  | "missing"        // removed from current scene but not dead
+   471→  | "captured"       // captured by enemies
+   472→  | "petrified_permanent";  // petrified with no duration
+   473→
+   474→// ============================================================================
+   475→// 26. CHARACTER RELATIONSHIPS
+   476→// ============================================================================
+   477→
+   478→export interface CharacterRelationship {
+   479→  targetCharacterId: string;
+   480→  type: "party" | "faction" | "guild" | "family" | "enemy" | "owner" | "summoner" | "mentor" | "student";
+   481→  description?: string;
+   482→  // Dynamic relationship score (-100 to +100)
+   483→  score?: number;
+   484→}
+   485→
+   486→// ============================================================================
+   487→// 27. CHARACTER METADATA
+   488→// ============================================================================
+   489→
+   490→export interface CharacterMetadata {
+   491→  biography?: string;
+   492→  notes?: string;
+   493→  backstory?: string;
+   494→  playerNote?: string;
+   495→  dmNote?: string;
+   496→  // Custom extensible fields
+   497→  custom?: Record<string, unknown>;
+   498→}
+   499→
+   500→// ============================================================================
+   501→// 28. COMPONENT REFERENCES
+   502→// ============================================================================
+   503→
+   504→/**
+   505→ * Character doesn't store full data of subsystems — only references.
+   506→ * This keeps Character lightweight and prevents circular dependencies.
+   507→ */
+   508→export interface ComponentRefs {
+   509→  inventoryId?: string;      // → Inventory system
+   510→  equipmentId?: string;      // → Equipment system
+   511→  spellbookId?: string;      // → Spellbook system
+   512→  resourceId?: string;       // → Resource system
+   513→  featureListId?: string;    // → Feature system
+   514→  effectIds: string[];       // → Effect system (active effects on this character)
+   515→  conditionIds: string[];    // → Condition system (active conditions on this character)
+   516→}
+   517→
+   518→// ============================================================================
+   519→// 29. CHARACTER EVENTS
+   520→// ============================================================================
+   521→
+   522→export type CharacterEvent =
+   523→  | "on_create" | "on_spawn" | "on_death" | "on_level_up"
+   524→  | "on_rest" | "on_move" | "on_attack" | "on_damage" | "on_heal"
+   525→  | "on_remove" | "on_downed" | "on_revived" | "on_condition_applied"
+   526→  | "on_condition_removed" | "on_effect_applied" | "on_effect_removed";
+   527→
+   528→export interface CharacterEventPayload {
+   529→  characterId: string;
+   530→  eventType: CharacterEvent;
+   531→  timestamp: number;
+   532→  data?: Record<string, unknown>;
+   533→}
+   534→
+   535→// ============================================================================
+   536→// 31. CHARACTER DATA MODEL (Aggregate Root)
+   537→// ============================================================================
+   538→
+   539→/**
+   540→ * Character = Aggregate Root
+   541→ *
+   542→ * This is the SINGLE source of truth for a character's identity and stats.
+   543→ * All other systems (Combat, Magic, Inventory, Effects) reference this.
+   544→ *
+   545→ * Character does NOT contain game logic — it's purely a data container.
+   546→ * Game logic lives in the respective system modules.
+   547→ */
+   548→export interface Character {
+   549→  // === Identity (Section 4) ===
+   550→  identity: CharacterIdentity;
+   551→
+   552→  // === Type (Section 5) ===
+   553→  type: CharacterType;
+   554→  typeConfig: CharacterTypeConfig;
+   555→
+   556→  // === Lifecycle (Section 6) ===
+   557→  lifecycleState: CharacterLifecycleState;
+   558→  status: CharacterStatus;
+   559→
+   560→  // === Species (Section 8) ===
+   561→  species: SpeciesDef;
+   562→  subspeciesId?: string;
+   563→
+   564→  // === Background (Section 9) ===
+   565→  background?: BackgroundDef;
+   566→
+   567→  // === Class & Subclass (Sections 10-11) ===
+   568→  // Multiclass: array of class level entries
+   569→
+   570→  // === Level & Experience (Sections 12-13) ===
+   571→  level: LevelData;
+   572→
+   573→  // === Ability Scores (Section 14) ===
+   574→  abilityScores: Record<AbilityName, AbilityScore>;
+   575→
+   576→  // === Saving Throws (Section 17) ===
+   577→  savingThrows: Record<AbilityName, SavingThrow>;
+   578→
+   579→  // === Skills (Section 18) ===
+   580→  skills: Record<string, SkillInstance>;
+   581→
+   582→  // === Languages (Section 19) ===
+   583→  languages: LanguageKnowledge[];
+   584→
+   585→  // === Speed (Section 21) ===
+   586→  speed: SpeedSet;
+   587→
+   588→  // === Tags (Section 25) ===
+   589→  tags: CreatureTag[];
+   590→
+   591→  // === Relationships (Section 26) ===
+   592→  relationships: CharacterRelationship[];
+   593→
+   594→  // === Component References (Section 28) ===
+   595→  refs: ComponentRefs;
+   596→
+   597→  // === Metadata (Section 27) ===
+   598→  metadata: CharacterMetadata;
+   599→
+   600→  // === Combat Stats (derived, but stored for quick access) ===
+   601→  hp: number;
+   602→  maxHp: number;
+   603→  tempHp: number;
+   604→  ac: number;                  // last computed AC
+   605→  initiative: number;          // last rolled initiative
+   606→  deathSaves: { successes: number; failures: number };
+   607→
+   608→  // === Position on grid (if in combat) ===
+   609→  position?: { x: number; y: number };
+   610→}
+   611→
+   612→// ============================================================================
+   613→// FACTORY: Create Character
+   614→// ============================================================================
+   615→
+   616→let _charIdSeq = 0;
+   617→
+   618→export function generateCharacterId(): string {
+   619→  _charIdSeq++;
+   620→  return `char_${Date.now()}_${_charIdSeq}`;
+   621→}
+   622→
+   623→export interface CreateCharacterParams {
+   624→  name: string;
+   625→  type: CharacterType;
+   626→  species: SpeciesDef;
+   627→  classDef: ClassDef;
+   628→  background?: BackgroundDef;
+   629→  abilityScores: Record<AbilityName, number>;
+   630→  // Optional
+   631→  playerId?: string;
+   632→  alignment?: string;
+   633→  languages?: string[];
+   634→  subspeciesId?: string;
+   635→}
+   636→
+   637→export function createCharacter(params: CreateCharacterParams): Character {
+   638→  const characterId = generateCharacterId();
+   639→  const typeConfig = CHARACTER_TYPE_CONFIGS[params.type];
+   640→  const totalLevel = 1;
+   641→  const proficiencyBonus = getProficiencyBonus(totalLevel);
+   642→
+   643→  // Build ability scores
+   644→  const abilityScores: Record<AbilityName, AbilityScore> = {} as any;
+   645→  for (const ab of ["str", "dex", "con", "int", "wis", "cha"] as AbilityName[]) {
+   646→    abilityScores[ab] = {
+   647→      name: ab,
+   648→      base: params.abilityScores[ab] ?? 10,
+   649→      temporaryBonuses: [],
+   650→    };
+   651→  }
+   652→
+   653→  // Apply species ability bonuses
+   654→  if (params.species.abilityBonuses) {
+   655→    for (const [ab, bonus] of Object.entries(params.species.abilityBonuses)) {
+   656→      if (abilityScores[ab as AbilityName]) {
+   657→        abilityScores[ab as AbilityName].base += bonus as number;
+   658→      }
+   659→    }
+   660→  }
+   661→
+   662→  // Build saving throws
+   663→  const savingThrows: Record<AbilityName, SavingThrow> = {} as any;
+   664→  for (const ab of ["str", "dex", "con", "int", "wis", "cha"] as AbilityName[]) {
+   665→    savingThrows[ab] = {
+   666→      ability: ab,
+   667→      proficient: params.classDef.savingThrows.includes(ab),
+   668→      expertise: false,
+   669→      overrideModifiers: [],
+   670→    };
+   671→  }
+   672→
+   673→  // Build skills (empty initially — filled by class/background)
+   674→  const skills: Record<string, SkillInstance> = {};
+   675→
+   676→  // Build languages
+   677→  const languages: LanguageKnowledge[] = [
+   678→    ...params.species.languages.map(l => ({ languageId: l, source: "species" as const })),
+   679→    ...(params.background?.languages || []).map(l => ({ languageId: l, source: "background" as const })),
+   680→    ...(params.languages || []).map(l => ({ languageId: l, source: "learned" as const })),
+   681→  ];
+   682→
+   683→  // Calculate HP
+   684→  const conMod = getAbilityModifier(abilityScores.con);
+   685→  const maxHp = params.classDef.hitDie + conMod;
+   686→
+   687→  // Build character
+   688→  const character: Character = {
+   689→    identity: {
+   690→      characterId,
+   691→      name: params.name,
+   692→      playerId: params.playerId,
+   693→      alignment: params.alignment,
+   694→    },
+   695→    type: params.type,
+   696→    typeConfig,
+   697→    lifecycleState: "created",
+   698→    status: "alive",
+   699→    species: params.species,
+   700→    subspeciesId: params.subspeciesId,
+   701→    background: params.background,
+   702→    level: {
+   703→      totalLevel: 1,
+   704→      classLevels: [{
+   705→        classId: params.classDef.id,
+   706→        className: params.classDef.name,
+   707→        level: 1,
+   708→      }],
+   709→      xpSystem: "xp",
+   710→      xp: 0,
+   711→      xpToNextLevel: 300,
+   712→      proficiencyBonus,
+   713→    },
+   714→    abilityScores,
+   715→    savingThrows,
+   716→    skills,
+   717→    languages,
+   718→    speed: { ...params.species.speed },
+   719→    tags: [],
+   720→    relationships: [],
+   721→    refs: {
+   722→      effectIds: [],
+   723→      conditionIds: [],
+   724→    },
+   725→    metadata: {},
+   726→    hp: maxHp,
+   727→    maxHp,
+   728→    tempHp: 0,
+   729→    ac: 10 + getAbilityModifier(abilityScores.dex), // unarmored default
+   730→    initiative: 0,
+   731→    deathSaves: { successes: 0, failures: 0 },
+   732→  };
+   733→
+   734→  return character;
+   735→}
+   736→
+   737→// ============================================================================
+   738→// HELPER FUNCTIONS
+   739→// ============================================================================
+   740→
+   741→/** Get effective ability score (with overrides + temporary bonuses) */
+   742→export function getScore(character: Character, ability: AbilityName): number {
+   743→  return getEffectiveScore(character.abilityScores[ability]);
+   744→}
+   745→
+   746→/** Get ability modifier (computed from score, never stored) */
+   747→export function getMod(character: Character, ability: AbilityName): number {
+   748→  return getAbilityModifier(character.abilityScores[ability]);
+   749→}
+   750→
+   751→/** Get proficiency bonus (computed from level, never stored) */
+   752→export function getPB(character: Character): number {
+   753→  return getProficiencyBonus(character.level.totalLevel);
+   754→}
+   755→
+   756→/** Get saving throw modifier */
+   757→export function getSaveMod(character: Character, ability: AbilityName): number {
+   758→  const save = character.savingThrows[ability];
+   759→  if (!save) return getMod(character, ability);
+   760→  return getSaveModifier(save, getMod(character, ability), getPB(character));
+   761→}
+   762→
+   763→/** Get skill modifier */
+   764→export function getSkillMod(character: Character, skillId: string): number {
+   765→  const skill = character.skills[skillId];
+   766→  if (!skill) return 0; // not proficient
+   767→  const abilityMod = getMod(character, skill.abilityOverride || skill.ability);
+   768→  return getSkillModifier(skill, abilityMod, getPB(character));
+   769→}
+   770→
+   771→/** Check if character has a tag */
+   772→export function hasTag(character: Character, tag: CreatureTag): boolean {
+   773→  return character.tags.includes(tag);
+   774→}
+   775→
+   776→/** Add tag to character */
+   777→export function addTag(character: Character, tag: CreatureTag): Character {
+   778→  if (character.tags.includes(tag)) return character;
+   779→  return { ...character, tags: [...character.tags, tag] };
+   780→}
+   781→
+   782→/** Remove tag from character */
+   783→export function removeTag(character: Character, tag: CreatureTag): Character {
+   784→  return { ...character, tags: character.tags.filter(t => t !== tag) };
+   785→}
+   786→
+   787→/** Check if character is alive (can act) */
+   788→export function isAlive(character: Character): boolean {
+   789→  return character.status === "alive" && character.lifecycleState === "active";
+   790→}
+   791→
+   792→/** Check if character is downed (HP <= 0 but not dead) */
+   793→export function isDowned(character: Character): boolean {
+   794→  return character.hp <= 0 && character.status !== "dead";
+   795→}
+   796→
+   797→/** Check if character is dead */
+   798→export function isDead(character: Character): boolean {
+   799→  return character.status === "dead" || character.lifecycleState === "dead";
+   800→}
+   801→
+   802→/** Check if character is incapacitated (can't take actions) */
+   803→export function isIncapacitated(character: Character): boolean {
+   804→  return character.refs.conditionIds.some(id =>
+   805→    ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"].includes(id)
+   806→  );
+   807→}
+   808→
+   809→/** Transition lifecycle state */
+   810→export function transitionLifecycle(
+   811→  character: Character,
+   812→  to: CharacterLifecycleState,
+   813→): Character {
+   814→  if (!canTransition(character.lifecycleState, to)) {
+   815→    throw new Error(
+   816→      `Invalid lifecycle transition: ${character.lifecycleState} → ${to}`,
+   817→    );
+   818→  }
+   819→  return { ...character, lifecycleState: to };
+   820→}
+   821→
+   822→/** Apply damage to character */
+   823→export function applyDamageToCharacter(
+   824→  character: Character,
+   825→  amount: number,
+   826→): Character {
+   827→  let hp = character.hp;
+   828→  let tempHp = character.tempHp;
+   829→
+   830→  // Temp HP absorbs first
+   831→  if (tempHp > 0) {
+   832→    const absorbed = Math.min(tempHp, amount);
+   833→    tempHp -= absorbed;
+   834→    const remaining = amount - absorbed;
+   835→    hp = Math.max(0, hp - remaining);
+   836→  } else {
+   837→    hp = Math.max(0, hp - amount);
+   838→  }
+   839→
+   840→  let status: CharacterStatus = character.status;
+   841→  let lifecycleState: CharacterLifecycleState = character.lifecycleState;
+   842→
+   843→  if (hp <= 0 && character.status === "alive") {
+   844→    status = "unconscious";
+   845→    lifecycleState = "downed";
+   846→  }
+   847→
+   848→  return { ...character, hp, tempHp, status, lifecycleState };
+   849→}
+   850→
+   851→/** Apply healing to character */
+   852→export function applyHealingToCharacter(
+   853→  character: Character,
+   854→  amount: number,
+   855→): Character {
+   856→  const hp = Math.min(character.maxHp, character.hp + amount);
+   857→  let status: CharacterStatus = character.status;
+   858→  let lifecycleState: CharacterLifecycleState = character.lifecycleState;
+   859→  let deathSaves = character.deathSaves;
+   860→
+   861→  if (character.hp <= 0 && hp > 0) {
+   862→    // Revived from downed
+   863→    status = "alive";
+   864→    lifecycleState = "active";
+   865→    deathSaves = { successes: 0, failures: 0 };
+   866→  }
+   867→
+   868→  return { ...character, hp, status, lifecycleState, deathSaves };
+   869→}
+   870→
+   871→/** Roll death save */
+   872→export function rollDeathSave(character: Character, roll: number): Character {
+   873→  if (character.status !== "unconscious") return character;
+   874→
+   875→  let { successes, failures } = character.deathSaves;
+   876→  let status: CharacterStatus = character.status;
+   877→  let lifecycleState: CharacterLifecycleState = character.lifecycleState;
+   878→  let hp = character.hp;
+   879→
+   880→  if (roll === 20) {
+   881→    // Nat 20: revive with 1 HP
+   882→    hp = 1;
+   883→    status = "alive";
+   884→    lifecycleState = "active";
+   885→    successes = 0;
+   886→    failures = 0;
+   887→  } else if (roll >= 10) {
+   888→    successes += 1;
+   889→    if (successes >= 3) {
+   890→      status = "stable";
+   891→      // Stable: still unconscious but no more death saves needed
+   892→    }
+   893→  } else {
+   894→    if (roll === 1) failures += 2; // Nat 1: 2 failures
+   895→    else failures += 1;
+   896→    if (failures >= 3) {
+   897→      status = "dead";
+   898→      lifecycleState = "dead";
+   899→    }
+   900→  }
+   901→
+   902→  return {
+   903→    ...character,
+   904→    hp,
+   905→    status,
+   906→    lifecycleState,
+   907→    deathSaves: { successes, failures },
+   908→  };
+   909→}
+   910→
+   911→/** Add experience points */
+   912→export function addXP(character: Character, amount: number): Character {
+   913→  const xp = character.level.xp + amount;
+   914→  let totalLevel = character.level.totalLevel;
+   915→  let xpToNextLevel = character.level.xpToNextLevel;
+   916→
+   917→  // Simple level-up check (XP thresholds)
+   918→  const XP_THRESHOLDS = [0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000, 85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000];
+   919→  while (totalLevel < 20 && xp >= XP_THRESHOLDS[totalLevel]) {
+   920→    totalLevel++;
+   921→  }
+   922→  xpToNextLevel = totalLevel < 20 ? XP_THRESHOLDS[totalLevel] : Infinity;
+   923→
+   924→  const proficiencyBonus = getProficiencyBonus(totalLevel);
+   925→
+   926→  return {
+   927→    ...character,
+   928→    level: {
+   929→      ...character.level,
+   930→      xp,
+   931→      totalLevel,
+   932→      xpToNextLevel,
+   933→      proficiencyBonus,
+   934→    },
+   935→  };
+   936→}
+   937→
+   938→/** Get character summary for AI DM / UI */
+   939→export function summarizeCharacter(character: Character): string {
+   940→  const cls = character.level.classLevels.map(cl => `${cl.className} ${cl.level}`).join("/");
+   941→  const hp = `${character.hp}/${character.maxHp}`;
+   942→  const ac = character.ac;
+   943→  const pb = getPB(character);
+   944→  return `${character.identity.name} [${character.type}] ${character.species.name} ${cls} Lv.${character.level.totalLevel} | HP ${hp} | AC ${ac} | PB +${pb}`;
+   945→}
+   946→
