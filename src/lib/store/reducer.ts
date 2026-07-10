@@ -13,7 +13,7 @@
  * slices committed while the character was thrown away.
  */
 
-import { XP_THRESHOLDS } from "../gameData";
+import { XP_THRESHOLDS, CONDITIONS_TH } from "../gameData";
 import type {
   Action,
   Buff,
@@ -166,7 +166,7 @@ function applyDmUpdates(d: Draft, u: ValidUpdates): void {
     p.inventory.push(it);
     pushLog(d, "system", `ได้รับ: ${it}`);
     const scroll = it.match(/^Spell Scroll:\s*(.+)$/i);
-    if (scroll) pushLog(d, "system", `📖 พบ Spell Scroll — เปิดสมุดเวทมนตร์เพื่อเรียน ${scroll[1]}`);
+    if (scroll) pushLog(d, "system", `📖 พบ Spell Scroll — เปิดสมุดเวทมนตร์ (📜 → เวทมนตร์) เพื่อเรียน ${scroll[1]}`);
     const feat = it.match(/^Feat:\s*(.+)$/i);
     if (feat) {
       const featIndex = feat[1].toLowerCase().replace(/\s+/g, "-");
@@ -182,8 +182,10 @@ function applyDmUpdates(d: Draft, u: ValidUpdates): void {
   }
 
   // --- Conditions (ids already validated by dmSchema) ---
+  // Only ids with a Thai display label are added (mirrors legacy DnDSolo, which
+  // silently drops e.g. "exhaustion" — tracked separately as exhaustionLevel).
   for (const cd of u.conditions_add ?? []) {
-    if (!p.conditions.includes(cd)) { p.conditions.push(cd); pushLog(d, "system", `สภาวะ: ${cd}`); }
+    if (!p.conditions.includes(cd) && CONDITIONS_TH[cd]) { p.conditions.push(cd); pushLog(d, "system", `สภาวะ: ${CONDITIONS_TH[cd]}`); }
   }
   for (const cd of u.conditions_remove ?? []) {
     const i = p.conditions.indexOf(cd);
@@ -253,13 +255,14 @@ function applyDmUpdates(d: Draft, u: ValidUpdates): void {
   }
 
   // --- Rest (store only flags it; the engine applies the actual rest) ---
-  if (u.rest_trigger === "short") { d.pending.shortRest = true; pushLog(d, "system", `⛺ DM สั่งให้พักสั้น`); }
-  else if (u.rest_trigger === "long") { d.pending.longRest = true; pushLog(d, "system", `🌙 DM สั่งให้พักยาว`); }
+  if (u.rest_trigger === "short") { d.pending.shortRest = true; pushLog(d, "system", `⛺ DM สั่งให้พักสั้น — กดปุ่ม "พักสั้น" เพื่อพัก`); }
+  else if (u.rest_trigger === "long") { d.pending.longRest = true; pushLog(d, "system", `🌙 DM สั่งให้พักยาว — กดปุ่ม "พักยาว" เพื่อพัก`); }
 
   // --- Exhaustion (death at 6) ---
   if (u.exhaustion_delta) {
     p.exhaustionLevel = clamp(p.exhaustionLevel + u.exhaustion_delta, 0, 6);
-    pushLog(d, "system", `😮‍💨 Exhaustion ${u.exhaustion_delta > 0 ? "+" : ""}${u.exhaustion_delta} → Lv.${p.exhaustionLevel}${p.exhaustionLevel >= 6 ? " (ตาย!)" : ""}`);
+    const reason = u.exhaustion_delta > 0 ? "จากสาเหตุที่ DM กำหนด" : "ฟื้นตัว";
+    pushLog(d, "system", `😮‍💨 Exhaustion ${u.exhaustion_delta > 0 ? "+" : ""}${u.exhaustion_delta} → Lv.${p.exhaustionLevel} (${reason})${p.exhaustionLevel >= 6 ? " (ตาย!)" : ""}`);
     if (p.exhaustionLevel >= 6) { p.dead = true; d.phase = "dead"; }
   }
 }

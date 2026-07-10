@@ -64,6 +64,8 @@ import {
 import { validateDMResponse, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
+// 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
+import { createStore, createInitialState, createPlayerState } from "@/lib/store";
 import CharacterCreation from "@/components/game/CharacterCreation";
 
 /* ============================================================
@@ -956,76 +958,67 @@ export default function DnDSolo() {
     return { cc: nc, cb: ncb };
   }
 
+  /**
+   * Apply a DM response's `updates` to the character — now ATOMIC.
+   *
+   * The store-owned slices (hp/temp_hp/gold/quests/items/conditions/buffs/loot/
+   * npc/faction/env/scene/level_up_choice/rest_trigger/exhaustion) are routed
+   * through the pure store reducer (`APPLY_DM_UPDATES`), which builds a brand-new
+   * state in full and only commits at the end — so a malformed payload that throws
+   * mid-application rolls back everything instead of partial-committing (the legacy
+   * bug where setQuests/setGameTime/setPhase fired in-flight while `nc` was still
+   * being mutated). The three fields the pure reducer cannot express — items_use
+   * consumables (3a), forced-march exhaustion (3b), and level-up class math (3c) —
+   * are stripped out and layered around the reducer below. All React setters are
+   * deferred to the very end, after every computation has succeeded.
+   */
   function applyUpdates(u: any, cc: any, entries: any[]) {
     if (!u) return cc;
-    let nc = { ...cc, conditions: [...cc.conditions], inventory: [...cc.inventory], buffs: [...(cc.buffs || [])] };
-    if (u.hp_delta) {
-      // Apply temp HP first if taking damage
-      if (u.hp_delta < 0 && (nc.tempHp || 0) > 0) {
-        const absorbed = Math.min(nc.tempHp, Math.abs(u.hp_delta));
-        nc.tempHp -= absorbed;
-        const remaining = Math.abs(u.hp_delta) - absorbed;
-        if (remaining > 0) nc.hp = Math.max(0, nc.hp - remaining);
-        entries.push(entrySystem(`HP ${u.hp_delta > 0 ? "+" : ""}${u.hp_delta} (Temp HP ดูด ${absorbed}) → ${nc.hp}/${nc.maxHp}${nc.tempHp > 0 ? ` +${nc.tempHp} temp` : ""}`));
-      } else {
-        nc.hp = Math.max(0, Math.min(nc.maxHp, nc.hp + u.hp_delta));
-        entries.push(entrySystem(`HP ${u.hp_delta > 0 ? "+" : ""}${u.hp_delta} → ${nc.hp}/${nc.maxHp}${nc.tempHp > 0 ? ` +${nc.tempHp} temp` : ""}`));
-      }
-    }
-    if (u.temp_hp) {
-      nc.tempHp = Math.max(nc.tempHp || 0, u.temp_hp);
-      entries.push(entrySystem(`🛡️ Temporary HP +${u.temp_hp} (ตอนนี้ ${nc.tempHp} temp HP)`));
-    }
-    if (u.gold_delta) {
-      nc.gold = Math.max(0, nc.gold + u.gold_delta);
-      entries.push(entrySystem(`ทอง ${u.gold_delta > 0 ? "+" : ""}${u.gold_delta} → ${nc.gold} gp`));
-    }
-    // Quest management — never let a malformed quest payload throw and
-    // discard the rest of this response's updates (schema-validated upstream,
-    // but guarded again here defensively).
-    if (u.quest_add) {
-      try {
-        const q = u.quest_add;
-        if (q && q.id && !quests.find(x => x.id === q.id)) {
-          const newQuests = [...quests, { ...q, status: "active" }];
-          setQuests(newQuests);
-          entries.push(entrySystem(`📜 เควสต์ใหม่: ${q.title} — ${q.description}`));
-        }
-      } catch (e: any) {
-        console.warn("[applyUpdates] quest_add skipped:", e);
-        entries.push(entrySystem(`⚠️ เควสต์ใหม่ไม่สมบูรณ์ — ข้าม`));
-      }
-    }
-    if (u.quest_update) {
-      try {
-        const qu = u.quest_update;
-        const newQuests = quests.map(q => {
-          if (q.id === qu.id) {
-            if (qu.complete_objective !== undefined) {
-              return { ...q, objectives: (q.objectives || []).map((o, i) => i === qu.complete_objective ? { ...o, done: true } : o) };
-            }
-            if (qu.status) return { ...q, status: qu.status };
-          }
-          return q;
-        });
-        setQuests(newQuests);
-        if (qu.status === "completed") entries.push(entrySystem(`✅ เควสต์เสร็จสิ้น: ${qu.id}`));
-        if (qu.status === "failed") entries.push(entrySystem(`❌ เควสต์ล้มเหลว: ${qu.id}`));
-      } catch (e: any) {
-        console.warn("[applyUpdates] quest_update skipped:", e);
-        entries.push(entrySystem(`⚠️ อัปเดตเควสต์ไม่สมบูรณ์ — ข้าม`));
-      }
-    }
-    // Time advancement (uses WorldClock internally, syncs back to legacy gameTime state)
-    if (u.time_delta) {
-      const newTime = engineAdvanceHours(u.time_delta);
-      setGameTime(newTime);
-      // Increment rest timers when time passes
-      nc.lastLongRestHoursAgo = (nc.lastLongRestHoursAgo ?? 0) + u.time_delta;
-      nc.lastShortRestHoursAgo = (nc.lastShortRestHoursAgo ?? 0) + u.time_delta;
-      entries.push(entrySystem(`⏰ เวลาผ่านไป ${u.time_delta} ชม. → ${gameTimeToString(newTime)}`));
-    }
-    (u.items_use || []).forEach((it: string) => {
+
+    // Fields that need engine / impure handling the pure reducer deliberately omits.
+    const { items_use, time_delta, xp_award, ...storeUpdates } = u;
+
+    // === 1. ATOMIC store application (the headline fix) ===================
+    const store = createStore(createInitialState({
+      player: createPlayerState({
+        hp: cc.hp, maxHp: cc.maxHp, tempHp: cc.tempHp || 0, gold: cc.gold,
+        xp: cc.xp, level: cc.level,
+        inventory: [...cc.inventory], conditions: [...cc.conditions], buffs: [...(cc.buffs || [])],
+        feats: [...(cc.feats || [])],
+        exhaustionLevel: cc.exhaustionLevel || 0, pendingAsi: cc.pendingAsi || 0,
+        npcAttitudes: { ...(cc.npcAttitudes || {}) }, factionReputation: { ...(cc.factionReputation || {}) },
+        weather: cc.weather ?? null, environmentEffect: cc.environmentEffect ?? null, sceneType: cc.sceneType ?? null,
+        dead: cc.dead || false,
+        lastLongRestHoursAgo: cc.lastLongRestHoursAgo ?? 0, lastShortRestHoursAgo: cc.lastShortRestHoursAgo ?? 0,
+      }),
+      quests, time: gameTime, phase,
+    }));
+    store.dispatch({ type: "APPLY_DM_UPDATES", updates: storeUpdates });
+    const after = store.getState();
+
+    // Mirror the reducer's new player-facing log lines into the app log
+    // (re-issued through entrySystem so ids follow the app's nextId() scheme).
+    for (const e of after.log) entries.push(entrySystem(e.text));
+
+    // Fold the store-owned slices back onto the rich character object.
+    let nc: any = {
+      ...cc,
+      hp: after.player.hp, maxHp: after.player.maxHp, tempHp: after.player.tempHp,
+      gold: after.player.gold, xp: after.player.xp, level: after.player.level,
+      inventory: [...after.player.inventory], conditions: [...after.player.conditions], buffs: after.player.buffs,
+      feats: after.player.feats,
+      exhaustionLevel: after.player.exhaustionLevel, pendingAsi: after.player.pendingAsi,
+      npcAttitudes: after.player.npcAttitudes, factionReputation: after.player.factionReputation,
+      weather: after.player.weather, environmentEffect: after.player.environmentEffect, sceneType: after.player.sceneType,
+      dead: after.player.dead,
+      lastLongRestHoursAgo: after.player.lastLongRestHoursAgo, lastShortRestHoursAgo: after.player.lastShortRestHoursAgo,
+    };
+    const newQuests = after.quests;
+    let newGameTime = gameTime;
+
+    // === 2. (3a) items_use — consume CONSUMABLES to heal / cure ===========
+    // Applied after the reducer so hp_delta lands first (legacy ordering).
+    (items_use || []).forEach((it: string) => {
       const idx = nc.inventory.indexOf(it);
       if (idx < 0) { entries.push(entrySystem(`ไม่มี ${it} ในเป้สัมภาระ`)); return; }
       const consum = CONSUMABLES[it];
@@ -1042,160 +1035,38 @@ export default function DnDSolo() {
         entries.push(entrySystem(`ใช้: ${it}`));
       }
     });
-    (u.items_add || []).forEach((it: string) => {
-      nc.inventory.push(it);
-      entries.push(entrySystem(`ได้รับ: ${it}`));
-      // Auto-detect spell scroll: "Spell Scroll: <name>"
-      const scrollMatch = it.match(/^Spell Scroll:\s*(.+)$/i);
-      if (scrollMatch) {
-        entries.push(entrySystem(`📖 พบ Spell Scroll — เปิดสมุดเวทมนตร์ (📜 → เวทมนตร์) เพื่อเรียน ${scrollMatch[1]}`));
-      }
-      // Auto-detect feat: "Feat: <name>"
-      const featMatch = it.match(/^Feat:\s*(.+)$/i);
-      if (featMatch) {
-        const featName = featMatch[1];
-        const featIndex = featName.toLowerCase().replace(/\s+/g, "-");
-        if (!(nc.feats || []).includes(featIndex)) {
-          nc.feats = [...(nc.feats || []), featIndex];
-          entries.push(entrySystem(`⭐ ได้รับ Feat: ${featName} — ดูในหน้าตัวละคร`));
-        }
-      }
-    });
-    (u.items_remove || []).forEach((it: string) => {
-      const i = nc.inventory.indexOf(it); if (i >= 0) { nc.inventory.splice(i, 1); entries.push(entrySystem(`เสีย: ${it}`)); }
-    });
-    (u.conditions_add || []).forEach((cd: string) => { if (!nc.conditions.includes(cd) && CONDITIONS_TH[cd]) { nc.conditions.push(cd); entries.push(entrySystem(`สภาวะ: ${CONDITIONS_TH[cd]}`)); } });
-    (u.conditions_remove || []).forEach((cd: string) => { const i = nc.conditions.indexOf(cd); if (i >= 0) { nc.conditions.splice(i, 1); entries.push(entrySystem(`หายจากสภาวะ: ${cd}`)); } });
-    // Buffs/debuffs
-    (u.buffs_add || []).forEach((b: any) => {
-      const buff = typeof b === "string" ? { name: b, type: "buff", duration: -1, source: "unknown", effect_desc: "" } : b;
-      // Remove existing buff with same name first
-      nc.buffs = nc.buffs.filter((x: any) => x.name !== buff.name);
-      nc.buffs.push(buff);
-      const durText = buff.duration === 0 ? "ทันที" : buff.duration === -1 ? "จนกว่าจะ long rest" : `${buff.duration} รอบ`;
-      entries.push(entrySystem(`${buff.type === "debuff" ? "🔻 Debuff" : "⬆️ Buff"}: ${buff.name} (${durText})${buff.effect_desc ? " — " + buff.effect_desc : ""}`));
-    });
-    (u.buffs_remove || []).forEach((bName: string) => {
-      const before = nc.buffs.length;
-      nc.buffs = nc.buffs.filter((x: any) => x.name !== bName);
-      if (nc.buffs.length < before) entries.push(entrySystem(`Buff หมดไป: ${bName}`));
-    });
-    if (u.xp_award) nc = gainXP(nc, u.xp_award, entries);
 
-    // === NEW DM Response Fields ===
+    // === 3. (3c) xp_award — gainXP does the full class math (HP/slots/feats) =
+    if (xp_award) nc = gainXP(nc, xp_award, entries);
 
-    // loot_drop: DM specifies loot after combat
-    if (u.loot_drop) {
-      const loot = u.loot_drop;
-      if (Array.isArray(loot)) {
-        loot.forEach((item: any) => {
-          if (typeof item === "string") {
-            const goldMatch = item.match(/^(\d+)\s*gp$/i);
-            if (goldMatch) {
-              nc.gold += parseInt(goldMatch[1], 10);
-              entries.push(entrySystem(`💰 ได้รับ ${goldMatch[1]} ทอง`));
-            } else {
-              nc.inventory.push(item);
-              entries.push(entrySystem(`📦 ได้รับ: ${item}`));
-            }
-          } else if (typeof item === "object" && item.item) {
-            nc.inventory.push(item.item);
-            const qty = item.quantity || 1;
-            for (let q = 1; q < qty; q++) nc.inventory.push(item.item);
-            entries.push(entrySystem(`📦 ได้รับ: ${item.item}${qty > 1 ? ` ×${qty}` : ""}`));
+    // === 4. (3b) time_delta — WorldClock sync + rest timers + forced march ==
+    if (time_delta) {
+      newGameTime = engineAdvanceHours(time_delta);
+      nc.lastLongRestHoursAgo = (nc.lastLongRestHoursAgo ?? 0) + time_delta;
+      nc.lastShortRestHoursAgo = (nc.lastShortRestHoursAgo ?? 0) + time_delta;
+      entries.push(entrySystem(`⏰ เวลาผ่านไป ${time_delta} ชม. → ${gameTimeToString(newGameTime)}`));
+      // Forced march (D&D 2024 RAW): >8h travel without a rest → CON save or exhaustion.
+      if (time_delta >= 8 && !u.rest_trigger) {
+        const hoursBeyond = time_delta - 8;
+        if (hoursBeyond > 0) {
+          const forcedMarchDC = 10 + hoursBeyond;
+          const conSave = rollD20(saveMod(nc, "con"));
+          if (conSave.total < forcedMarchDC) {
+            nc.exhaustionLevel = Math.max(0, Math.min(6, (nc.exhaustionLevel || 0) + 1));
+            entries.push(entrySystem(`😮‍💨 Forced March Exhaustion! เดินทาง ${time_delta} ชม. (เกิน 8 ชม.) → CON save ${conSave.total} < DC ${forcedMarchDC} → Exhaustion +1 → Lv.${nc.exhaustionLevel}`));
+            if (nc.exhaustionLevel >= 6) nc.dead = true;
+          } else {
+            entries.push(entrySystem(`💪 Forced March: เดินทาง ${time_delta} ชม. → CON save ${conSave.total} ≥ DC ${forcedMarchDC} → ไม่เหนื่อยล้า`));
           }
-        });
-      }
-    }
-
-    // npc_attitude: DM sets NPC attitude
-    if (u.npc_attitude) {
-      const att = u.npc_attitude;
-      if (att.npc_id && att.attitude) {
-        if (!nc.npcAttitudes) nc.npcAttitudes = {};
-        nc.npcAttitudes[att.npc_id] = att.attitude;
-        entries.push(entrySystem(`👤 ${att.npc_id} ท่าทีเปลี่ยนเป็น: ${att.attitude}${att.reason ? ` (${att.reason})` : ""}`));
-      }
-    }
-
-    // faction_reputation: DM adjusts faction reputation
-    if (u.faction_reputation) {
-      const fr = u.faction_reputation;
-      if (fr.faction_id && typeof fr.delta === "number") {
-        if (!nc.factionReputation) nc.factionReputation = {};
-        nc.factionReputation[fr.faction_id] = (nc.factionReputation[fr.faction_id] || 0) + fr.delta;
-        entries.push(entrySystem(`🏛️ ชื่อเสียงกับ ${fr.faction_id}: ${fr.delta > 0 ? "+" : ""}${fr.delta} → ${nc.factionReputation[fr.faction_id]}`));
-      }
-    }
-
-    // weather: DM changes weather
-    if (u.weather) {
-      nc.weather = u.weather;
-      entries.push(entrySystem(`🌤️ อากาศเปลี่ยนเป็น: ${u.weather}`));
-    }
-
-    // environment: DM sets environment effect
-    if (u.environment) {
-      nc.environmentEffect = u.environment;
-      entries.push(entrySystem(`🌍 สภาพแวดล้อม: ${u.environment}`));
-    }
-
-    // scene_type: DM sets current scene type
-    if (u.scene_type) {
-      nc.sceneType = u.scene_type;
-      entries.push(entrySystem(`🎬 ประเภทฉาก: ${u.scene_type}`));
-    }
-
-    // level_up_choice: DM offers ASI or feat choice
-    if (u.level_up_choice) {
-      nc.pendingAsi = (nc.pendingAsi || 0) + 1;
-      entries.push(entrySystem(`⬆️ ต้องเลือก Ability Score Improvement หรือ Feat — เปิดหน้าตัวละครเพื่อเลือก`));
-    }
-
-    // rest_trigger: DM forces rest
-    if (u.rest_trigger === "short") {
-      entries.push(entrySystem(`⛺ DM สั่งให้พักสั้น — กดปุ่ม "พักสั้น" เพื่อพัก`));
-    } else if (u.rest_trigger === "long") {
-      entries.push(entrySystem(`🌙 DM สั่งให้พักยาว — กดปุ่ม "พักยาว" เพื่อพัก`));
-    }
-
-    // exhaustion: DM applies exhaustion level
-    // D&D 5e/2024 sources of exhaustion:
-    //   - Forced march (>8h travel/day): CON save DC 10 + hours beyond 8
-    //   - Starvation/dehydration: 1 level/day without food or water
-    //   - Extreme weather (cold/heat) without protection
-    //   - Spells (Sickening Radiance, etc.)
-    //   - DM fiat for narrative reasons (long travel, no rest, drowning, etc.)
-    if (u.exhaustion_delta) {
-      nc.exhaustionLevel = Math.max(0, Math.min(6, (nc.exhaustionLevel || 0) + u.exhaustion_delta));
-      const reason = u.exhaustion_reason || (u.exhaustion_delta > 0 ? "จากสาเหตุที่ DM กำหนด" : "ฟื้นตัว");
-      entries.push(entrySystem(`😮‍💨 Exhaustion ${u.exhaustion_delta > 0 ? "+" : ""}${u.exhaustion_delta} → Lv.${nc.exhaustionLevel} (${reason})${nc.exhaustionLevel >= 6 ? " (ตาย!)" : ""}`));
-      if (nc.exhaustionLevel >= 6) {
-        nc.dead = true;
-        setPhase("dead");
-      }
-    }
-    // === Auto-exhaustion checks (D&D 5e/2024 RAW) ===
-    // Forced march: if time_delta > 8 hours of travel, auto-check exhaustion
-    if (u.time_delta && u.time_delta >= 8 && !u.rest_trigger) {
-      const hoursBeyond = u.time_delta - 8;
-      if (hoursBeyond > 0) {
-        const forcedMarchDC = 10 + hoursBeyond;
-        const conSave = rollD20(saveMod(nc, "con"));
-        const survived = conSave.total >= forcedMarchDC;
-        if (!survived) {
-          nc.exhaustionLevel = Math.max(0, Math.min(6, (nc.exhaustionLevel || 0) + 1));
-          entries.push(entrySystem(`😮‍💨 Forced March Exhaustion! เดินทาง ${u.time_delta} ชม. (เกิน 8 ชม.) → CON save ${conSave.total} < DC ${forcedMarchDC} → Exhaustion +1 → Lv.${nc.exhaustionLevel}`));
-          if (nc.exhaustionLevel >= 6) {
-            nc.dead = true;
-            setPhase("dead");
-          }
-        } else {
-          entries.push(entrySystem(`💪 Forced March: เดินทาง ${u.time_delta} ชม. → CON save ${conSave.total} ≥ DC ${forcedMarchDC} → ไม่เหนื่อยล้า`));
         }
       }
     }
 
+    // === 5. (3d) Commit the deferred slices ONCE, at the very end ==========
+    // No React setter fires mid-flight — any throw above discards everything.
+    if (u.quest_add || u.quest_update) setQuests(newQuests);
+    if (time_delta) setGameTime(newGameTime);
+    if (nc.dead) setPhase("dead");
     return nc;
   }
 
