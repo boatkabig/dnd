@@ -21,10 +21,13 @@
  *      on_turn_start (arriving) triggers, and resets budgets.
  *   8. runEnemyTurn() is a minimal hook: it only executes the caller-decided
  *      intent (attack/move/pass) and ends the turn — no AI logic of its own.
- *   9. LIVE (network): a real Open5e v2 monster (Brown Bear) pulled via
- *      lib/open5e.ts's getCreature() loader, to prove Multiattack parsing
- *      against real action text rather than an invented string. Every other
- *      test above is seeded/offline.
+ *   9. A real Open5e v2 monster (Brown Bear) pulled via lib/open5e.ts's
+ *      getCreature() loader — but served from a cached fixture
+ *      (scripts/fixtures/open5e-brown-bear.json) so the test is deterministic
+ *      and offline. It still runs the full real loader path (fetch →
+ *      normalizeCreature → parseMultiattack) to prove Multiattack parsing
+ *      against a faithful Open5e v2 stat block rather than an invented string.
+ *      Every other test above is seeded/offline.
  *
  * Standalone script (own pass/fail counters, process.exit(1) on failure) — run via
  * the vitest legacy harness (tests/legacy-scripts.test.ts).
@@ -44,7 +47,9 @@ import {
 import { roll } from "../src/lib/engine/dice";
 import { getCombatant } from "../src/lib/engine/combat";
 import { applyEffect, type EffectDef } from "../src/lib/engine/effects";
-import { getCreature } from "../src/lib/open5e";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { getCreature, setOpen5eFetch } from "../src/lib/open5e";
 import type { NormalizedCreature, NormalizedCreatureAttack, NormalizedCreatureAction } from "../src/lib/open5e";
 
 let pass = 0, fail = 0;
@@ -398,15 +403,36 @@ test("pass intent: no attack/move performed, turn still ends", () => {
 });
 
 // ============================================================================
-// 9. LIVE — real Open5e v2 monster action text (network-dependent; every
-//    other test above is seeded/offline per design).
+// 9. Real Open5e v2 monster action text — served from a cached fixture so the
+//    test is deterministic and fully offline. It still exercises the entire
+//    real loader path: fetch → normalizeCreature (in lib/open5e.ts) →
+//    parseMultiattack, against a faithful Open5e v2 (5e-2024) Brown Bear stat
+//    block (see scripts/fixtures/open5e-brown-bear.json). Every other test
+//    above is seeded/offline per design.
 // ============================================================================
+
+// Load the cached Open5e v2 raw response and route the loader's fetch to it.
+const BROWN_BEAR_RAW = readFileSync(
+  fileURLToPath(new URL("./fixtures/open5e-brown-bear.json", import.meta.url)),
+  "utf8",
+);
+setOpen5eFetch(async (input) => {
+  const url = String(input);
+  if (/\/creatures\/brown-bear/.test(url)) {
+    return new Response(BROWN_BEAR_RAW, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return new Response("Not Found", { status: 404 });
+});
+
 (async () => {
-  console.log("\n9. LIVE: brown-bear Multiattack via lib/open5e.ts's getCreature() loader");
+  console.log("\n9. brown-bear Multiattack via lib/open5e.ts's getCreature() loader (cached fixture)");
 
   await testAsync("brown-bear Multiattack parses to Bite x1 + Claw x1 from real action text", async () => {
     const creature = await getCreature("brown-bear");
-    ok(!!creature, "brown-bear must resolve via the Open5e v2 loader (live network)");
+    ok(!!creature, "brown-bear must resolve via the Open5e v2 loader (cached fixture)");
 
     const plan = parseMultiattack(creature!.actions);
     ok(!!plan, "Brown Bear must have a Multiattack action");
