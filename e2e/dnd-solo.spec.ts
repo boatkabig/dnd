@@ -164,23 +164,13 @@ test("character creation through all 11 steps → adventure start → combat →
   expect(dm.getCallCount()).toBeGreaterThan(0);
 });
 
-// TODO: target selection is not actually wired up. In src/components/DnDSolo.tsx
-// the enemy-card onClick handler (around the combat panel's enemy list) is a
-// no-op — `onClick={() => { if (e.hpNow > 0 && !thinking && !downed) { /* select target */ } }}`
-// — so clicking a specific enemy never records a selected target. Attacks are
-// resolved in playerCombatAction()'s doWeaponAttack(), which picks its target via
-// `cb.enemies.find(e => e.uid === payload && e.hpNow > 0) || cb.enemies.find(e => e.hpNow > 0)`;
-// since the attack/ranged buttons always call playerCombatAction with no payload,
-// the first `find` never matches and every attack silently falls back to the
-// first alive enemy, regardless of what the player clicked. This test encodes
-// the behaviorally-correct expectation (attacking after selecting the 2nd enemy
-// should damage the 2nd enemy) and is wrapped in test.fail() so it runs now,
-// is currently expected to fail (bug confirmed), and will flip to an
-// unexpected-pass failure — the signal to fix this test — the moment someone
-// rewires target selection.
+// Target selection is now wired through the bridge-backed combat slice
+// (src/components/game/CombatView.tsx): clicking an enemy card records it as the
+// selected target (`combatTargetId` in DnDSolo), and the attack/ranged buttons
+// pass that id to playerCombatAction → doWeaponAttack, which resolves the hit
+// against the chosen enemy via combatBridge. So selecting the 2nd enemy and
+// attacking now damages the 2nd enemy specifically — this test is a real pass.
 test("selecting the 2nd enemy as target and attacking damages the 2nd enemy", async ({ page }) => {
-  test.fail();
-
   const dm = mockDm(page, [OPENING_RESPONSE, TWO_GOBLIN_COMBAT_RESPONSE]);
   await dm.install();
   await mockIntent(page);

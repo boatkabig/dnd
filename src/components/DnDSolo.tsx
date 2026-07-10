@@ -67,6 +67,8 @@ import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
 import { createStore, createInitialState, createPlayerState } from "@/lib/store";
 import CharacterCreation from "@/components/game/CharacterCreation";
+// 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
+import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
 
 /* ============================================================
    D&D 5e SOLO — Full SRD Edition
@@ -735,6 +737,8 @@ export default function DnDSolo() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [combatMenu, setCombatMenu] = useState<"" | "spell" | "item">("");
+  // 1c-b: which enemy the player has selected to attack (null → first alive fallback)
+  const [combatTargetId, setCombatTargetId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetTab, setSheetTab] = useState<"stats" | "skills" | "items" | "spells">("stats");
   const [asiPicks, setAsiPicks] = useState<string[]>([]);
@@ -789,6 +793,15 @@ export default function DnDSolo() {
   useEffect(() => { mapRef.current = map; }, [map]);
   useEffect(() => { cRef.current = c; }, [c]);
   useEffect(() => { combatRef.current = combat; }, [combat]);
+  // 1c-b: drop a stale target selection when combat ends or the chosen enemy is
+  // gone/dead (a fresh encounter reuses different uids); attacks then fall back
+  // to the first living enemy until the player picks a new target.
+  useEffect(() => {
+    if (!combat) { if (combatTargetId !== null) setCombatTargetId(null); return; }
+    if (combatTargetId && !combat.enemies?.some((e: any) => e.uid === combatTargetId && e.hpNow > 0)) {
+      setCombatTargetId(null);
+    }
+  }, [combat, combatTargetId]);
   useEffect(() => { logDataRef.current = log; }, [log]);
   useEffect(() => { dungeonBlueprintRef.current = dungeonBlueprint; }, [dungeonBlueprint]);
   useEffect(() => { dungeonRunRef.current = dungeonRun; }, [dungeonRun]);
@@ -2416,15 +2429,39 @@ export default function DnDSolo() {
       }
       // Note: Exhaustion penalty is already applied inside attackMod() — do NOT subtract again here
       // (D&D 2024: -2/level to all D20 Tests including attack rolls)
-      const atk = rollD20(atkModTotal, adv);
+      // === Engine seam (1c-b): resolve the to-hit + base weapon damage through
+      // combatBridge → resolveAttack, so the d20 roll, crit and base damage come
+      // from the tested engine instead of hand-rolled inline dice. Feature dice
+      // (sneak, smite, Hunter's Mark, masteries, …) are still layered on below.
+      const dmgDie = w.versatileDmg && (w.properties || []).includes("versatile") ? w.versatileDmg : w.dmg;
+      const abilDmgMod = mod(cc.abilities[w.abil]) + (w.plus || 0);
+      const baseDamageExpr = abilDmgMod !== 0 ? `${dmgDie}${abilDmgMod >= 0 ? "+" : ""}${abilDmgMod}` : dmgDie;
+      const engineDmgType = toDamageType(w.damageType || w.dmgType);
+      const bridgeRes = resolveBridgeAttack({
+        attacker: { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30 },
+        // Pass the target's BASE ac + cover separately so the engine forms the
+        // effective AC itself; empty resistances (see CombatView) → engine base
+        // damage is unresisted and the final resist below applies exactly once.
+        target: { id: target.uid, name: target.th, ac: target.ac, hp: Math.max(1, target.hpNow), maxHp: target.hp },
+        attackBonus: atkModTotal,
+        damageExpr: baseDamageExpr,
+        damageType: engineDmgType,
+        advantage: adv === "advantage",
+        disadvantage: adv === "disadvantage",
+        coverAC: targetCoverAC,
+      });
+      // Reconstruct the roll-ticket shape the log renderer expects.
+      const atk = { die: bridgeRes.roll, other: null, mod: atkModTotal, total: bridgeRes.total, adv };
       if (target.glow) target.glow = false;
       const critOn = critThreshold(cc);
-      const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= effectiveTargetAC);
+      const hit = bridgeRes.hit;
       // Phase 2: Auto-crit vs paralyzed/unconscious within 5ft (D&D 2024)
       // Also auto-crit vs petrified (DM ruling — typically counts as incapacitated)
       const targetIncapacitated = target.conditions && (target.conditions.includes("paralyzed") || target.conditions.includes("unconscious") || target.conditions.includes("petrified"));
       const isAutoCrit = hit && targetIncapacitated && dist <= 1; // melee within 5ft
-      const isCrit = isAutoCrit || (hit && atk.die >= critOn);
+      // Engine crits on a natural 20; the app additionally crits on the class
+      // crit threshold (Champion 19-20) and auto-crit vs incapacitated.
+      const isCrit = bridgeRes.critical || isAutoCrit || (hit && bridgeRes.roll >= critOn);
       let extra: string | null = null;
       if (isAutoCrit) {
         if (extra === null) extra = "";
@@ -2437,23 +2474,26 @@ export default function DnDSolo() {
       }
       if (hit) {
         // === D&D 2024 Weapon Damage ===
-        // Versatile weapons: use versatileDmg if 2-handed (we simplify: always use versatileDmg if present — player choice)
-        const dmgDie = w.versatileDmg && (w.properties || []).includes("versatile") ? w.versatileDmg : w.dmg;
-        const dmgR = rollFormula(dmgDie);
-        let dmg = dmgR.total + mod(cc.abilities[w.abil]) + (w.plus || 0);
+        // Base weapon damage (dice + ability mod, doubled on a natural-20 crit)
+        // already computed by the engine above; feature dice are layered on next.
+        let dmg = bridgeRes.damage;
         // B4: Track last weapon damage roll for Savage Attacker reroll
-        (cb as any)._lastWeaponDamageRoll = { formula: dmgDie, total: dmgR.total, damageType: w.dmgType || "slashing" };
-        let parts = [`${dmgDie}(${dmgR.rolls.join("+")})+${mod(cc.abilities[w.abil]) + (w.plus || 0)}${w.plus ? ` (อาวุธ +${w.plus})` : ""}${w.versatileDmg && dmgDie === w.versatileDmg ? " (2H)" : ""}`];
+        (cb as any)._lastWeaponDamageRoll = { formula: dmgDie, total: dmg, damageType: w.dmgType || "slashing" };
+        let parts = [`${dmgDie}+${abilDmgMod}${w.plus ? ` (อาวุธ +${w.plus})` : ""}${w.versatileDmg && dmgDie === w.versatileDmg ? " (2H)" : ""} = ${dmg}`];
         if (blessDie > 0) parts.push(`Bless +${blessDie}`);
         if (baneDie > 0) parts.push(`Bane -${baneDie}`);
         // D&D 2024 Critical Hit: roll ALL damage dice twice (weapon dice + Sneak Attack + Hunter's Mark + Smite + Hex + any other dice)
         // Source: D&D Beyond Free Rules 2024 "Critical Hits": "If the attack involves other damage dice, such as from the Rogue's Sneak Attack feature, you also roll those dice twice."
         // We accomplish this by doubling the dice count via a critMultiplier flag that the additional-damage blocks check.
         const critMultiplier = isCrit ? 2 : 1;
-        if (isCrit) {
-          const cr = rollFormula(dmgDie); // additional weapon dice (the 2nd roll)
+        if (isCrit && !bridgeRes.critical) {
+          // Champion improved-crit / auto-crit vs incapacitated: the engine only
+          // doubles weapon dice on a natural 20, so add the extra weapon dice here.
+          const cr = rollFormula(dmgDie);
           dmg += cr.total;
           parts.push(`CRIT(${critOn}-20) +${cr.total} (weapon dice doubled)`);
+        } else if (isCrit) {
+          parts.push(`CRIT (nat 20, weapon dice doubled)`);
         }
         // Sneak Attack: D&D 5e/2024 RAW — advantage on attack roll OR ally within 5ft of target
         // In solo play (no allies), only advantage qualifies
@@ -5247,19 +5287,13 @@ export default function DnDSolo() {
             </div>
           )}
 
-          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8 }}>
-            {combat.enemies.map((e: any) => (
-              <div key={e.uid} className={"enemy-card" + (e.hpNow <= 0 ? " dead" : "")} style={{ cursor: "pointer", borderColor: (combat.enemies.find(x=>x.uid===e.uid) && e.hpNow > 0) ? "#6E3448" : undefined }}
-                onClick={() => { if (e.hpNow > 0 && !thinking && !downed) { /* select target */ } }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{e.hpNow <= 0 ? "💀 " : ""}{e.th}</div>
-                <div style={{ fontSize: 11, color: "#8A7F9E" }}>AC {e.ac}{e.cr ? ` · CR ${e.cr}` : ""}</div>
-                <div className="hpbar" style={{ height: 12, marginTop: 4 }}>
-                  <div className="hpbar-fill" style={{ width: Math.max(0, (e.hpNow / e.hp) * 100) + "%", background: "#C74B44" }} />
-                  <span className="hpbar-label" style={{ fontSize: 9 }}>{e.hpNow}/{e.hp}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <CombatEnemyList
+            enemies={combat.enemies}
+            selectedTargetId={combatTargetId}
+            onSelectTarget={(uid) => setCombatTargetId(uid)}
+            thinking={thinking}
+            downed={downed}
+          />
           {downed ? (
             <button className="btn btn-red" style={{ width: "100%", padding: 13 }} disabled={thinking} onClick={() => playerCombatAction("deathsave")}>
               💀 ทอย Death Saving Throw ({c.deathSaves.s}✓ / {c.deathSaves.f}✗)
@@ -5309,8 +5343,8 @@ export default function DnDSolo() {
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {/* UX fix: Primary actions always visible */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack")}>⚔️ โจมตี ({meleeW.th})</button>
-                {rangedW && <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack_ranged")}>🏹 ยิง ({rangedW.th})</button>}
+                <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack", combatTargetId)}>⚔️ โจมตี ({meleeW.th})</button>
+                {rangedW && <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack_ranged", combatTargetId)}>🏹 ยิง ({rangedW.th})</button>}
                 {cls.caster && <button className="btn" disabled={thinking} onClick={() => setCombatMenu("spell")}>✨ ร่ายเวท</button>}
                 <button className="btn" disabled={thinking || combatItems.length === 0} onClick={() => setCombatMenu("item")}>🧪 ไอเทม ({combatItems.length})</button>
               </div>
