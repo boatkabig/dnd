@@ -22,6 +22,7 @@ LLM DM  /api/dm  (OpenAI-compatible endpoint; tool/function calling; narrates + 
 - **Engine combat core + vision** (`2862fe2`): `resolveAttack` now returns the real d20 RollResult (auditable dice + per-source modifiers, not a fabricated result); turn loop wired to action economy (per-turn budget reset/spend) + effects (turn start/end triggers); new pure vision/LOS module (senses, obscurement, cover, 2024 unseen-attacker/target rules). Tests 11/11.
 - **Combat bridge** (`e528bd0`): pure API seam engine↔UI — `startBridgeCombat` / `getCombatView` / `performAttack` / `moveBy` / `endTurn` / `runEnemyTurn`; Multiattack parsed from stat-block text; enemy data mapped from Open5e v2.
 - **E2E smoke net** (`e4e7fbb`): `npm run e2e` (Playwright, DM route-mocked → deterministic, no creds) drives creation → combat → attack. The regression gate for the de-monolith.
+- **De-monolith cut 1 — `<CharacterCreation>`** (`1644582`): extracted the 11-step wizard (all `cc*` state + validation + confirm step) into `src/components/game/CharacterCreation.tsx` (544 lines) with an `onComplete(character)/onCancel()` interface. Pure structural; `DnDSolo.tsx` −527 lines (6052 → ~5525). Verified tsc 0 / vitest 12/12 / e2e green.
 - **Analysis (not code)**: 2024 rules audit (5 blocker / 14 high / 42 med) + live gameplay-state inventory (input for the store design).
 
 ## Decisions locked
@@ -35,8 +36,8 @@ LLM DM  /api/dm  (OpenAI-compatible endpoint; tool/function calling; narrates + 
 
 ## Pending
 
-- **In progress**: extract `<CharacterCreation>` out of the 6009-line `DnDSolo.tsx` (first monolith cut).
-- **1c**: build the game store + reducer (atomic `APPLY_DM_UPDATES` fixes the partial-commit-on-error bug); rewrite the combat slice as `<CombatView>` backed by the bridge — real initiative loop, surprise, grid movement in feet, monster speed/Multiattack, target selection, grapple/shove via `combat.ts`, 0-HP→death-save lifecycle; flips the e2e target-selection tripwire green.
+- **Next (resume here)**: build the game store + reducer (TDD; atomic `APPLY_DM_UPDATES` fixes the partial-commit-on-error bug) as a standalone `src/lib/store/**` module, then wire it in during 1c.
+- **1c**: rewrite the combat slice as `<CombatView>` backed by the bridge — real initiative loop, surprise, grid movement in feet, monster speed/Multiattack, target selection, grapple/shove via `combat.ts`, 0-HP→death-save lifecycle; flips the e2e target-selection tripwire green.
 - Extract remaining panels (sheet / inventory / dungeon / adventure log / DM chat) → thin `DnDSolo.tsx` shell, then fan out.
 - **Phase 2** death/HP/concentration · **Phase 3** tool-calling DM + spell legality (wire vision here) · **Phase 4** subclass/feats/multiclass/prepared-vs-known/equipment · **Phase 5** solo systems (sidekick, oracle, exploration, campaign memory, session zero) · **Phase 6** content/economy/persistence + delete dead code trees + e2e scenarios.
 - 2024-audit fixes distributed to the phase that wires each module (most defects are dormant dead-code; fixed at wiring time, keeping one 2024 copy and deleting the 2014 duplicate).
@@ -50,4 +51,6 @@ LLM DM  /api/dm  (OpenAI-compatible endpoint; tool/function calling; narrates + 
 - **Recurring failure mode**: "compiles and renders but is silently inert" (the dead engine; the targeting stub). Guard: the e2e net + the rule that every change must be shown to AFFECT gameplay, not merely compile.
 - **Monolith**: `DnDSolo.tsx` at 6009 lines is the maintainability + parallelism bottleneck. Being split into components + a store.
 - **DM can't run locally without creds**: needs `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` in `.env.local` (gitignored). Not blocking engine work.
+- **Tech-debt from cut 1**: `CharacterCreation.tsx` re-imports `makeCharacter`/`d`/`SRD_OK` from `DnDSolo.tsx` (a circular import — tsc- and runtime-clean, but should be moved to a shared `src/lib/**` module during the store/1c work).
+- **Flaky test**: the combat-bridge test makes one live `api.open5e.com` call — a network blip could redden `vitest run`. Replace with a cached fixture.
 - **Process note**: a leftover background agent auto-pushed this branch to `origin` and set upstream without an explicit instruction (main untouched, no PR opened, no secrets — `.env*` and `.claude` are gitignored). Recorded for transparency.
