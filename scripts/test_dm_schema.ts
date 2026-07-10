@@ -172,4 +172,71 @@ const strayCombatResult = validateDMResponse(strayCombat);
 assert(strayCombatResult.data?.start_combat !== null, "A1: start_combat preserved with stray key");
 
 console.log(`\n=== A1 Results: pass ===\n`);
+
+// === Correctness hardening: quest schema strictness + partial updates salvage ===
+console.log("\n=== Correctness Hardening: quest_add/quest_update strictness + partial updates salvage ===\n");
+
+// H1: malformed quest_update (missing required 'id') must not drop sibling xp_award/loot_drop
+console.log("\nH1: malformed quest_update does not drop xp_award/loot_drop");
+const questCombo = {
+  narration: "test",
+  updates: {
+    xp_award: 200,
+    loot_drop: ["50gp", "Longsword"],
+    quest_update: { status: "completed" }, // missing required 'id'
+  },
+};
+const rH1 = validateDMResponse(questCombo);
+assert(!rH1.success, "H1: top-level parse fails (quest_update malformed)");
+assert(rH1.data?.updates?.xp_award === 200, "H1: xp_award salvaged");
+assert(JSON.stringify(rH1.data?.updates?.loot_drop) === JSON.stringify(["50gp", "Longsword"]), "H1: loot_drop salvaged");
+assert(rH1.data?.updates?.quest_update === undefined, "H1: malformed quest_update dropped");
+assert(rH1.warnings.some((w) => w.includes("quest_update")), "H1: warning names quest_update");
+
+// H2: malformed quest_add (missing required 'objectives') dropped without dropping sibling hp_delta
+console.log("\nH2: malformed quest_add dropped without dropping hp_delta");
+const questAddBad = {
+  narration: "test",
+  updates: {
+    hp_delta: -10,
+    quest_add: { id: "q1", title: "Find the amulet", description: "find it" }, // objectives missing
+  },
+};
+const rH2 = validateDMResponse(questAddBad);
+assert(!rH2.success, "H2: top-level parse fails (quest_add missing objectives)");
+assert(rH2.data?.updates?.hp_delta === -10, "H2: hp_delta salvaged");
+assert(rH2.data?.updates?.quest_add === undefined, "H2: malformed quest_add dropped");
+
+// H3: valid quest_add / quest_update pass the strict schema end-to-end
+console.log("\nH3: valid quest payloads pass strict schema");
+const questGood = {
+  narration: "test",
+  updates: {
+    quest_add: { id: "q1", title: "Find the amulet", description: "find it", objectives: [{ text: "หาสร้อย", done: false }] },
+  },
+};
+const rH3 = validateDMResponse(questGood);
+assert(rH3.success === true, "H3: valid quest_add succeeds");
+assert(rH3.data?.updates?.quest_add?.id === "q1", "H3: quest_add preserved");
+
+// H4: dungeon_enter with a malformed room never throws, and sibling updates still salvaged
+console.log("\nH4: malformed dungeon room does not throw and does not drop sibling updates");
+const dungeonBad = {
+  narration: "test",
+  updates: { xp_award: 50 },
+  dungeon_enter: {
+    id: "crypt1", name: "Crypt", entranceRoomId: "r1",
+    rooms: [{ role: "entrance" }], // missing required id/name/description
+    connections: [],
+  },
+};
+let rH4: ReturnType<typeof validateDMResponse> | null = null;
+let threw = false;
+try { rH4 = validateDMResponse(dungeonBad); } catch { threw = true; }
+assert(!threw, "H4: validateDMResponse never throws on malformed dungeon room");
+assert(!!rH4 && !rH4.success, "H4: top-level parse fails (malformed room)");
+assert(rH4?.data?.updates?.xp_award === 50, "H4: sibling updates.xp_award still salvaged");
+
+console.log(`\n=== Hardening Results: ${pass} passed, ${fail} failed ===\n`);
+
 process.exit(fail > 0 ? 1 : 0);

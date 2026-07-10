@@ -103,6 +103,101 @@ export const MapUpdateSchema = z.object({
   connect: z.tuple([z.string(), z.string()]).optional(),
 });
 
+/* ======================================================================
+ * DUNGEON ROOM / CONNECTION — full-blueprint dungeon_enter payloads
+ * (mirrors Room / RoomConnection shapes in src/lib/dungeon.ts)
+ * ====================================================================== */
+
+export const DungeonRoomRoleSchema = z.enum([
+  "entrance", "puzzle", "setback", "climax", "reward", "transition", "secret", "empty",
+]).catch("empty");
+
+export const DungeonRoomShapeSchema = z.enum([
+  "square", "rect", "round", "irregular", "corridor",
+]).catch("square");
+
+export const DungeonRoomSizeSchema = z.enum([
+  "tiny", "small", "medium", "large", "huge",
+]).catch("medium");
+
+export const DungeonRoomContentSchema = z.object({
+  type: z.enum([
+    "monster", "trap", "treasure", "puzzle", "npc", "lore", "object",
+    "secret_door", "environment", "dressing",
+  ]).catch("dressing"),
+  description: z.string().min(1).max(300),
+  isHidden: z.boolean().optional(),
+  detectionDC: z.number().int().min(1).max(40).optional(),
+  interactionNote: z.string().max(300).optional(),
+});
+
+export const DungeonStagedEncounterSchema = z.object({
+  monsterIds: z.array(z.string().min(1)).max(6).default([]),
+  surprise: z.boolean().optional(),
+  isBoss: z.boolean().optional(),
+  lairActions: z.array(z.string()).optional(),
+});
+
+export const DungeonStagedTrapSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  detectionDC: z.number().int().min(1).max(40),
+  disableDC: z.number().int().min(1).max(40),
+  damage: z.string().min(1),
+  damageType: z.string().min(1),
+  saveAbility: z.enum(["dex", "str", "con", "wis", "int", "cha"]),
+  saveDC: z.number().int().min(1).max(40),
+  triggerType: z.enum(["step_on", "open", "touch", "time", "condition"]),
+});
+
+export const DungeonStagedPuzzleSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  solution: z.string().min(1),
+  solutionCheck: z.object({ skill: z.string().min(1), dc: z.number().int().min(1).max(40) }).optional(),
+  hintDC: z.number().int().min(1).max(40).optional(),
+  rewardItems: z.array(z.string()).optional(),
+  failureConsequence: z.string().optional(),
+});
+
+export const DungeonRoomSchema = z.object({
+  id: z.string().min(1).max(60),
+  name: z.string().min(1).max(120),
+  role: DungeonRoomRoleSchema,
+  shape: DungeonRoomShapeSchema,
+  size: DungeonRoomSizeSchema,
+  dimensions: z.object({ width: z.number(), height: z.number() }).optional(),
+  description: z.string().min(1).max(1000),
+  atmosphere: z.string().max(500).optional(),
+  contents: z.array(DungeonRoomContentSchema).max(20).default([]),
+  exits: z.array(z.string()).max(20).default([]),
+  isSecret: z.boolean().optional().default(false),
+  secretDetectionDC: z.number().int().min(1).max(40).optional(),
+  isLocked: z.boolean().optional(),
+  lockDC: z.number().int().min(1).max(40).optional(),
+  stagedEncounter: DungeonStagedEncounterSchema.optional(),
+  stagedTrap: DungeonStagedTrapSchema.optional(),
+  stagedPuzzle: DungeonStagedPuzzleSchema.optional(),
+  stagedLoot: z.array(z.string()).max(20).optional(),
+});
+
+export const DungeonConnectionSchema = z.object({
+  id: z.string().min(1).max(60),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  type: z.enum([
+    "door", "corridor", "stair", "secret_door", "open_archway", "trapdoor", "portal",
+  ]).catch("door"),
+  direction: z.enum(["n", "s", "e", "w", "ne", "nw", "se", "sw", "up", "down"]).catch("n"),
+  description: z.string().max(300).optional(),
+  isLocked: z.boolean().optional(),
+  lockDC: z.number().int().min(1).max(40).optional(),
+  isSecret: z.boolean().optional(),
+  secretDetectionDC: z.number().int().min(1).max(40).optional(),
+  isTrapped: z.boolean().optional(),
+  trapRef: z.string().optional(),
+});
+
 export const DungeonEnterSchema = z.object({
   // Either full blueprint OR short form { theme, id, name, hook?, antagonist? }
   theme: z.string().optional(),
@@ -112,8 +207,8 @@ export const DungeonEnterSchema = z.object({
   antagonist: z.string().optional(),
   // Full blueprint fields (optional — if present, used directly)
   entranceRoomId: z.string().optional(),
-  rooms: z.array(z.any()).optional(),
-  connections: z.array(z.any()).optional(),
+  rooms: z.array(DungeonRoomSchema).max(30).optional(),
+  connections: z.array(DungeonConnectionSchema).max(60).default([]),
   bossRoomId: z.string().optional(),
   recommendedLevel: z.number().int().min(1).max(20).optional(),
 });
@@ -132,6 +227,30 @@ export const BuffSchema = z.object({
   duration: z.number().int().min(-1).max(1000),  // -1 = until long rest, 0 = instant
   source: z.string().optional().default("unknown"),
   effect_desc: z.string().optional().default(""),
+});
+
+/* ======================================================================
+ * QUESTS — quest_add / quest_update payloads
+ * ====================================================================== */
+
+export const QuestObjectiveSchema = z.object({
+  text: z.string().min(1).max(200),
+  done: z.boolean().optional().default(false),
+});
+
+export const QuestAddSchema = z.object({
+  id: z.string().min(1).max(60),
+  title: z.string().min(1).max(120),
+  description: z.string().min(1).max(500),
+  objectives: z.array(QuestObjectiveSchema).min(1).max(10),
+  reward: z.string().max(200).optional(),
+  giver: z.string().max(60).optional(),
+});
+
+export const QuestUpdateSchema = z.object({
+  id: z.string().min(1).max(60),
+  status: z.enum(["active", "completed", "failed"]).optional(),
+  complete_objective: z.number().int().min(0).max(19).optional(),
 });
 
 /* ======================================================================
@@ -177,9 +296,9 @@ export const UpdatesSchema = z.object({
   buffs_add: z.array(BuffSchema.or(z.string().min(1).max(60))).max(5).optional(),
   buffs_remove: z.array(z.string().min(1).max(60)).max(5).optional(),
 
-  // Quests (lightweight validation — full quest shape validated at apply)
-  quest_add: z.any().optional(),
-  quest_update: z.any().optional(),
+  // Quests
+  quest_add: QuestAddSchema.optional(),
+  quest_update: QuestUpdateSchema.optional(),
 
   // Loot
   loot_drop: z.array(z.string().min(1).max(120)).max(20).optional(),
@@ -256,6 +375,29 @@ export interface ValidationResult {
 }
 
 /**
+ * Salvage `updates` field-by-field so one malformed sub-update (e.g. a bad
+ * quest_update) cannot discard unrelated valid fields in the same response
+ * (e.g. xp_award, loot_drop). Each key is validated independently against
+ * UpdatesSchema; invalid keys are dropped + logged, valid keys are kept.
+ */
+function salvageUpdates(rawUpdates: Record<string, unknown>, warnings: string[]): ValidUpdates | null {
+  const shape = UpdatesSchema.shape as Record<string, z.ZodTypeAny>;
+  const salvaged: Record<string, unknown> = {};
+  let anyValid = false;
+  for (const key of Object.keys(shape)) {
+    if (!(key in rawUpdates)) continue;
+    const fieldResult = shape[key].safeParse(rawUpdates[key]);
+    if (fieldResult.success) {
+      salvaged[key] = fieldResult.data;
+      anyValid = true;
+    } else {
+      warnings.push(`updates.${key}: invalid — dropped (${fieldResult.error.issues.map((i) => i.message).join("; ")})`);
+    }
+  }
+  return anyValid ? (salvaged as ValidUpdates) : null;
+}
+
+/**
  * Validate a raw DM response (already JSON-parsed).
  * On failure, returns a "safe fallback" response with just narration (if available)
  * so the game doesn't crash — invalid fields are dropped.
@@ -297,15 +439,13 @@ export function validateDMResponse(raw: unknown): ValidationResult {
   const rawObj = (typeof raw === "object" && raw !== null) ? raw as Record<string, unknown> : {};
   const narration = typeof rawObj.narration === "string" ? rawObj.narration.slice(0, 4000) : "⚠️ DM ตอบกลับไม่ถูกต้อง — ลองพิมพ์ action ใหม่";
 
-  // Try to salvage updates if it's an object (even if not perfectly shaped)
+  // Salvage updates field-by-field — a bad sub-update (e.g. malformed
+  // quest_update) must not discard unrelated valid fields (xp_award, loot_drop, ...)
   let salvagedUpdates: ValidUpdates | null = null;
   if (rawObj.updates && typeof rawObj.updates === "object") {
-    const updatesParse = UpdatesSchema.safeParse(rawObj.updates);
-    if (updatesParse.success) {
-      salvagedUpdates = updatesParse.data;
-    } else {
-      // Drop updates entirely — too risky to apply partial
-      warnings.push("Updates payload failed validation — dropping all state changes");
+    salvagedUpdates = salvageUpdates(rawObj.updates as Record<string, unknown>, warnings);
+    if (!salvagedUpdates) {
+      warnings.push("Updates payload had no valid fields — dropping all state changes");
     }
   }
 

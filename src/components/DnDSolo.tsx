@@ -61,7 +61,7 @@ import {
   generateProceduralDungeon, type ProceduralDungeonParams,
 } from "@/lib/dungeonTables";
 // Phase 1: DM response schema validation
-import { validateDMResponse, type DMResponse } from "@/lib/dmSchema";
+import { validateDMResponse, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 
@@ -968,7 +968,7 @@ export default function DnDSolo() {
 
   function applyUpdates(u: any, cc: any, entries: any[]) {
     if (!u) return cc;
-    const nc = { ...cc, conditions: [...cc.conditions], inventory: [...cc.inventory], buffs: [...(cc.buffs || [])] };
+    let nc = { ...cc, conditions: [...cc.conditions], inventory: [...cc.inventory], buffs: [...(cc.buffs || [])] };
     if (u.hp_delta) {
       // Apply temp HP first if taking damage
       if (u.hp_delta < 0 && (nc.tempHp || 0) > 0) {
@@ -990,29 +990,41 @@ export default function DnDSolo() {
       nc.gold = Math.max(0, nc.gold + u.gold_delta);
       entries.push(entrySystem(`ทอง ${u.gold_delta > 0 ? "+" : ""}${u.gold_delta} → ${nc.gold} gp`));
     }
-    // Quest management
+    // Quest management — never let a malformed quest payload throw and
+    // discard the rest of this response's updates (schema-validated upstream,
+    // but guarded again here defensively).
     if (u.quest_add) {
-      const q = u.quest_add;
-      if (!quests.find(x => x.id === q.id)) {
-        const newQuests = [...quests, { ...q, status: "active" }];
-        setQuests(newQuests);
-        entries.push(entrySystem(`📜 เควสต์ใหม่: ${q.title} — ${q.description}`));
+      try {
+        const q = u.quest_add;
+        if (q && q.id && !quests.find(x => x.id === q.id)) {
+          const newQuests = [...quests, { ...q, status: "active" }];
+          setQuests(newQuests);
+          entries.push(entrySystem(`📜 เควสต์ใหม่: ${q.title} — ${q.description}`));
+        }
+      } catch (e: any) {
+        console.warn("[applyUpdates] quest_add skipped:", e);
+        entries.push(entrySystem(`⚠️ เควสต์ใหม่ไม่สมบูรณ์ — ข้าม`));
       }
     }
     if (u.quest_update) {
-      const qu = u.quest_update;
-      const newQuests = quests.map(q => {
-        if (q.id === qu.id) {
-          if (qu.complete_objective !== undefined) {
-            return { ...q, objectives: q.objectives.map((o, i) => i === qu.complete_objective ? { ...o, done: true } : o) };
+      try {
+        const qu = u.quest_update;
+        const newQuests = quests.map(q => {
+          if (q.id === qu.id) {
+            if (qu.complete_objective !== undefined) {
+              return { ...q, objectives: (q.objectives || []).map((o, i) => i === qu.complete_objective ? { ...o, done: true } : o) };
+            }
+            if (qu.status) return { ...q, status: qu.status };
           }
-          if (qu.status) return { ...q, status: qu.status };
-        }
-        return q;
-      });
-      setQuests(newQuests);
-      if (qu.status === "completed") entries.push(entrySystem(`✅ เควสต์เสร็จสิ้น: ${qu.id}`));
-      if (qu.status === "failed") entries.push(entrySystem(`❌ เควสต์ล้มเหลว: ${qu.id}`));
+          return q;
+        });
+        setQuests(newQuests);
+        if (qu.status === "completed") entries.push(entrySystem(`✅ เควสต์เสร็จสิ้น: ${qu.id}`));
+        if (qu.status === "failed") entries.push(entrySystem(`❌ เควสต์ล้มเหลว: ${qu.id}`));
+      } catch (e: any) {
+        console.warn("[applyUpdates] quest_update skipped:", e);
+        entries.push(entrySystem(`⚠️ อัปเดตเควสต์ไม่สมบูรณ์ — ข้าม`));
+      }
     }
     // Time advancement (uses WorldClock internally, syncs back to legacy gameTime state)
     if (u.time_delta) {
@@ -1078,7 +1090,7 @@ export default function DnDSolo() {
       nc.buffs = nc.buffs.filter((x: any) => x.name !== bName);
       if (nc.buffs.length < before) entries.push(entrySystem(`Buff หมดไป: ${bName}`));
     });
-    if (u.xp_award) return gainXP(nc, u.xp_award, entries);
+    if (u.xp_award) nc = gainXP(nc, u.xp_award, entries);
 
     // === NEW DM Response Fields ===
 
@@ -1440,27 +1452,44 @@ export default function DnDSolo() {
     }
   }
 
-  /** Apply all DM response fields related to dungeon (dungeon_enter/room_move/exit) */
+  /** Apply all DM response fields related to dungeon (dungeon_enter/room_move/exit)
+   *  Each sub-update is isolated in try/catch — a malformed dungeon payload must
+   *  never throw and must never discard the rest of this response's updates. */
   function applyDungeonUpdates(res: any, entries: any[]): void {
     // 1. dungeon_enter — set or generate blueprint
     if (res.dungeon_enter) {
-      // If already in a dungeon, exit first (DM gave us a new one)
-      if (dungeonBlueprintRef.current) {
-        exitDungeon((t) => entries.push(entrySystem(t)));
+      try {
+        // If already in a dungeon, exit first (DM gave us a new one)
+        if (dungeonBlueprintRef.current) {
+          exitDungeon((t) => entries.push(entrySystem(t)));
+        }
+        applyDungeonEnter(res.dungeon_enter, (t) => entries.push(entrySystem(t)));
+      } catch (e: any) {
+        console.warn("[applyDungeonUpdates] dungeon_enter skipped:", e);
+        entries.push(entrySystem(`⚠️ dungeon_enter ไม่สมบูรณ์ — ข้าม`));
       }
-      applyDungeonEnter(res.dungeon_enter, (t) => entries.push(entrySystem(t)));
     }
     // 2. dungeon_room_move — move to new room
     if (res.dungeon_room_move && res.dungeon_room_move.room_id) {
-      if (!dungeonBlueprintRef.current) {
-        entries.push(entrySystem(`⚠️ dungeon_room_move ใช้ไม่ได้ — ยังไม่ได้เข้าดันเจี้ยน`));
-      } else {
-        applyDungeonRoomMove(res.dungeon_room_move.room_id, (t) => entries.push(entrySystem(t)));
+      try {
+        if (!dungeonBlueprintRef.current) {
+          entries.push(entrySystem(`⚠️ dungeon_room_move ใช้ไม่ได้ — ยังไม่ได้เข้าดันเจี้ยน`));
+        } else {
+          applyDungeonRoomMove(res.dungeon_room_move.room_id, (t) => entries.push(entrySystem(t)));
+        }
+      } catch (e: any) {
+        console.warn("[applyDungeonUpdates] dungeon_room_move skipped:", e);
+        entries.push(entrySystem(`⚠️ dungeon_room_move ล้มเหลว — ข้าม`));
       }
     }
     // 3. dungeon_exit — leave dungeon back to world map
     if (res.dungeon_exit === true || res.dungeon_exit === "true") {
-      exitDungeon((t) => entries.push(entrySystem(t)));
+      try {
+        exitDungeon((t) => entries.push(entrySystem(t)));
+      } catch (e: any) {
+        console.warn("[applyDungeonUpdates] dungeon_exit skipped:", e);
+        entries.push(entrySystem(`⚠️ dungeon_exit ล้มเหลว — ข้าม`));
+      }
     }
   }
 
@@ -3530,8 +3559,11 @@ export default function DnDSolo() {
           let extra: string | null = null;
           if (rq.on_fail_damage) {
             const dr = rollFormula(rq.on_fail_damage);
-            const dmg = ok ? (rq.half_on_success ? Math.floor(dr.total / 2) : 0) : dr.total;
-            if (dmg > 0) { cc = { ...cc, hp: Math.max(0, cc.hp - dmg) }; extra = `ดาเมจ ${dmg} → HP ${cc.hp}/${cc.maxHp}`; }
+            const rawDmg = ok ? (rq.half_on_success ? Math.floor(dr.total / 2) : 0) : dr.total;
+            // Sanity-cap LLM-authored dice-formula damage by the same bound as hp_delta —
+            // a bad/huge formula (e.g. "50d6") must not exceed the engine's HP delta cap.
+            const dmg = Math.min(rawDmg, HP_DELTA_CAP);
+            if (dmg > 0) { cc = { ...cc, hp: Math.max(0, cc.hp - dmg) }; extra = `ดาเมจ ${dmg}${rawDmg > dmg ? ` (ตัดจาก ${rawDmg} ตาม cap)` : ""} → HP ${cc.hp}/${cc.maxHp}`; }
           }
           rollEntry = { id: nextId(), type: "roll", title: `${ABIL_TH[rq.ability]} saving throw`, roll: r, dc: rq.dc, success: ok, extra };
           resultText = `[ผลทอย] ${rq.ability} save: ${r.total} vs DC ${rq.dc} → ${ok ? "สำเร็จ" : "ล้มเหลว"}${extra ? " " + extra : ""}. บรรยายผลต่อ`;

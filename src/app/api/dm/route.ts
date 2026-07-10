@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { createLLMClient } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,55 +39,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Call ZAI with timeout via AbortController — bypasses SDK (SDK doesn't forward signal) */
-async function callZAIWithTimeout(
-  zai: Awaited<ReturnType<typeof ZAI.create>>,
+/** Call the OpenAI-compatible chat completions endpoint with a hard timeout via AbortController. */
+async function callLLMWithTimeout(
+  client: ReturnType<typeof createLLMClient>["client"],
+  model: string,
   payload: { messages: DMMessage[]; temperature: number; max_tokens: number },
   timeoutMs: number,
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // A4 fix: bypass SDK's chat.completions.create (which doesn't forward signal)
-    // and fetch the ZAI HTTP endpoint directly with AbortController.signal.
-    // Access the SDK's config to get baseUrl + apiKey.
-    const config = (zai as any).config || (zai as any);
-    const baseUrl = config.baseUrl || config.baseURL;
-    const apiKey = config.apiKey;
-    const chatId = config.chatId;
-    const userId = config.userId;
-    if (!baseUrl || !apiKey) {
-      // Fallback to SDK if config not accessible
-      const completion = await zai.chat.completions.create(payload);
-      const text: string =
-        completion?.choices?.[0]?.message?.content ??
-        completion?.content ??
-        (typeof completion === "string" ? completion : "");
-      return text || "";
-    }
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-        ...(chatId ? { "X-Chat-Id": chatId } : {}),
-        ...(userId ? { "X-User-Id": userId } : {}),
+    const completion = await client.chat.completions.create(
+      {
+        model,
+        messages: payload.messages,
+        temperature: payload.temperature,
+        max_tokens: payload.max_tokens,
       },
-      body: JSON.stringify({
-        ...payload,
-        thinking: { type: "disabled" },
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`ZAI API ${response.status}: ${errorBody.slice(0, 200)}`);
-    }
-    const data = await response.json();
-    const text: string =
-      data?.choices?.[0]?.message?.content ??
-      data?.content ??
-      (typeof data === "string" ? data : "");
+      { signal: controller.signal },
+    );
+    const text: string = completion?.choices?.[0]?.message?.content ?? "";
     return text || "";
   } finally {
     clearTimeout(timeout);
@@ -115,12 +86,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing system or messages" }, { status: 400 });
   }
 
+  let client: ReturnType<typeof createLLMClient>["client"];
+  let model: string;
+  try {
+    ({ client, model } = createLLMClient());
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/dm] LLM config error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const zai = await ZAI.create();
-
       // On retry, append a "please respond as valid JSON only" reminder
       // to the last user message (helps recover from JSON parse failures)
       let messagesToUse = messages;
@@ -133,8 +112,9 @@ export async function POST(req: NextRequest) {
         ];
       }
 
-      const text = await callZAIWithTimeout(
-        zai,
+      const text = await callLLMWithTimeout(
+        client,
+        model,
         {
           messages: [{ role: "system", content: system }, ...messagesToUse],
           // Low temperature for deterministic JSON responses

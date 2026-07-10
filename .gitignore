@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.local.example
 
 # vercel
 .vercel
@@ -60,3 +61,7 @@ server.log
 download/*.tar.gz
 download/*.pdf
 download/*.html
+
+.env
+# Playwright MCP working artifacts
+.playwright-mcp/
