@@ -462,7 +462,6 @@ export function migrateLegacySave(raw: any): LegacySave {
  * 5. AOE ADAPTER — convert spell area_of_effect into target selection
  * ============================================================ */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import * as aoe from "./aoe";
 
 export interface SimpleEnemy {
