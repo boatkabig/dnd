@@ -25,6 +25,8 @@ const SCRIPTS = [
   "scripts/test_half_caster_slots.ts",
   "scripts/test_dm_schema.ts",
   "scripts/test_dnd_2024_compliance.ts",
+  "scripts/test_engine_wiring.ts",
+  "scripts/test_vision.ts",
 ];
 
 describe.each(SCRIPTS)("legacy script: %s", (script) => {

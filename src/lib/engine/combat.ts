@@ -41,9 +41,14 @@
  * ============================================================================
  */
 
-import { rollD20, rollDamage, type RollResult } from "./dice";
+import { roll, rollD20, rollDamage, type RollResult } from "./dice";
 import type { DamageType } from "./equipment";
 import type { Position } from "./movement";
+import {
+  type ActionTracker, type ActionDefinition, type ValidationResult,
+  createActionTracker, resetTurnActions, validateAction, consumeAction, consumeMovement,
+} from "./actionEconomy";
+import { type ActiveEffect, type TriggerOutcome, fireTriggers, tickEffect } from "./effects";
 
 // ============================================================================
 // 1. COMBAT STATE
@@ -101,6 +106,10 @@ export interface CombatState {
   lairInitiative?: number;
   /** Optional: flanking rule enabled? */
   flankingEnabled: boolean;
+  /** Per-turn resource tracker (Chapter 02) for each combatant, keyed by characterId. */
+  actionTrackers: Record<string, ActionTracker>;
+  /** Active effects/conditions (Chapter 06) across all combatants. */
+  activeEffects: ActiveEffect[];
 }
 
 export interface CombatLogEntry {
@@ -132,6 +141,10 @@ export function createCombat(
     // Tie-break: player wins (DM convention)
     return a.isPlayer ? -1 : 1;
   });
+  const actionTrackers: Record<string, ActionTracker> = {};
+  for (const c of sorted) {
+    actionTrackers[c.characterId] = createActionTracker({ characterId: c.characterId, speed: c.speed });
+  }
   return {
     active: true,
     round: 1,
@@ -144,6 +157,8 @@ export function createCombat(
     encounterDifficulty: "unknown",
     lairInitiative: options?.lairInitiative,
     flankingEnabled: options?.flankingEnabled ?? false,
+    actionTrackers,
+    activeEffects: [],
   };
 }
 
@@ -220,14 +235,122 @@ export function logCombatEvent(
 }
 
 // ============================================================================
+// 2A. ACTION ECONOMY WIRING (Chapter 02 bridge)
+// ============================================================================
+
+/** Get the action tracker for a combatant. Throws if missing (indicates a wiring bug — every combatant gets one from createCombat). */
+export function getActionTracker(state: CombatState, characterId: string): ActionTracker {
+  const tracker = state.actionTrackers[characterId];
+  if (!tracker) throw new Error(`No action tracker for combatant ${characterId}`);
+  return tracker;
+}
+
+/**
+ * Spend an action/bonus action/reaction (per ActionDefinition.cost) for a combatant.
+ * Delegates validation to actionEconomy.validateAction — guards against overspend by
+ * leaving state unchanged when invalid. Caller inspects `result.valid` to know whether
+ * the spend succeeded.
+ */
+export function spendAction(
+  state: CombatState,
+  characterId: string,
+  def: ActionDefinition,
+): { state: CombatState; result: ValidationResult } {
+  const tracker = getActionTracker(state, characterId);
+  const result = validateAction(def, tracker);
+  if (!result.valid) {
+    return { state, result };
+  }
+  const updated = consumeAction(def, tracker);
+  return {
+    state: { ...state, actionTrackers: { ...state.actionTrackers, [characterId]: updated } },
+    result,
+  };
+}
+
+/**
+ * Spend movement (in feet) for a combatant. Guards against exceeding remaining
+ * movement — returns `ok: false` and unchanged state rather than throwing, so
+ * callers can offer a partial move / reject cleanly.
+ */
+export function spendMovement(
+  state: CombatState,
+  characterId: string,
+  feet: number,
+): { state: CombatState; ok: boolean } {
+  const tracker = getActionTracker(state, characterId);
+  if (tracker.movementRemaining < feet) {
+    return { state, ok: false };
+  }
+  return {
+    state: { ...state, actionTrackers: { ...state.actionTrackers, [characterId]: consumeMovement(tracker, feet) } },
+    ok: true,
+  };
+}
+
+// ============================================================================
+// 2B. TURN START / END — wires actionEconomy budget reset + effects triggers
+// ============================================================================
+
+/**
+ * Start the current combatant's turn:
+ *   - Resets their action economy budget (1 action, 1 bonus action, movement = speed).
+ *     D&D 2024: reaction refreshes at the start of ITS OWN turn only (other
+ *     combatants' turns do not touch it).
+ *   - Fires any "on_turn_start" effect triggers (e.g. ongoing poison damage).
+ * Caller applies the returned `triggers` (deal damage / heal / apply effect) via
+ * the appropriate system; this function only resolves what should fire.
+ */
+export function startTurn(state: CombatState): { state: CombatState; triggers: TriggerOutcome[] } {
+  const current = getCurrentCombatant(state);
+  if (!current) return { state, triggers: [] };
+
+  const tracker = state.actionTrackers[current.characterId];
+  const actionTrackers = tracker
+    ? { ...state.actionTrackers, [current.characterId]: resetTurnActions(tracker, current.speed) }
+    : state.actionTrackers;
+
+  const triggers = fireTriggers(state.activeEffects, current.characterId, "on_turn_start");
+  return { state: { ...state, actionTrackers }, triggers };
+}
+
+/**
+ * End the current combatant's turn:
+ *   - Fires any "on_turn_end" effect triggers (e.g. regeneration).
+ *   - Ticks that combatant's own timed effects (durations measured in rounds
+ *     decrement once per their own turn cycle; expired effects are removed).
+ * Only the current combatant's effects are ticked — other combatants' durations
+ * are untouched until their own turn ends.
+ */
+export function endTurn(state: CombatState): { state: CombatState; triggers: TriggerOutcome[] } {
+  const current = getCurrentCombatant(state);
+  if (!current) return { state, triggers: [] };
+
+  const triggers = fireTriggers(state.activeEffects, current.characterId, "on_turn_end");
+  const activeEffects = tickEffect(state.activeEffects, current.characterId);
+  return { state: { ...state, activeEffects }, triggers };
+}
+
+// ============================================================================
 // 3. ATTACK RESOLUTION PIPELINE
 // ============================================================================
+
+/** One additive component of an attack bonus, tagged with its source for audit/UI display. */
+export interface AttackModifierEntry {
+  /** e.g. "ability_mod", "proficiency", "magic_weapon", "bless", "other". */
+  source: string;
+  value: number;
+}
 
 export interface AttackRequest {
   attackerId: string;
   targetId: string;
-  /** Attack bonus (proficiency + ability + magic + effects). */
-  attackBonus: number;
+  /**
+   * Auditable breakdown of additive attack-roll modifiers (ability mod,
+   * proficiency, magic bonus, other effects). Summed to form the attack bonus —
+   * callers no longer pass a single opaque number so the "why" is reconstructable.
+   */
+  modifiers: AttackModifierEntry[];
   /** Forced advantage/disadvantage (e.g. from Reckless Attack). */
   advantage?: boolean;
   disadvantage?: boolean;
@@ -260,7 +383,10 @@ export interface AttackResult {
   immune: boolean;
   advantageUsed: boolean;
   disadvantageUsed: boolean;
-  rollResult?: RollResult;
+  /** Auditable per-source attack modifiers, echoing the request (ability mod, proficiency, other bonuses). */
+  attackModifiers: AttackModifierEntry[];
+  /** REAL dice breakdown of the attack roll: d20 value(s) rolled, kept/dropped die, crit/fumble, history string. */
+  rollResult: RollResult;
 }
 
 /**
@@ -287,23 +413,32 @@ export function resolveAttack(
   else if (req.disadvantage && !req.advantage) adv = "disadvantage";
   // (Both = cancel to none per D&D 5e)
 
-  // Roll attack
-  const roll = rollD20(req.attackBonus, adv, { seed: req.seed });
+  // Roll the REAL d20 (no modifier baked into the expression, so the per-source
+  // modifier breakdown below stays the single source of truth for the bonus —
+  // and we sidestep the dice parser's negative-flat-modifier quirk entirely).
+  const attackRoll = roll("1d20", {
+    advantage: adv === "advantage",
+    disadvantage: adv === "disadvantage",
+    seed: req.seed,
+  });
+  const naturalDie = attackRoll.terms[0].kept[0];
+  const attackBonus = req.modifiers.reduce((sum, m) => sum + m.value, 0);
+  const total = naturalDie + attackBonus;
   const effectiveAC = target.ac + req.coverAC;
 
   // Hit determination
   let hit: boolean;
   let critical = false;
-  if (roll.die === 1) {
+  if (naturalDie === 1) {
     hit = false;
-  } else if (roll.die === 20) {
+  } else if (naturalDie === 20) {
     hit = true;
     critical = true;
   } else if (req.coverAC >= 999) {
     // Full cover: unhittable
     hit = false;
   } else {
-    hit = roll.total >= effectiveAC;
+    hit = total >= effectiveAC;
   }
 
   // Damage calculation
@@ -347,8 +482,8 @@ export function resolveAttack(
   return {
     hit,
     critical,
-    roll: roll.die,
-    total: roll.total,
+    roll: naturalDie,
+    total,
     targetAC: effectiveAC,
     damage,
     damageType: req.damageType,
@@ -360,20 +495,8 @@ export function resolveAttack(
     immune,
     advantageUsed: adv === "advantage",
     disadvantageUsed: adv === "disadvantage",
-    rollResult: dmg_RollResult(damage, hit),
-  };
-}
-
-/** Internal: create a minimal RollResult for damage breakdown (used by UI). */
-function dmg_RollResult(damage: number, hit: boolean): RollResult | undefined {
-  if (!hit) return undefined;
-  return {
-    expression: "damage",
-    terms: [],
-    total: damage,
-    history: `damage=${damage}`,
-    isCrit: false,
-    isFumble: false,
+    attackModifiers: req.modifiers,
+    rollResult: attackRoll,
   };
 }
 
