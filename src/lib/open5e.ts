@@ -580,12 +580,22 @@ function withEdition(url: string, edition: Edition = DEFAULT_EDITION): string {
 
 const UPSTREAM_TIMEOUT_MS = 8000;
 
+// Injectable fetch seam — lets tests substitute a fixture-backed implementation
+// so upstream Open5e calls stay deterministic and offline, without weakening the
+// real fetch → normalize path they exercise. Defaults to the global fetch.
+let open5eFetch: typeof fetch = (input, init) => fetch(input, init);
+
+/** Override the fetch used for all Open5e upstream calls (pass null to restore the default). */
+export function setOpen5eFetch(impl: typeof fetch | null): void {
+  open5eFetch = impl ?? ((input, init) => fetch(input, init));
+}
+
 async function fetchOpen5e<T>(path: string, edition: Edition = DEFAULT_EDITION): Promise<T> {
   const url = withEdition(`${OPEN5E_BASE}${path}`, edition);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
+    const res = await open5eFetch(url, {
       signal: controller.signal,
       headers: { Accept: "application/json", "User-Agent": "dnd-solo-engine/1.0" },
     });
@@ -1165,7 +1175,7 @@ async function fetchOpen5eWithTimeout<T>(path: string, edition: Edition = DEFAUL
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await open5eFetch(url, {
       signal: controller.signal,
       headers: { Accept: "application/json", "User-Agent": "dnd-solo-engine/1.0" },
     });
@@ -1559,7 +1569,7 @@ export async function search(query: string, edition: Edition = DEFAULT_EDITION):
   const params = new URLSearchParams();
   params.set("query", query);
   params.set("document__gamesystem__key", `5e-${edition}`);
-  const res = await fetch(`${OPEN5E_BASE}/search/?${params}`, {
+  const res = await open5eFetch(`${OPEN5E_BASE}/search/?${params}`, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });

@@ -1,0 +1,97 @@
+{
+  "_note": "HAND-AUTHORED fixture for the combat-bridge test. Faithful minimal Open5e v2 (5e-2024 SRD) raw creature shape for Brown Bear, matching the fields src/lib/open5e.ts#normalizeCreature reads. Used to keep the brown-bear Multiattack test deterministic and offline (network is blocked in CI). The bite/claw attacks intentionally carry the Open5e quirk where damage_type is null and the real type lives on extra_damage_type.",
+  "key": "brown-bear",
+  "name": "Brown Bear",
+  "desc": "A large brown bear.",
+  "size": { "name": "Large", "key": "large" },
+  "type": { "name": "Beast", "key": "beast" },
+  "alignment": "unaligned",
+  "armor_class": 11,
+  "armor_detail": "",
+  "hit_points": 34,
+  "hit_dice": "4d10+12",
+  "speed": { "walk": 40, "swim": 30, "unit": "feet" },
+  "ability_scores": {
+    "strength": 19,
+    "dexterity": 10,
+    "constitution": 16,
+    "intelligence": 2,
+    "wisdom": 13,
+    "charisma": 7
+  },
+  "modifiers": {
+    "strength": 4,
+    "dexterity": 0,
+    "constitution": 3,
+    "intelligence": -4,
+    "wisdom": 1,
+    "charisma": -2
+  },
+  "saving_throws": {},
+  "skill_bonuses": { "perception": 3 },
+  "passive_perception": 13,
+  "proficiency_bonus": 2,
+  "senses": "Passive Perception 13",
+  "languages": { "as_string": "", "data": [] },
+  "challenge_rating": 1,
+  "experience_points": 200,
+  "darkvision_range": 60,
+  "actions": [
+    {
+      "name": "Multiattack",
+      "desc": "The bear makes one Bite attack and one Claw attack.",
+      "action_type": "ACTION",
+      "attacks": []
+    },
+    {
+      "name": "Bite",
+      "desc": "Melee Attack Roll: +5, reach 5 ft. Hit: 8 (1d8 + 4) Piercing damage.",
+      "action_type": "ACTION",
+      "attacks": [
+        {
+          "name": "Bite attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 5,
+          "reach": 5,
+          "target_creature_only": false,
+          "damage_die_count": 1,
+          "damage_die_type": "D8",
+          "damage_bonus": 3,
+          "damage_type": null,
+          "extra_damage_type": { "name": "Piercing", "key": "piercing" }
+        }
+      ]
+    },
+    {
+      "name": "Claw",
+      "desc": "Melee Attack Roll: +5, reach 5 ft. Hit: 6 (1d4 + 4) Slashing damage.",
+      "action_type": "ACTION",
+      "attacks": [
+        {
+          "name": "Claw attack",
+          "attack_type": "WEAPON",
+          "to_hit_mod": 5,
+          "reach": 5,
+          "target_creature_only": false,
+          "damage_die_count": 1,
+          "damage_die_type": "D4",
+          "damage_bonus": 3,
+          "damage_type": null,
+          "extra_damage_type": { "name": "Slashing", "key": "slashing" }
+        }
+      ]
+    }
+  ],
+  "traits": [],
+  "legendary_actions": [],
+  "reactions": [],
+  "bonus_actions": [],
+  "mythic_actions": [],
+  "environments": [],
+  "creaturesets": [],
+  "document": {
+    "name": "5e-2024 SRD",
+    "key": "srd-2024",
+    "gamesystem": { "name": "5e 2024", "key": "5e-2024" }
+  }
+}
