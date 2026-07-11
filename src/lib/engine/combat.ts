@@ -647,6 +647,58 @@ export function rollDeathSave(
   return { successes, failures, state, roll };
 }
 
+export interface DeathSaveTransition {
+  deathSaves: { successes: number; failures: number };
+  hp: number;
+  dead: boolean;
+  state: DeathSaveResult["state"];
+  rollResult: DeathSaveResult;
+}
+
+/**
+ * Pure state transition for a downed character taking a death save — same rules as
+ * rollDeathSave() plus the HP/dead bookkeeping around it (nat-20 revive to 1 HP,
+ * stabilize-at-0-HP snaps to 1 HP, 3 failures marks dead). Does not touch HP on a
+ * plain unconscious result — callers must NOT clamp HP themselves.
+ * Used by both the in-combat and out-of-combat callers so hp<=0 always routes through
+ * the same dying/death logic instead of being silently clamped back to 1 HP.
+ */
+export function applyDeathSaveRoll(
+  current: { successes: number; failures: number; hp: number },
+  roll: number,
+): DeathSaveTransition {
+  const rollResult = rollDeathSave({ successes: current.successes, failures: current.failures }, roll);
+  let hp = current.hp;
+  if (rollResult.state === "revived") hp = 1;
+
+  if (rollResult.state === "dead") {
+    return {
+      deathSaves: { successes: rollResult.successes, failures: rollResult.failures },
+      hp,
+      dead: true,
+      state: "dead",
+      rollResult,
+    };
+  }
+  if (rollResult.state === "stable" || hp > 0) {
+    if (hp <= 0) hp = 1;
+    return {
+      deathSaves: { successes: 0, failures: 0 },
+      hp,
+      dead: false,
+      state: rollResult.state === "revived" ? "revived" : "stable",
+      rollResult,
+    };
+  }
+  return {
+    deathSaves: { successes: rollResult.successes, failures: rollResult.failures },
+    hp,
+    dead: false,
+    state: "unconscious",
+    rollResult,
+  };
+}
+
 /**
  * Apply healing to a downed character — resets death saves and revives.
  */

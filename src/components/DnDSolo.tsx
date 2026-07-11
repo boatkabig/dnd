@@ -85,7 +85,7 @@ import DMChat from "@/components/game/DMChat";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
 import { buildBridgeState, applyBridgeDamage, planMultiattackSequence, getCombatView } from "@/lib/engine/combatBridge";
-import { rollDeathSave, resolveContestedAction } from "@/lib/engine/combat";
+import { applyDeathSaveRoll, resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName, toSpellDisplayName } from "@/lib/engine/effects";
 // Phase 3: spell-legality (2024) + vision/LOS wiring — engine-owned rules
 import { canCast2024, type SpellLegalityReason } from "@/lib/engine/magic";
@@ -2678,6 +2678,33 @@ export default function DnDSolo() {
     return { cc: nc, cb: ncb, endsTurn };
   }
 
+  // Shared death-save state transition (D&D 5e/2024 dying rules): 3 successes = stable,
+  // 3 failures = dead, nat-20 = revive at 1 HP, nat-1 = 2 failures. The pure dice/math +
+  // HP/dead bookkeeping lives in engine combat.applyDeathSaveRoll; this helper is the
+  // React-facing wrapper (setPhase, log entries) so both the in-combat turn loop
+  // (playerCombatAction) and out-of-combat hazard damage (submitAction) share one code path.
+  function resolveDeathSave(cc: any, entries: any[], inCombat: boolean): { cc: any; state: "unconscious" | "stable" | "dead" | "revived" } {
+    const r = rollD20(0);
+    const prev = { successes: cc.deathSaves.s, failures: cc.deathSaves.f, hp: cc.hp };
+    const result = applyDeathSaveRoll(prev, r.die);
+    const dsr = result.rollResult;
+    const nc = { ...cc, hp: result.hp, deathSaves: { s: result.deathSaves.successes, f: result.deathSaves.failures }, dead: result.dead };
+
+    if (dsr.state === "revived") { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
+    else if (dsr.successes > prev.successes) { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${dsr.successes}/3` }); }
+    else { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${dsr.failures}/3` }); }
+
+    if (result.state === "dead") {
+      entries.push(entrySystem(`☠️ ${nc.name} เสียชีวิต...`));
+      setPhase("dead");
+      return { cc: nc, state: "dead" };
+    }
+    if (result.state === "stable") {
+      entries.push(entrySystem(inCombat ? "อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป" : "อาการคงที่ — รอดชีวิตอย่างหวุดหวิด"));
+    }
+    return { cc: nc, state: result.state };
+  }
+
   function playerCombatAction(kind: string, payload?: any) {
     const combat0 = combatRef.current;
     const c0 = cRef.current;
@@ -2687,29 +2714,18 @@ export default function DnDSolo() {
     let cb = { ...combat0, enemies: combat0.enemies.map((e: any) => ({ ...e })) };
     const entries: any[] = [];
 
-    // --- unconscious: death save loop (routed through engine combat.rollDeathSave;
-    //     3 successes = stable, 3 failures = dead, nat-20 = revive 1 HP, nat-1 = 2 failures) ---
+    // --- unconscious: death save loop (routed through shared resolveDeathSave helper, which
+    //     wraps engine.combat.rollDeathSave; 3 successes = stable, 3 failures = dead,
+    //     nat-20 = revive 1 HP, nat-1 = 2 failures) ---
     if (cc.hp <= 0 && !cc.dead) {
-      const r = rollD20(0);
-      const prev = { s: cc.deathSaves.s, f: cc.deathSaves.f };
-      const dsr = rollDeathSave({ successes: prev.s, failures: prev.f }, r.die);
-      const ds = { s: dsr.successes, f: dsr.failures };
-      if (dsr.state === "revived") { cc.hp = 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
-      else if (dsr.successes > prev.s) { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${ds.s}/3` }); }
-      else { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${ds.f}/3` }); }
-      cc.deathSaves = ds;
-      if (dsr.state === "dead") {
-        cc.dead = true;
-        entries.push(entrySystem(`☠️ ${cc.name} เสียชีวิต...`));
+      const dsResult = resolveDeathSave(cc, entries, true);
+      cc = dsResult.cc;
+      if (dsResult.state === "dead") {
         const finalLog = [...log0, ...entries];
         commitCombat(cc, null, finalLog); persist(cc, scene, finalLog, null, history);
-        setPhase("dead");
         return;
       }
-      if (dsr.state === "stable" || cc.hp > 0) {
-        if (cc.hp <= 0) { entries.push(entrySystem("อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป")); }
-        cc.deathSaves = { s: 0, f: 0 };
-        if (cc.hp <= 0) cc.hp = 1;
+      if (dsResult.state === "stable" || dsResult.state === "revived" || cc.hp > 0) {
         // Clear combat state completely — player is revived, combat ends
         cb = null as any;
         const finalLog = [...log0, ...entries];
@@ -3998,7 +4014,10 @@ export default function DnDSolo() {
 
       if (cb && !cb.playerFirst) { cc = enemyAttacks(cb, cc, entries); cb.round += 1; }
 
-      if (cc.hp <= 0 && !cb) cc = { ...cc, hp: 1 };
+      if (cc.hp <= 0 && !cc.dead && !cb) {
+        const dsResult = resolveDeathSave(cc, entries, false);
+        cc = dsResult.cc;
+      }
 
       const finalLog = [...baseLog, ...entries];
       // Smart history trimming — keep first 2 (world map setup) + last 22 + summary of middle
