@@ -148,6 +148,33 @@ test("✨ casting Magic Missile in combat consumes a spell slot", async ({ page 
   await expect.poll(async () => fullPips.count()).toBeLessThan(before);
 });
 
+// ── 5a. Magic Missile auto-hit damage actually lands (Task #23) ─────────────
+test("✨ casting Magic Missile actually lowers the enemy's HP", async ({ page }) => {
+  const dm = mockDm(page, [OPENING_RESPONSE, ONE_FROG_COMBAT]);
+  await dm.install();
+  await mockIntent(page);
+  await page.goto("/");
+
+  await quickStartWizard(page);
+
+  await submitAction(page, "เดินเข้าไปในถ้ำ");
+  await expect(page.getByText("E2E_FLOWS_FROG_a_croak_in_the_dark")).toBeVisible();
+
+  // Magic Missile auto-hits (no attack roll, no save) — damage is deterministic,
+  // unlike the Fire Bolt spell-attack-roll test below. The frog's 1 HP means a
+  // single dart always kills it, which ends combat and (per mock-dm.ts) the
+  // exhausted response queue re-serves ONE_FROG_COMBAT's start_combat for the
+  // post-kill narration call — spawning a fresh full-HP frog. That makes the
+  // `.enemy-card` HP bar itself racy to read afterward, so assert on the combat
+  // log line instead: it's written synchronously by castSRDSpell the instant
+  // the dart lands, and directly proves the dart's damage reduced the frog's
+  // HP to 0 ("dead!") rather than the cast being a no-op narration fallback.
+  await page.getByRole("button", { name: /ร่ายเวท/ }).click();
+  await page.getByRole("button", { name: /Magic Missile/ }).click();
+
+  await expect(page.getByText(/Magic Missile: โดนอัตโนมัติ.*Frog dead!/)).toBeVisible();
+});
+
 // ── 5b. Spell targeting honors the player's selected enemy (Task #19) ───────
 const TWO_FROG_COMBAT: MockDmResponse = {
   narration: "E2E_FLOWS_TWOFROG_a_pair_of_frogs_blink",

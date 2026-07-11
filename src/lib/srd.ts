@@ -125,7 +125,16 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         desc: cached.desc,
         higherLevel: cached.higherLevel,
         classes: cached.classes,
-        kind: cached.attackRoll ? "attack" : (cached as any).saveAbility ? "save" : cached.damage ? "aoe_damage" : "utility",
+        // Has damage but no attack roll and no save → auto-hit (Magic Missile
+        // style); castSRDSpell's "auto" branch is what actually applies this
+        // damage. ("aoe_damage" is not a kind castSRDSpell switches on — a
+        // spell landing there silently fell through to the no-op "utility"
+        // narration branch and never dealt damage.)
+        // Guard with !concentration: curse/mark spells like Hex carry a
+        // `damage` field too (the bonus damage they add to a LATER attack),
+        // but they're concentration buffs, not instant direct-damage spells —
+        // without this guard they'd wrongly auto-deal that damage on cast.
+        kind: cached.attackRoll ? "attack" : (cached as any).saveAbility ? "save" : (cached.damage && !cached.concentration) ? "auto" : "utility",
         damage: cached.damage,
         damageType: cached.damageType,
         saveAbility: (cached as any).saveAbility,
@@ -174,7 +183,14 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         desc: open5eSpell.desc,
         higherLevel: open5eSpell.higherLevel,
         classes: open5eSpell.classes,
-        kind: open5eSpell.attackRoll ? "attack" : open5eSpell.saveAbility ? "save" : open5eSpell.damage ? "aoe_damage" : open5eSpell.saveAbility ? "save" : "utility",
+        // Same derivation as the cached branch above — has damage but no
+        // attack roll and no save → "auto" (auto-hit, e.g. Magic Missile),
+        // which is the only damage-dealing kind castSRDSpell falls through to
+        // correctly when neither an attack roll nor a save applies. Guarded by
+        // !concentration so curse/mark spells (e.g. Hex) whose `damage` field
+        // represents a later-attack bonus, not an instant hit, aren't
+        // misclassified as dealing direct damage on cast.
+        kind: open5eSpell.attackRoll ? "attack" : open5eSpell.saveAbility ? "save" : (open5eSpell.damage && !open5eSpell.concentration) ? "auto" : "utility",
         damage: open5eSpell.damage,
         damageType: open5eSpell.damageType,
         saveAbility: open5eSpell.saveAbility,
