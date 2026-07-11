@@ -653,6 +653,30 @@ export function isConcentrationSpellName(name: string): boolean {
   return CONCENTRATION_SPELL_NAMES.includes(name);
 }
 
+/** Short connector words that stay lowercase in mid-name position (title case). */
+const LOWERCASE_CONNECTORS = new Set(["of", "the", "a", "an", "and", "or", "in", "on"]);
+
+/**
+ * Canonical display casing for a spell/buff name (e.g. from an SRD index like
+ * "hunter-s-mark" → "hunter's mark", or an already-cased name).
+ *
+ * Capitalizes only the first letter of each word (so "Hunter's" stays
+ * "Hunter's", not "Hunter'S") and keeps short connector words lowercase past
+ * the first word (so "Shield of Faith" stays "Shield of Faith", not
+ * "Shield Of Faith"). This is the canonical casing CONCENTRATION_SPELL_NAMES
+ * uses, so display names produced here always match isConcentrationSpellName.
+ */
+export function toSpellDisplayName(name: string): string {
+  return name
+    .split(" ")
+    .map((word, i) => {
+      if (!word) return word;
+      if (i > 0 && LOWERCASE_CONNECTORS.has(word.toLowerCase())) return word.toLowerCase();
+      return word[0].toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
 /**
  * Check if a character can begin concentrating on a new spell.
  * (Only one concentration spell allowed at a time in D&D 5e.)
