@@ -58,6 +58,47 @@ export interface NormalizedSpell {
   isCantrip: boolean;
 }
 
+// Subset of castSRDSpell's buffMap: only self-beneficial buffs belong here
+// (they help the caster and carry no attack roll, save, or damage of their
+// own). Enemy-debuff spells (bane, slow, faerie fire) and spells that always
+// carry a damage field (hex, hunter's mark, spiritual weapon) are
+// deliberately excluded — if Open5e ever omits their save/attack/damage
+// field, this set must not let them slip through and get misclassified as
+// "buff", which would apply their effect to the caster instead of the enemy.
+// Note: of the six listed, only shield, mage-armor, and shield-of-faith
+// currently activate the "buff" branch in practice — bless, haste, and
+// spirit-guardians carry a save/damage field in Open5e's data today and are
+// intercepted by the attack/save precedence above before reaching this check.
+const BUFF_SPELL_INDICES = new Set([
+  "shield",
+  "mage-armor",
+  "spirit-guardians",
+  "bless",
+  "haste",
+  "shield-of-faith",
+]);
+
+function deriveSpellKind({
+  index,
+  attackRoll,
+  saveAbility,
+  damage,
+  concentration,
+}: {
+  index: string;
+  attackRoll?: boolean;
+  saveAbility?: string;
+  damage?: string;
+  concentration: boolean;
+}): NormalizedSpell["kind"] {
+  // Preserve the existing attack/save/auto precedence. Known buff-map spells
+  // become buffs only when they have no direct combat resolution to perform.
+  if (attackRoll) return "attack";
+  if (saveAbility) return "save";
+  if (damage && !concentration) return "auto";
+  if (BUFF_SPELL_INDICES.has(index) && !damage) return "buff";
+  return "utility";
+}
 /* ----------------- caching ----------------- */
 const listCache = new Map<string, SRDListResponse>();
 
@@ -134,7 +175,13 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         // `damage` field too (the bonus damage they add to a LATER attack),
         // but they're concentration buffs, not instant direct-damage spells —
         // without this guard they'd wrongly auto-deal that damage on cast.
-        kind: cached.attackRoll ? "attack" : (cached as any).saveAbility ? "save" : (cached.damage && !cached.concentration) ? "auto" : "utility",
+        kind: deriveSpellKind({
+          index: cached.index,
+          attackRoll: cached.attackRoll,
+          saveAbility: (cached as any).saveAbility,
+          damage: cached.damage,
+          concentration: cached.concentration,
+        }),
         damage: cached.damage,
         damageType: cached.damageType,
         saveAbility: (cached as any).saveAbility,
@@ -190,7 +237,13 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         // !concentration so curse/mark spells (e.g. Hex) whose `damage` field
         // represents a later-attack bonus, not an instant hit, aren't
         // misclassified as dealing direct damage on cast.
-        kind: open5eSpell.attackRoll ? "attack" : open5eSpell.saveAbility ? "save" : (open5eSpell.damage && !open5eSpell.concentration) ? "auto" : "utility",
+        kind: deriveSpellKind({
+          index: open5eSpell.index,
+          attackRoll: open5eSpell.attackRoll,
+          saveAbility: open5eSpell.saveAbility,
+          damage: open5eSpell.damage,
+          concentration: open5eSpell.concentration,
+        }),
         damage: open5eSpell.damage,
         damageType: open5eSpell.damageType,
         saveAbility: open5eSpell.saveAbility,
