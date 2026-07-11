@@ -2604,26 +2604,28 @@ export default function DnDSolo() {
     } else if (sp.kind === "buff") {
       // Concentration buff. Apply via buff system so it gets tracked + ticked.
       // Spell-name → buff metadata mapping (data-driven approach)
-      const buffMap: Record<string, { duration: number; effectDesc: string; concentration?: boolean }> = {
+      const buffMap: Record<string, { duration: number; effectDesc: string }> = {
         "shield":           { duration: 1,  effectDesc: "+5 AC (reaction, 1 รอบ)" },
         "mage-armor":       { duration: -1, effectDesc: "AC 13 + DEX (8 ชม.)" },
-        "spirit-guardians": { duration: 10, effectDesc: "ศัตรูโดน 3d8/รอบ (WIS save ลดครึ่ง)", concentration: true },
+        "spirit-guardians": { duration: 10, effectDesc: "ศัตรูโดน 3d8/รอบ (WIS save ลดครึ่ง)" },
         "spiritual-weapon": { duration: 10, effectDesc: "โจมตีเอง 1d8+WIS/รอบ" },
-        "bless":            { duration: 10, effectDesc: "+1d4 โจมตี/save", concentration: true },
-        "haste":            { duration: 10, effectDesc: "+2 AC, ได้เปรียบ DEX, ความเร็ว x2, +1 action/รอบ", concentration: true },
-        "shield-of-faith":  { duration: 10, effectDesc: "+2 AC", concentration: true },
-        "bane":             { duration: 10, effectDesc: "-1d4 โจมตี/save (ศัตรู)", concentration: true },
-        "hunter-s-mark":    { duration: 60, effectDesc: "+1d6 ดาเมจต่อการโจมตี", concentration: true },
-        "hex":              { duration: 60, effectDesc: "+1d6 ดาเมจ + disadv ability", concentration: true },
-        "faerie-fire":      { duration: 10, effectDesc: "adv โจมตีใส่เป้า (glow)", concentration: true },
-        "slow":             { duration: 10, effectDesc: "ครึ่งความเร็ว, -2 AC, -2 save", concentration: true },
+        "bless":            { duration: 10, effectDesc: "+1d4 โจมตี/save" },
+        "haste":            { duration: 10, effectDesc: "+2 AC, ได้เปรียบ DEX, ความเร็ว x2, +1 action/รอบ" },
+        "shield-of-faith":  { duration: 10, effectDesc: "+2 AC" },
+        "bane":             { duration: 10, effectDesc: "-1d4 โจมตี/save (ศัตรู)" },
+        "hunter-s-mark":    { duration: 60, effectDesc: "+1d6 ดาเมจต่อการโจมตี" },
+        "hex":              { duration: 60, effectDesc: "+1d6 ดาเมจ + disadv ability" },
+        "faerie-fire":      { duration: 10, effectDesc: "adv โจมตีใส่เป้า (glow)" },
+        "slow":             { duration: 10, effectDesc: "ครึ่งความเร็ว, -2 AC, -2 save" },
       };
       const buffMeta = buffMap[sp.index] || { duration: 10, effectDesc: sp.desc.slice(0, 80) };
       const buffName = toSpellDisplayName(sp.name);
       // D&D 2024 single-concentration: casting a new concentration spell ends the
       // previous one. Which buffs are concentration is owned by the engine
-      // (engine/effects.isConcentrationSpellName).
-      if (buffMeta.concentration) {
+      // (engine/effects.isConcentrationSpellName) — this is the single source of
+      // truth; do not hand-maintain a second "concentration: true" list here.
+      const isConcentration = isConcentrationSpellName(buffName);
+      if (isConcentration) {
         const superseded = (nc.buffs || []).filter(
           (b: any) => isConcentrationSpellName(b.name) && b.name !== buffName,
         );
@@ -2648,7 +2650,7 @@ export default function DnDSolo() {
         ncb.haste = true;
         // Haste gives +1 action — already tracked via buff
       }
-      entries.push(entrySystem(`✨ ${sp.name}: ${buffMeta.effectDesc}${buffMeta.concentration ? " (concentration)" : ""}`));
+      entries.push(entrySystem(`✨ ${sp.name}: ${buffMeta.effectDesc}${isConcentration ? " (concentration)" : ""}`));
       // Apply conditionsAdd (Hold Person, etc.)
       if (sp.conditionsAdd && sp.conditionsAdd.length > 0) {
         const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
