@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { RollTicket } from "../DnDSolo";
+import { RollTicket } from "@/lib/dndSoloShared";
 
 export interface AdventureLogProps {
   log: any[];

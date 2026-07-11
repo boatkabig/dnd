@@ -20,7 +20,7 @@ import { concentrationCheckDC as magicConcDC } from "../src/lib/engine/magic";
 import { resolveContestedAction } from "../src/lib/engine/combat";
 import { influenceDC, resolveInfluence } from "../src/lib/social";
 import { exhaustionPenalty, exhaustionSpeedPenalty } from "../src/lib/gameData";
-import { WEAPONS, WEAPON_MASTERIES, ORIGIN_FEATS } from "../src/lib/gameData";
+import { WEAPONS, WEAPON_MASTERIES, ORIGIN_FEATS, RACES } from "../src/lib/gameData";
 
 let pass = 0, fail = 0;
 function check(label: string, cond: boolean, extra: string = "") {
@@ -137,8 +137,8 @@ check("Savage Attacker rolls twice (not reroll)", ORIGIN_FEATS.savage_attacker.d
 
 // 11. Species: no ability score bonuses (moved to Background)
 console.log("\n11. Species — No ability score bonuses (D&D 2024)");
-check("Human bonus is empty {}", Object.keys(WEAPONS).length > 0 && JSON.stringify(require("../src/lib/gameData").RACES.human.bonus) === "{}");
-check("Elf bonus is empty {}", JSON.stringify(require("../src/lib/gameData").RACES.elf.bonus) === "{}");
+check("Human bonus is empty {}", Object.keys(WEAPONS).length > 0 && JSON.stringify(RACES.human.bonus) === "{}");
+check("Elf bonus is empty {}", JSON.stringify(RACES.elf.bonus) === "{}");
 
 // Summary
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);

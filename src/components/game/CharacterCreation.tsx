@@ -6,7 +6,7 @@ import {
   ALIGNMENTS, LANGUAGES, ORIGIN_FEATS,
 } from "@/lib/gameData";
 import { srdListSpells } from "@/lib/srd";
-import { d, makeCharacter, SRD_OK } from "../DnDSolo";
+import { d, makeCharacter, SRD_OK } from "@/lib/dndSoloShared";
 
 export default function CharacterCreation({ onComplete, onCancel }: { onComplete: (character: any) => void; onCancel: () => void }) {
   // Character creation state

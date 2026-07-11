@@ -71,6 +71,8 @@ const wand: ItemDef = {
   identified: false, identifyDC: 15,
 };
 console.log("\nIs magic item:", isMagicItem(wand));
+// useItemCharge is a plain inventory helper, not a React hook — false positive on naming convention.
+// eslint-disable-next-line react-hooks/rules-of-hooks
 console.log("Use charge:", useItemCharge(wand), "charges left:", wand.magic?.charges);
 rechargeItem(wand);
 console.log("After recharge:", wand.magic?.charges);

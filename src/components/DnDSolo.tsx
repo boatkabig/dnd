@@ -108,6 +108,9 @@ import {
 } from "@/lib/engine/sessionZero";
 import { resolveExplorationTurn } from "@/lib/engine/exploration";
 import { sellPrice as sellPriceOf, bargainOutcome } from "@/lib/engine/economy";
+// Shared with game/* components (CharacterCreation, CharacterSheet, AdventureLog) —
+// lives in lib/ to avoid a circular import back into this file.
+import { d, makeCharacter, SRD_OK, setSrdOk } from "@/lib/dndSoloShared";
 
 /**
  * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
@@ -160,9 +163,6 @@ function hitEnemy(cbLike: any, target: any, amount: number): number {
    - Races: all 9+ SRD species.
    ============================================================ */
 
-/* ---------------- DICE ENGINE ---------------- */
-export const d = (sides: number) => Math.floor(Math.random() * sides) + 1;
-
 export function rollFormula(formula: string) {
   const m = String(formula).replace(/\s/g, "").match(/^(\d*)d(\d+)([+-]\d+)?$/i);
   if (!m) return { total: 0, rolls: [] as number[], mod: 0, formula };
@@ -180,94 +180,6 @@ function rollD20(modv: number, adv: "none" | "advantage" | "disadvantage" = "non
   if (adv === "advantage") die = Math.max(a, b);
   if (adv === "disadvantage") die = Math.min(a, b);
   return { die, other: adv !== "none" ? (die === a ? b : a) : null, mod: modv, total: die + modv, adv };
-}
-
-/* ---------------- CHARACTER FACTORY ---------------- */
-export function makeCharacter(name: string, raceKey: string, classKey: string, bgKey: string, opts?: {
-  abilities?: Record<string, number>;
-  extraSkills?: string[];
-  expertise?: string[];
-  equipment?: string[];
-  knownSpells?: string[];
-  details?: { age?: string; height?: string; appearance?: string; ideal?: string; bond?: string; flaw?: string; backstory?: string };
-  alignment?: string;
-  languages?: string[];
-  // D&D 2024: Background grants +2/+1 OR +1/+1/+1 — player picks which abilities
-  // `bgAsi` is an array of ability keys that get +1 each (length 2 = +1/+1, length 3 = +1/+1/+1)
-  // Special: if same ability appears twice → that's +2
-  bgAsi?: string[];
-}) {
-  const cls = CLASSES[classKey];
-  const race = RACES[raceKey];
-  const bg = BACKGROUNDS[bgKey] || null;
-  // Background ASI: +2/+1 OR +1/+1/+1 (D&D 2024)
-  // Count occurrences of each ability in bgAsi → that's the bonus (+2 if appears twice)
-  const bgAsiBonus: Record<string, number> = {};
-  if (opts?.bgAsi && opts.bgAsi.length > 0) {
-    for (const a of opts.bgAsi) {
-      bgAsiBonus[a] = (bgAsiBonus[a] || 0) + 1;
-    }
-  }
-  // Use custom abilities if provided, otherwise default class array + race bonus + background ASI
-  const baseAbilities: Record<string, number> = {};
-  ABILS.forEach((a) => {
-    baseAbilities[a] = (cls.array[a] || 10) + (race.bonus[a] || 0) + (bgAsiBonus[a] || 0);
-  });
-  const abilities: Record<string, number> = opts?.abilities
-    ? (() => {
-        const result: Record<string, number> = {};
-        ABILS.forEach((a) => {
-          result[a] = (opts.abilities![a] || 10) + (race.bonus[a] || 0) + (bgAsiBonus[a] || 0);
-        });
-        return result;
-      })()
-    : baseAbilities;
-  // Cap at 20 (D&D 5e ability score max)
-  ABILS.forEach((a) => { abilities[a] = Math.min(20, abilities[a]); });
-  const level = 1;
-  const maxHp = cls.hitDie + mod(abilities.con);
-  // Build inventory from class defaults + custom equipment picks
-  const inventory: string[] = ["Rations", "Rations", "Rations", "Torch", "Rope (50 ft)", "Potion of Healing", WEAPONS[cls.weapon].th];
-  if (cls.ranged) inventory.push(WEAPONS[cls.ranged].th);
-  if (opts?.equipment) inventory.push(...opts.equipment);
-  // Extra skills from background + custom picks
-  const bgSkills = bg ? bg.skills.slice() : [];
-  const allExtraSkills = [...bgSkills, ...(opts?.extraSkills || [])];
-  const c: any = {
-    name, race: raceKey, cls: classKey, level, xp: 0,
-    background: bg ? bgKey : null,
-    extraSkills: allExtraSkills,
-    expertise: opts?.expertise || [],
-    abilities, maxHp, hp: maxHp,
-    conditions: [] as string[], gold: 15,
-    inventory,
-    weapon: cls.weapon, ranged: cls.ranged || null,
-    hitDiceLeft: level,
-    secondWindUsed: false, hiddenAdv: false,
-    actionSurgeUsed: false, arcaneRecoveryUsed: false, preserveLifeUsed: false,
-    rageUsed: 0, kiUsed: 0, layOnHandsPool: 5, divineSmiteReady: true,
-    bardicInspirationUsed: 0, sorceryPoints: level,
-    pendingAsi: 0,
-    slots: cls.caster ? getSlotTable(classKey, level) : [],
-    slotsMax: cls.caster ? getSlotTable(classKey, level) : [],
-    knownSpells: opts?.knownSpells || [],
-    // Task #14: prepared casters keep a spellbook (pool) distinct from the
-    // currently-prepared list (knownSpells). Starts equal to the known list.
-    spellbook: [...(opts?.knownSpells || [])],
-    deathSaves: { s: 0, f: 0 }, dead: false,
-    worn: [] as string[], venomUsed: false,
-    buffs: [] as any[],
-    feats: bg?.originFeat ? [bg.originFeat] : [],
-    heroicInspiration: true, // D&D 2024: Heroic Inspiration — start with 1
-    details: opts?.details || {},
-    speed: race.speed || 30,
-    alignment: opts?.alignment || "true_neutral",
-    languages: [...(race.languages || ["Common"]), ...(opts?.languages || [])],
-    originFeat: bg?.originFeat || null,
-    toolProficiencies: bg?.tool ? [bg.tool] : [],
-  };
-  c.ac = computeAC(c);
-  return c;
 }
 
 function migrateChar(o: any) {
@@ -491,8 +403,6 @@ function applyMapUpdate(mu: any, mp: any, pushEntry?: (t: string) => void) {
 }
 
 /* ---------------- DM (AI via /api/dm) ---------------- */
-export let SRD_OK = false;
-
 function buildSystemPrompt(c: any, pacing?: { currentTension: string; recommendedNextTension: string; scenesSinceRest: number; scenesSinceCombat: number; scenesSinceRevelation: number; pacingNotes: string[]; arcPhase?: string } | null, memoryBrief?: string, sessionZeroBrief?: string) {
   // Phase 5: feed persisted campaign memory so the DM keeps continuity across sessions.
   const memoryDirective = memoryBrief && memoryBrief.trim()
@@ -819,36 +729,6 @@ const HPBar = React.memo(function HPBar({ hp, maxHp }: { hp: number; maxHp: numb
   );
 });
 
-// F4: Memoized RollTicket — prevents re-render of all roll entries when new ones are added
-export const RollTicket = React.memo(function RollTicket({ entry }: { entry: any }) {
-  const r = entry.roll;
-  const crit = r.die === 20;
-  const fumble = r.die === 1;
-  return (
-    <div className={"ticket" + (entry.success === true ? " ok" : entry.success === false ? " bad" : "")}>
-      <div className="ticket-die-wrap">
-        <div className={"ticket-die" + (crit ? " crit" : "") + (fumble ? " fumble" : "")}>{r.die}</div>
-        {r.other !== null && r.other !== undefined && <div className="ticket-die ghost">{r.other}</div>}
-      </div>
-      <div className="ticket-body">
-        <div className="ticket-title">{entry.title}</div>
-        <div className="ticket-math">
-          d20 <b>{r.die}</b> {r.mod >= 0 ? "+" : ""}{r.mod} = <b>{r.total}</b>
-          {entry.dc != null && <> vs DC {entry.dc}</>}
-          {entry.vsAc != null && <> vs AC {entry.vsAc}</>}
-          {r.adv !== "none" && <span className="ticket-adv"> · {r.adv === "advantage" ? "ADV" : "DIS"}</span>}
-        </div>
-        {entry.extra && <div className="ticket-extra">{entry.extra}</div>}
-      </div>
-      {entry.success !== undefined && entry.success !== null && (
-        <div className={"stamp " + (entry.success ? "s-ok" : "s-bad")}>
-          {crit && entry.success ? "CRIT!" : entry.success ? "Success" : entry.vsAc != null ? "Miss" : "Fail"}
-        </div>
-      )}
-    </div>
-  );
-});
-
 /* ---------------- MAIN APP ---------------- */
 export default function DnDSolo() {
   const [phase, setPhase] = useState<"loading" | "menu" | "create" | "play" | "dead">("loading");
@@ -981,7 +861,7 @@ export default function DnDSolo() {
       setHasSave(!!save);
       setPhase("menu");
     })();
-    srdProbe().then((ok) => { SRD_OK = ok; setSrdStatus(ok ? "online" : "offline"); });
+    srdProbe().then((ok) => { setSrdOk(ok); setSrdStatus(ok ? "online" : "offline"); });
   }, []);
 
   useEffect(() => {
@@ -2936,7 +2816,6 @@ export default function DnDSolo() {
           // enemies act
           if (cb.surprise) {
             cb.surprise = false; cb.round += 1; cb.bonusUsed = false; cb.extraAction = false;
-            entries.push(entrySystem("😵 Enemy surprised — loses first-turn retaliation"));
             const finalLog = [...log0, ...entries];
             commitCombat(cc, cb, finalLog);
             persist(cc, scene, finalLog, cb, history);
@@ -3366,7 +3245,6 @@ export default function DnDSolo() {
     if (!fled) {
       if (cb.surprise) {
         cb.surprise = false; cb.round += 1; cb.bonusUsed = false; cb.extraAction = false;
-        entries.push(entrySystem("😵 Enemy surprised — loses first-turn retaliation"));
         const finalLog = [...log0, ...entries];
         commitCombat(cc, cb, finalLog);
         persist(cc, scene, finalLog, cb, history);

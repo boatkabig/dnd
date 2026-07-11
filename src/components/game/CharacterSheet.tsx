@@ -10,8 +10,9 @@ import { computeAC, spellAtkMod, spellDC } from "@/lib/spells";
 import { getExtendedFeatures } from "@/lib/featuresExtended";
 import type { NormalizedSpell } from "@/lib/srd";
 import {
-  rollFormula, hasFeature, skillMod, saveMod, attackMod, sneakDice, SRD_OK,
+  rollFormula, hasFeature, skillMod, saveMod, attackMod, sneakDice,
 } from "../DnDSolo";
+import { SRD_OK } from "@/lib/dndSoloShared";
 
 export interface CharacterSheetProps {
   c: any;
