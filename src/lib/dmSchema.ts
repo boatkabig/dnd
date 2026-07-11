@@ -144,17 +144,27 @@ function normalizeAbility(raw: unknown): unknown {
   return ABILITY_ALIASES[key] ?? raw;
 }
 
+/**
+ * DM sometimes sends numeric fields as digit-strings (e.g. "13", "-5").
+ * Coerce only clean integer strings to numbers before the wrapped schema
+ * validates; anything else (floats, "abc", null, booleans, etc.) passes
+ * through unchanged so the wrapped schema's own validation still rejects it.
+ * Unlike z.coerce.number(), this never launders "", null or true into 0/1.
+ */
+const numStr = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((v) => (typeof v === "string" && /^-?\d+$/.test(v.trim()) ? Number(v) : v), schema);
+
 export const SkillCheckSchema = z.object({
   type: z.literal("check"),
   skill: z.string().min(1),  // validated against SKILLS at apply-time (circular dep avoidance)
-  dc: z.number().int().min(1).max(40),
+  dc: numStr(z.number().int().min(1).max(40)),
   advantage: z.enum(["none", "advantage", "disadvantage"]).catch("none"),
 });
 
 export const SavingThrowSchema = z.object({
   type: z.literal("save"),
   ability: z.preprocess(normalizeAbility, z.enum(VALID_ABILITIES)),
-  dc: z.number().int().min(1).max(40),
+  dc: numStr(z.number().int().min(1).max(40)),
   on_fail_damage: z.string().optional(),  // dice formula like "2d6"
   half_on_success: z.boolean().optional(),
 });
@@ -285,7 +295,7 @@ export const DungeonRoomContentSchema = z.object({
   ]).catch("dressing"),
   description: z.string().min(1).max(300),
   isHidden: z.boolean().optional(),
-  detectionDC: z.number().int().min(1).max(40).optional(),
+  detectionDC: numStr(z.number().int().min(1).max(40).optional()),
   interactionNote: z.string().max(300).optional(),
 });
 
@@ -299,12 +309,12 @@ export const DungeonStagedEncounterSchema = z.object({
 export const DungeonStagedTrapSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  detectionDC: z.number().int().min(1).max(40),
-  disableDC: z.number().int().min(1).max(40),
+  detectionDC: numStr(z.number().int().min(1).max(40)),
+  disableDC: numStr(z.number().int().min(1).max(40)),
   damage: z.string().min(1),
   damageType: z.string().min(1),
   saveAbility: z.enum(["dex", "str", "con", "wis", "int", "cha"]),
-  saveDC: z.number().int().min(1).max(40),
+  saveDC: numStr(z.number().int().min(1).max(40)),
   triggerType: z.enum(["step_on", "open", "touch", "time", "condition"]),
 });
 
@@ -312,8 +322,8 @@ export const DungeonStagedPuzzleSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   solution: z.string().min(1),
-  solutionCheck: z.object({ skill: z.string().min(1), dc: z.number().int().min(1).max(40) }).optional(),
-  hintDC: z.number().int().min(1).max(40).optional(),
+  solutionCheck: z.object({ skill: z.string().min(1), dc: numStr(z.number().int().min(1).max(40)) }).optional(),
+  hintDC: numStr(z.number().int().min(1).max(40).optional()),
   rewardItems: z.array(z.string()).optional(),
   failureConsequence: z.string().optional(),
 });
@@ -324,15 +334,15 @@ export const DungeonRoomSchema = z.object({
   role: DungeonRoomRoleSchema,
   shape: DungeonRoomShapeSchema,
   size: DungeonRoomSizeSchema,
-  dimensions: z.object({ width: z.number(), height: z.number() }).optional(),
+  dimensions: z.object({ width: numStr(z.number()), height: numStr(z.number()) }).optional(),
   description: z.string().min(1).max(1000),
   atmosphere: z.string().max(500).optional(),
   contents: z.array(DungeonRoomContentSchema).max(20).default([]),
   exits: z.array(z.string()).max(20).default([]),
   isSecret: z.boolean().optional().default(false),
-  secretDetectionDC: z.number().int().min(1).max(40).optional(),
+  secretDetectionDC: numStr(z.number().int().min(1).max(40).optional()),
   isLocked: z.boolean().optional(),
-  lockDC: z.number().int().min(1).max(40).optional(),
+  lockDC: numStr(z.number().int().min(1).max(40).optional()),
   stagedEncounter: DungeonStagedEncounterSchema.optional(),
   stagedTrap: DungeonStagedTrapSchema.optional(),
   stagedPuzzle: DungeonStagedPuzzleSchema.optional(),
@@ -349,9 +359,9 @@ export const DungeonConnectionSchema = z.object({
   direction: z.enum(["n", "s", "e", "w", "ne", "nw", "se", "sw", "up", "down"]).catch("n"),
   description: z.string().max(300).optional(),
   isLocked: z.boolean().optional(),
-  lockDC: z.number().int().min(1).max(40).optional(),
+  lockDC: numStr(z.number().int().min(1).max(40).optional()),
   isSecret: z.boolean().optional(),
-  secretDetectionDC: z.number().int().min(1).max(40).optional(),
+  secretDetectionDC: numStr(z.number().int().min(1).max(40).optional()),
   isTrapped: z.boolean().optional(),
   trapRef: z.string().optional(),
 });
@@ -370,7 +380,7 @@ export const DungeonEnterSchema = z.object({
   rooms: z.preprocess(toArray, z.array(DungeonRoomSchema).max(30)).optional(),
   connections: z.preprocess(toArray, z.array(DungeonConnectionSchema).max(60)).default([]),
   bossRoomId: z.string().optional(),
-  recommendedLevel: z.number().int().min(1).max(20).optional(),
+  recommendedLevel: numStr(z.number().int().min(1).max(20).optional()),
 });
 
 export const DungeonRoomMoveSchema = z.object({
@@ -384,7 +394,7 @@ export const DungeonRoomMoveSchema = z.object({
 export const BuffSchema = z.object({
   name: z.string().min(1).max(60),
   type: z.enum(["buff", "debuff"]),  // strict — no .catch() (invalid type should fail)
-  duration: z.number().int().min(-1).max(1000),  // -1 = until long rest, 0 = instant
+  duration: numStr(z.number().int().min(-1).max(1000)),  // -1 = until long rest, 0 = instant
   source: z.string().optional().default("unknown"),
   effect_desc: z.string().optional().default(""),
 });
@@ -410,7 +420,7 @@ export const QuestAddSchema = z.object({
 export const QuestUpdateSchema = z.object({
   id: z.string().min(1).max(60),
   status: z.enum(["active", "completed", "failed"]).optional(),
-  complete_objective: z.number().int().min(0).max(19).optional(),
+  complete_objective: numStr(z.number().int().min(0).max(19).optional()),
 });
 
 /* ======================================================================
@@ -438,10 +448,10 @@ export const TIME_DELTA_CAP = 168; // 1 week
 
 export const UpdatesSchema = z.object({
   // HP / gold / XP — capped
-  hp_delta: z.number().int().min(-HP_DELTA_CAP).max(HP_DELTA_CAP).optional(),
-  gold_delta: z.number().int().min(-GOLD_DELTA_CAP).max(GOLD_DELTA_CAP).optional(),
-  xp_award: z.number().int().min(0).max(XP_AWARD_CAP).optional(),
-  temp_hp: z.number().int().min(0).max(TEMP_HP_CAP).optional(),
+  hp_delta: numStr(z.number().int().min(-HP_DELTA_CAP).max(HP_DELTA_CAP).optional()),
+  gold_delta: numStr(z.number().int().min(-GOLD_DELTA_CAP).max(GOLD_DELTA_CAP).optional()),
+  xp_award: numStr(z.number().int().min(0).max(XP_AWARD_CAP).optional()),
+  temp_hp: numStr(z.number().int().min(0).max(TEMP_HP_CAP).optional()),
 
   // Items (strings — validated at apply-time against known item lists)
   items_add: z.array(z.string().min(1).max(120)).max(20).optional(),
@@ -471,7 +481,7 @@ export const UpdatesSchema = z.object({
   }).optional(),
   faction_reputation: z.object({
     faction_id: z.string().min(1),
-    delta: z.number().int().min(-100).max(100),
+    delta: numStr(z.number().int().min(-100).max(100)),
   }).optional(),
 
   // Environment
@@ -480,7 +490,7 @@ export const UpdatesSchema = z.object({
   scene_type: SceneTypeSchema.optional(),
 
   // Exhaustion
-  exhaustion_delta: z.number().int().min(-EXHAUSTION_DELTA_CAP).max(EXHAUSTION_DELTA_CAP).optional(),
+  exhaustion_delta: numStr(z.number().int().min(-EXHAUSTION_DELTA_CAP).max(EXHAUSTION_DELTA_CAP).optional()),
 
   // Rest trigger
   rest_trigger: z.enum(["short", "long"]).optional(),
@@ -489,7 +499,7 @@ export const UpdatesSchema = z.object({
   level_up_choice: z.boolean().optional(),
 
   // Time
-  time_delta: z.number().int().min(0).max(TIME_DELTA_CAP).optional(),
+  time_delta: numStr(z.number().int().min(0).max(TIME_DELTA_CAP).optional()),
 });
 
 /* ======================================================================

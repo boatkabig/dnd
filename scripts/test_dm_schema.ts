@@ -592,4 +592,108 @@ assert(rD3.data?.world_map?.[2]?.dir === "sw", "D3: valid sibling 'southwest' no
 
 console.log(`\n=== Bug Fix Results: ${pass} passed, ${fail} failed ===\n`);
 
+// === Numeric-string coercion ===
+// DM often sends numeric fields as digit-strings (e.g. "13", "-5"). The
+// shared `numStr()` zod helper coerces clean integer strings before the
+// wrapped schema validates, without laundering non-numeric strings, null,
+// or out-of-range values into 0 (unlike z.coerce.number(), which would).
+console.log("\n=== Numeric-string coercion ===\n");
+
+// N1: updates.hp_delta numeric string coerces to the correct number
+console.log("\nN1: updates.hp_delta numeric string coerces");
+const rN1 = validateDMResponse({ narration: "test", updates: { hp_delta: "-5" } });
+assert(rN1.success === true, "N1: numeric-string hp_delta parses successfully");
+assert(rN1.data?.updates?.hp_delta === -5, "N1: hp_delta coerced to -5");
+assert(rN1.data?.updates?.hp_delta !== 0, "N1: hp_delta not laundered to 0");
+
+// N2: updates.gold_delta numeric string coerces to the correct number
+console.log("\nN2: updates.gold_delta numeric string coerces");
+const rN2 = validateDMResponse({ narration: "test", updates: { gold_delta: "250" } });
+assert(rN2.success === true, "N2: numeric-string gold_delta parses successfully");
+assert(rN2.data?.updates?.gold_delta === 250, "N2: gold_delta coerced to 250");
+assert(rN2.data?.updates?.gold_delta !== 0, "N2: gold_delta not laundered to 0");
+
+// N3: updates.xp_award numeric string coerces to the correct number
+console.log("\nN3: updates.xp_award numeric string coerces");
+const rN3 = validateDMResponse({ narration: "test", updates: { xp_award: "300" } });
+assert(rN3.success === true, "N3: numeric-string xp_award parses successfully");
+assert(rN3.data?.updates?.xp_award === 300, "N3: xp_award coerced to 300");
+assert(rN3.data?.updates?.xp_award !== 0, "N3: xp_award not laundered to 0");
+
+// N4: updates.temp_hp numeric string coerces to the correct number
+console.log("\nN4: updates.temp_hp numeric string coerces");
+const rN4 = validateDMResponse({ narration: "test", updates: { temp_hp: "12" } });
+assert(rN4.success === true, "N4: numeric-string temp_hp parses successfully");
+assert(rN4.data?.updates?.temp_hp === 12, "N4: temp_hp coerced to 12");
+assert(rN4.data?.updates?.temp_hp !== 0, "N4: temp_hp not laundered to 0");
+
+// N5: updates.exhaustion_delta numeric string coerces to the correct number
+console.log("\nN5: updates.exhaustion_delta numeric string coerces");
+const rN5 = validateDMResponse({ narration: "test", updates: { exhaustion_delta: "-2" } });
+assert(rN5.success === true, "N5: numeric-string exhaustion_delta parses successfully");
+assert(rN5.data?.updates?.exhaustion_delta === -2, "N5: exhaustion_delta coerced to -2");
+assert(rN5.data?.updates?.exhaustion_delta !== 0, "N5: exhaustion_delta not laundered to 0");
+
+// N6: requires.dc numeric string coerces to the correct number
+console.log("\nN6: requires.dc numeric string coerces");
+const rN6 = validateDMResponse({ narration: "test", requires: { type: "check", skill: "athletics", dc: "27" } });
+assert(rN6.success === true, "N6: numeric-string requires.dc parses successfully");
+assert((rN6.data?.requires as { dc?: number })?.dc === 27, "N6: requires.dc coerced to 27");
+assert((rN6.data?.requires as { dc?: number })?.dc !== 0, "N6: requires.dc not laundered to 0");
+
+// N7: non-numeric string hp_delta is dropped (strict parse fails, updates.hp_delta
+// is the only field present so `updates` salvages to null), never laundered to 0
+console.log("\nN7: non-numeric string hp_delta dropped, not laundered to 0");
+const rN7 = validateDMResponse({ narration: "test", updates: { hp_delta: "abc" } });
+assert(rN7.success === false, "N7: non-numeric hp_delta fails strict validation");
+assert(rN7.data?.updates == null, "N7: updates salvaged to null (only invalid field present)");
+assert(rN7.warnings.some((w) => w.includes("hp_delta")), "N7: warning names the dropped hp_delta field");
+
+// N8: null hp_delta is dropped the same way — zod optional() still rejects null
+console.log("\nN8: null hp_delta dropped, not laundered to 0");
+const rN8 = validateDMResponse({ narration: "test", updates: { hp_delta: null } });
+assert(rN8.success === false, "N8: null hp_delta fails strict validation");
+assert(rN8.data?.updates == null, "N8: updates salvaged to null (only invalid field present)");
+assert(rN8.warnings.some((w) => w.includes("hp_delta")), "N8: warning names the dropped hp_delta field");
+
+// N9: non-numeric string gold_delta dropped, not laundered to 0
+console.log("\nN9: non-numeric string gold_delta dropped, not laundered to 0");
+const rN9 = validateDMResponse({ narration: "test", updates: { gold_delta: "abc" } });
+assert(rN9.success === false, "N9: non-numeric gold_delta fails strict validation");
+assert(rN9.data?.updates == null, "N9: updates salvaged to null (only invalid field present)");
+
+// N10: non-numeric string xp_award dropped, not laundered to 0
+console.log("\nN10: non-numeric string xp_award dropped, not laundered to 0");
+const rN10 = validateDMResponse({ narration: "test", updates: { xp_award: "abc" } });
+assert(rN10.success === false, "N10: non-numeric xp_award fails strict validation");
+assert(rN10.data?.updates == null, "N10: updates salvaged to null (only invalid field present)");
+
+// N11: non-numeric string temp_hp dropped, not laundered to 0
+console.log("\nN11: non-numeric string temp_hp dropped, not laundered to 0");
+const rN11 = validateDMResponse({ narration: "test", updates: { temp_hp: "abc" } });
+assert(rN11.success === false, "N11: non-numeric temp_hp fails strict validation");
+assert(rN11.data?.updates == null, "N11: updates salvaged to null (only invalid field present)");
+
+// N12: non-numeric string exhaustion_delta dropped, not laundered to 0
+console.log("\nN12: non-numeric string exhaustion_delta dropped, not laundered to 0");
+const rN12 = validateDMResponse({ narration: "test", updates: { exhaustion_delta: "abc" } });
+assert(rN12.success === false, "N12: non-numeric exhaustion_delta fails strict validation");
+assert(rN12.data?.updates == null, "N12: updates salvaged to null (only invalid field present)");
+
+// N13: out-of-range numeric-string hp_delta ("9999" > HP_DELTA_CAP) is rejected
+// exactly like an out-of-range number would be — zod .max() rejects, never clamps
+console.log("\nN13: out-of-range numeric-string hp_delta rejected, not clamped");
+const rN13 = validateDMResponse({ narration: "test", updates: { hp_delta: "9999" } });
+assert(rN13.success === false, "N13: numeric-string hp_delta over cap fails strict validation");
+assert(rN13.data?.updates == null, "N13: out-of-range hp_delta dropped, not clamped");
+assert(rN13.warnings.some((w) => w.includes("hp_delta")), "N13: warning names the dropped hp_delta field");
+
+// N14: out-of-range numeric-string requires.dc ("999" > max 40) is rejected
+// exactly like an out-of-range number would be (see Test 7 above)
+console.log("\nN14: out-of-range numeric-string requires.dc rejected, not clamped");
+const rN14 = validateDMResponse({ narration: "test", requires: { type: "check", skill: "athletics", dc: "999" } });
+assert(!rN14.success, "N14: numeric-string requires.dc over cap fails strict validation");
+
+console.log(`\n=== Numeric-String Coercion Results: ${pass} passed, ${fail} failed ===\n`);
+
 process.exit(fail > 0 ? 1 : 0);
