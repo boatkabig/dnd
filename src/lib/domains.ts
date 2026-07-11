@@ -46,7 +46,8 @@ export * as cover from "./cover.js";
 // Higher-order (21-30)
 export * as exploration from "./exploration.js";
 export * as social from "./social.js";
-export * as rest from "./rest.js";
+// Domain 24 (Rest): "./rest.js" was a dead duplicate of "./engine/rest.js" and
+// was deleted (task #18 — rest handlers now wire to the engine module only).
 export * as time from "./time.js";
 export * as monsters from "./monsters.js";
 export * as world from "./world.js";

@@ -71,6 +71,7 @@ import {
   powerAttackModifiers, hasPowerAttackFeat, applyFeatGrants,
 } from "@/lib/engine/progression";
 import { getSpellcastingRule, canReprepareOnLongRest, reprepareSpells } from "@/lib/magic";
+import { computeLongRestRecovery, computeShortRestHeal, restoreSlotsToMax } from "@/lib/engine/rest";
 import {
   buildSidekick, sidekickTurnIntent, resolveSidekickAttack,
   SIDEKICK_BASES, type SidekickClass,
@@ -3758,20 +3759,22 @@ export default function DnDSolo() {
       setLog((prev) => [...prev, entrySystem(`⏳ ยังพักยาวไม่ได้ — D&D 2024: ต้องรออย่างน้อย 16 ชม. หลัง Long Rest ครั้งก่อน (ผ่านไป ${lastRest} ชม. แล้ว)`)]);
       return;
     }
-    const recovered = Math.max(1, Math.floor(c.level / 2));
     // Advance time by 8 hours via WorldClock adapter
     const newTime = engineAdvanceHours(8);
+    const recovery = computeLongRestRecovery({
+      maxHP: c.maxHp, level: c.level, exhaustionLevel: c.exhaustionLevel || 0, slotsMax: c.slotsMax,
+    });
     const cc = {
-      ...c, hp: c.maxHp, slots: c.slotsMax.slice(), secondWindUsed: false, conditions: [],
+      ...c, hp: recovery.hp, slots: recovery.slots, secondWindUsed: false, conditions: [],
       actionSurgeUsed: false, preserveLifeUsed: false, arcaneRecoveryUsed: false, venomUsed: false,
       deathSaves: { s: 0, f: 0 },
-      hitDiceLeft: c.level, // D&D 2024: recover ALL hit dice on long rest
+      hitDiceLeft: recovery.hitDiceLeft, // D&D 2024: recover ALL hit dice on long rest
       rageUsed: 0, kiUsed: 0, sorceryPoints: c.level, layOnHandsPool: c.level * 5, bardicInspirationUsed: 0,
       raging: false, mageArmor: false,
       buffs: [], // clear all buffs on long rest
       lastLongRestHoursAgo: 0, // reset rest timer
       lastShortRestHoursAgo: 0,
-      exhaustionLevel: Math.max(0, (c.exhaustionLevel || 0) - 1), // D&D 2024: reduce exhaustion by 1
+      exhaustionLevel: recovery.exhaustionLevel, // D&D 2024: reduce exhaustion by 1
       heroicInspiration: true, // D&D 2024: Heroic Inspiration — refresh on long rest
     };
     cc.ac = computeAC(cc);
@@ -3870,7 +3873,7 @@ export default function DnDSolo() {
     }
     const cls = CLASSES[c.cls];
     const r = rollFormula(`1d${cls.hitDie}`);
-    const heal = Math.max(1, r.total + mod(c.abilities.con));
+    const heal = computeShortRestHeal(r.total, mod(c.abilities.con));
     const cc: any = {
       ...c,
       hp: Math.min(c.maxHp, c.hp + heal),
@@ -3905,7 +3908,7 @@ export default function DnDSolo() {
     if (cc.hp > 0) cc.deathSaves = { s: 0, f: 0 };
     // Phase 2: Warlock Pact Magic refreshes on short rest (D&D 2024)
     if (refreshesOnShortRest(cc.cls) && cc.slotsMax && cc.slotsMax.length > 0) {
-      cc.slots = cc.slotsMax.slice();
+      cc.slots = restoreSlotsToMax(cc.slotsMax);
       entries.push(entrySystem(`🔮 Pact Magic: คืน spell slot ทั้งหมด (short rest refresh)`));
     }
     const finalLog = [...log, ...entries];

@@ -723,3 +723,52 @@ export function summarizeDowntimeOptions(
     .map(r => `${r.name} (${r.recovery})`)
     .join(" · ");
 }
+
+// ============================================================================
+// 11. FLAT-CHARACTER REST WIRING
+// ============================================================================
+// The solo player character (src/components/DnDSolo.tsx) tracks HP / Hit Dice /
+// exhaustion / spell slots as flat scalars and arrays rather than the
+// HitDicePool / SpellSlotState shapes used above. These thin, pure helpers are
+// the single source of truth for the D&D 2024 rest math that wiring needs,
+// without forcing a model migration. RNG (Hit Die rolls) stays at the UI edge;
+// only the deterministic rules math lives here.
+
+export interface LongRestRecovery {
+  hp: number;
+  hitDiceLeft: number;
+  exhaustionLevel: number;
+  slots: number[];
+}
+
+/**
+ * D&D 2024 Long Rest: HP restores to max, ALL spent Hit Dice are recovered
+ * (2024 changed this from 5e's "half, minimum 1"), all spell slots restore,
+ * exhaustion drops by 1 (min 0).
+ */
+export function computeLongRestRecovery(input: {
+  maxHP: number;
+  level: number; // total Hit Dice = character level
+  exhaustionLevel: number;
+  slotsMax: number[];
+}): LongRestRecovery {
+  return {
+    hp: input.maxHP,
+    hitDiceLeft: input.level,
+    exhaustionLevel: Math.max(0, input.exhaustionLevel - 1),
+    slots: input.slotsMax.slice(),
+  };
+}
+
+/**
+ * D&D 2024 Short Rest heal: 1 Hit Die roll + CON modifier, minimum 1 HP.
+ * The die roll itself is left to the caller.
+ */
+export function computeShortRestHeal(dieRoll: number, conModifier: number): number {
+  return Math.max(1, dieRoll + conModifier);
+}
+
+/** Restore a spell slot array to max — used for Warlock Pact Magic refresh on short rest. */
+export function restoreSlotsToMax(slotsMax: number[]): number[] {
+  return slotsMax.slice();
+}
