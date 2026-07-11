@@ -28,6 +28,7 @@ import {
   endTurn as engineEndTurn,
   getCurrentCombatant,
   getCombatant,
+  getActionTracker,
   resolveAttack,
   applyDamage,
   spendAction,
@@ -668,6 +669,23 @@ export function performAttack(state: CombatBridgeState, params: PerformAttackPar
 export function moveBy(state: CombatBridgeState, characterId: string, feet: number): { state: CombatBridgeState; ok: boolean } {
   const spent = spendMovement(state.combat, characterId, feet);
   return { state: { ...state, combat: spent.state }, ok: spent.ok };
+}
+
+/**
+ * Directly set a combatant's remaining movement (feet). Used by callers that own an
+ * authoritative per-round movement budget (round reset, Dash) to keep the bridge's
+ * tracker in lockstep — without touching action/bonus/reaction budgets or advancing
+ * the turn (that's `endTurn`'s job, out of scope here).
+ */
+export function setMovement(state: CombatBridgeState, characterId: string, feet: number): CombatBridgeState {
+  const tracker = getActionTracker(state.combat, characterId);
+  return {
+    ...state,
+    combat: {
+      ...state.combat,
+      actionTrackers: { ...state.combat.actionTrackers, [characterId]: { ...tracker, movementRemaining: feet } },
+    },
+  };
 }
 
 // ============================================================================
