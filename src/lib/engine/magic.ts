@@ -372,6 +372,59 @@ export function canCastSpell(state: SpellSlotState, spellLevel: number): boolean
 }
 
 /**
+ * D&D 2024 in-play cast legality, evaluated against the app's FLAT spell-slot
+ * array (index 0 = level-1 slots ... index 8 = level-9 slots), the exact
+ * representation DnDSolo/gameData use (getSlotTable → number[]).
+ *
+ * This is the single authority for "may this cast happen?" and enforces the
+ * three 2024 rules the UI must respect:
+ *   (b) the spell must be KNOWN / PREPARED for the caster;
+ *   — cantrips (level 0) are always legal once known and never spend a slot;
+ *   (c) UPCASTING: the slot spent must be at least the spell's own level
+ *       (you can cast a lower-level spell with a higher slot, never the reverse);
+ *   (a) a SLOT of the chosen level must actually be available.
+ *
+ * The check is deliberately tied to the *specific* slot level the caller
+ * intends to spend (`slotLevel`), because the caller expends exactly that slot
+ * (slots[slotLevel-1]); it does not silently auto-upcast into a higher slot.
+ * Returns a machine-readable reason so the UI owns the (Thai) wording.
+ */
+export type SpellLegalityReason =
+  | "ok"
+  | "not_known"
+  | "below_spell_level"
+  | "slot_out_of_range"
+  | "no_slot";
+
+export interface SpellLegality2024 {
+  ok: boolean;
+  reason: SpellLegalityReason;
+}
+
+export function canCast2024(params: {
+  /** Spell's own level (0 = cantrip). */
+  spellLevel: number;
+  /** Slot level the caster intends to spend (== spellLevel for a base cast, higher = upcast). */
+  slotLevel: number;
+  /** Current remaining slots, flat array: slots[i] = number of level-(i+1) slots left. */
+  slots: number[];
+  /** Whether the spell is in the caster's known / prepared list. */
+  isKnownOrPrepared: boolean;
+}): SpellLegality2024 {
+  const { spellLevel, slotLevel, slots, isKnownOrPrepared } = params;
+  // (b) known / prepared gate — applies to cantrips too.
+  if (!isKnownOrPrepared) return { ok: false, reason: "not_known" };
+  // Cantrips: always legal once known, never consume a slot.
+  if (spellLevel === 0) return { ok: true, reason: "ok" };
+  // (c) upcasting: cannot spend a slot below the spell's own level.
+  if (slotLevel < spellLevel) return { ok: false, reason: "below_spell_level" };
+  if (slotLevel < 1 || slotLevel > 9) return { ok: false, reason: "slot_out_of_range" };
+  // (a) a slot of the chosen level must be available.
+  if ((slots[slotLevel - 1] ?? 0) <= 0) return { ok: false, reason: "no_slot" };
+  return { ok: true, reason: "ok" };
+}
+
+/**
  * Expend a spell slot of given level (or higher).
  * Prefers the lowest available slot to allow upcasting flexibility.
  */

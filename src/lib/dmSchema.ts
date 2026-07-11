@@ -459,6 +459,70 @@ export function validateDMResponse(raw: unknown): ValidationResult {
 }
 
 /* ======================================================================
+ * TOOL-CALLING MIGRATION — Stage 0 (additive, NOT wired into /api/dm)
+ * ======================================================================
+ *
+ * This is the trivially-safe first step of migrating the DM contract from
+ * "LLM emits one JSON blob in message.content, engine parses+repairs+validates"
+ * to native function/tool-calling. It only DEFINES the tool descriptor; it does
+ * NOT change route.ts, callDM(), or the e2e mock. Nothing calls it yet, so it
+ * cannot regress the working path.
+ *
+ * Design decision (avoids schema drift): the tool's `parameters` JSON Schema is
+ * intentionally SHALLOW — it advertises the top-level DMResponse fields and
+ * marks `narration` required, but leaves nested payloads as permissive objects.
+ * `validateDMResponse()` (the zod schema above) REMAINS the single source of
+ * deep validation for the tool-call arguments, exactly as it is today for the
+ * JSON-blob path. One validator, two transports.
+ *
+ * How route.ts adopts this later (backward-compatible):
+ *   1. pass `tools: [buildDmResponseTool()]` + `tool_choice` forcing the tool;
+ *   2. read `choices[0].message.tool_calls[0].function.arguments` (a JSON
+ *      string) instead of `message.content`;
+ *   3. return it in the SAME `{ text }` envelope the client already consumes —
+ *      so callDM() and the Playwright mock need ZERO changes.
+ */
+
+export const DM_TOOL_NAME = "emit_dm_response";
+
+/** Shallow JSON Schema for the DM tool — deep validation stays in validateDMResponse(). */
+export const DM_TOOL_PARAMETERS = {
+  type: "object",
+  properties: {
+    narration: { type: "string", description: "Player-facing narration (Thai). Required." },
+    scene: { type: ["string", "null"], description: "Short scene label." },
+    requires: { type: ["object", "null"], description: "A skill check or saving throw request." },
+    start_combat: { description: "Combat trigger: {monsters:[...], surprise?} or true." },
+    world_map: { type: ["array", "null"], description: "Initial world-map locations (first response only)." },
+    map_update: { type: ["object", "null"], description: "Incremental map change." },
+    dungeon_enter: { type: ["object", "null"] },
+    dungeon_room_move: { type: ["object", "null"] },
+    dungeon_exit: { description: "boolean | string | null." },
+    updates: { type: ["object", "null"], description: "State-mutation vector (hp_delta, xp_award, items_*, conditions_*, ...)." },
+  },
+  required: ["narration"],
+  additionalProperties: true,
+} as const;
+
+/**
+ * Build the OpenAI-compatible function-tool descriptor for the DM response.
+ * (The configured LLM endpoint is OpenAI-compatible — see src/lib/llm.ts.)
+ * Additive only; no caller is wired to this yet.
+ */
+export function buildDmResponseTool() {
+  return {
+    type: "function" as const,
+    function: {
+      name: DM_TOOL_NAME,
+      description:
+        "Emit the Dungeon Master's structured turn result. Call this EXACTLY once per turn " +
+        "with the narration and any state changes. Do not write prose outside this tool call.",
+      parameters: DM_TOOL_PARAMETERS,
+    },
+  };
+}
+
+/* ======================================================================
  * DELTA CAP EXPLANATIONS (for DM prompt)
  * ====================================================================== */
 
