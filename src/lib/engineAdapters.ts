@@ -420,7 +420,7 @@ export function listFeatureTriggers(): ReadonlyArray<FeatureTriggerDef> {
  * 4. GAME STATE ADAPTER — wrap legacy save/load with versioning
  * ============================================================ */
 
-export const SAVE_VERSION = 4; // v4: campaignMemory continuity store (Phase 5 solo layer)
+export const SAVE_VERSION = 5; // v5: sessionZeroConfig campaign charter (Task #16 solo-UX layer)
 
 export interface LegacySave {
   c: any; // character
@@ -434,6 +434,9 @@ export interface LegacySave {
   /** Phase 5 solo continuity store (CampaignMemory) — kept `any` here to avoid a
    *  cross-module import in this adapter; DnDSolo normalizes it on load. */
   campaignMemory?: any;
+  /** Task #16 solo Session-Zero charter (SessionZeroConfig) — kept `any` here to
+   *  avoid a cross-module import in this adapter; DnDSolo normalizes it on load. */
+  sessionZeroConfig?: any;
   dungeonBlueprint?: any;
   dungeonRun?: any;
   version?: number;
@@ -461,6 +464,17 @@ export function migrateLegacySave(raw: any): LegacySave {
   if (v < 4) {
     // v3 → v4: add campaign memory continuity store
     out.campaignMemory = out.campaignMemory || { facts: [], sessionNumber: 1, version: 1 };
+  }
+  if (v < 5) {
+    // v4 → v5: add Session-Zero charter (Task #16). Additive + optional — a
+    // missing config just means "player skipped Session Zero" (sensible default).
+    out.sessionZeroConfig = out.sessionZeroConfig || {
+      tone: "dark-fantasy",
+      safety: { lines: [], veils: [], xCard: true },
+      pillars: { combat: 50, exploration: 50, social: 50 },
+      situation: { location: "", hook: "", bondNpc: { name: "", relationship: "" } },
+      version: 1,
+    };
   }
   out.version = SAVE_VERSION;
   return out;

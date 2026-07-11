@@ -98,6 +98,13 @@ import {
   createCampaignMemory, normalizeCampaignMemory, appendFact, startNewSession,
   summarizeMemory, type CampaignMemory, type FactKind,
 } from "@/lib/engine/campaignMemory";
+import {
+  createDefaultSessionZero, normalizeSessionZero, summarizeSessionZero,
+  setTone, setPillars, addLine, addVeil, removeLine, removeVeil, setXCard,
+  setStartingSituation, hasStartingSituation, isDefaultSessionZero, pillarPercentages,
+  TONE_ORDER, type SessionZeroConfig, type CampaignTone,
+} from "@/lib/engine/sessionZero";
+import { resolveExplorationTurn } from "@/lib/engine/exploration";
 import { sellPrice as sellPriceOf, bargainOutcome } from "@/lib/engine/economy";
 
 /**
@@ -484,10 +491,15 @@ function applyMapUpdate(mu: any, mp: any, pushEntry?: (t: string) => void) {
 /* ---------------- DM (AI via /api/dm) ---------------- */
 export let SRD_OK = false;
 
-function buildSystemPrompt(c: any, pacing?: { currentTension: string; recommendedNextTension: string; scenesSinceRest: number; scenesSinceCombat: number; scenesSinceRevelation: number; pacingNotes: string[]; arcPhase?: string } | null, memoryBrief?: string) {
+function buildSystemPrompt(c: any, pacing?: { currentTension: string; recommendedNextTension: string; scenesSinceRest: number; scenesSinceCombat: number; scenesSinceRevelation: number; pacingNotes: string[]; arcPhase?: string } | null, memoryBrief?: string, sessionZeroBrief?: string) {
   // Phase 5: feed persisted campaign memory so the DM keeps continuity across sessions.
   const memoryDirective = memoryBrief && memoryBrief.trim()
     ? `\n\n🧠 CAMPAIGN MEMORY (ความต่อเนื่องข้ามเซสชัน — ใช้อ้างอิงเพื่อรักษาความสอดคล้อง ห้ามขัดแย้งกับข้อมูลนี้):\n${memoryBrief}`
+    : "";
+  // Task #16: feed the player-authored Session-Zero charter (tone, safety, pillars,
+  // starting situation). Empty for a default/skipped charter (summarizeSessionZero → "").
+  const sessionZeroDirective = sessionZeroBrief && sessionZeroBrief.trim()
+    ? `\n\n${sessionZeroBrief}`
     : "";
   const cls = CLASSES[c.cls];
   const maxSpellLv = cls.caster ? maxSpellLevel(c.cls, c.level) : 0;
@@ -709,7 +721,7 @@ DM สามารถทำได้ทุกอย่างที่ DM ตั�
 1. อ่าน [CURRENT SCENE] เพื่อรู้ว่าผู้เล่นอยู่ที่ไหน
 2. อ่าน [AI DM hint: intent=...] เพื่อรู้ว่าผู้เล่นต้องการอะไร
 3. ตอบในฉากเดิม — ห้ามข้ามไปเล่าเรื่องอื่น
-4. ถ้าผู้เล่นต้องการย้ายที่จริง ๆ ถึงจะใช้ map_update.move_to${pacingDirective}${memoryDirective}`;
+4. ถ้าผู้เล่นต้องการย้ายที่จริง ๆ ถึงจะใช้ map_update.move_to${pacingDirective}${sessionZeroDirective}${memoryDirective}`;
 }
 
 async function callDM(systemPrompt: string, history: any[]): Promise<{ narration: string; scene?: string | null; requires?: any; start_combat?: any; world_map?: any; map_update?: any; dungeon_enter?: any; dungeon_room_move?: any; dungeon_exit?: any; updates?: any; __validationWarnings?: string[] }> {
@@ -883,6 +895,13 @@ export default function DnDSolo() {
   // Phase 5 — Campaign memory (persisted continuity store fed to the AI DM)
   const [campaignMemory, setCampaignMemory] = useState<CampaignMemory>(() => createCampaignMemory());
   const campaignMemoryRef = useRef<CampaignMemory>(campaignMemory);
+  // Task #16 — Session Zero (persisted campaign charter fed to the AI DM). Optional
+  // + non-blocking: defaults to a sensible config so skipping it changes nothing.
+  const [sessionZeroConfig, setSessionZeroConfig] = useState<SessionZeroConfig>(() => createDefaultSessionZero());
+  const sessionZeroRef = useRef<SessionZeroConfig>(sessionZeroConfig);
+  const [sessionZeroOpen, setSessionZeroOpen] = useState(false);
+  const [szLineInput, setSzLineInput] = useState("");
+  const [szVeilInput, setSzVeilInput] = useState("");
   // Domain 35: Content Management state
   const [contentRegistry, setContentRegistry] = useState<ContentRegistry>(() => createContentRegistry());
   const [contentManagerOpen, setContentManagerOpen] = useState(false);
@@ -936,6 +955,7 @@ export default function DnDSolo() {
   useEffect(() => { dungeonBlueprintRef.current = dungeonBlueprint; }, [dungeonBlueprint]);
   useEffect(() => { dungeonRunRef.current = dungeonRun; }, [dungeonRun]);
   useEffect(() => { campaignMemoryRef.current = campaignMemory; }, [campaignMemory]);
+  useEffect(() => { sessionZeroRef.current = sessionZeroConfig; }, [sessionZeroConfig]);
 
   const [srdStatus, setSrdStatus] = useState<"checking" | "online" | "offline">("checking");
 
@@ -976,6 +996,7 @@ export default function DnDSolo() {
       dungeonBlueprint: dungeonBlueprintRef.current,
       dungeonRun: dungeonRunRef.current,
       campaignMemory: campaignMemoryRef.current,
+      sessionZeroConfig: sessionZeroRef.current,
     });
   }, [quests]);
 
@@ -997,6 +1018,124 @@ export default function DnDSolo() {
     setOracleLog((prev) => [{ q: oracleQuestion.trim() || "(ไม่ได้ระบุคำถาม)", res, event }, ...prev].slice(0, 12));
     setOracleQuestion("");
   }, [oracleLikelihood, oracleQuestion]);
+
+  // Task #16 — Session Zero edit helpers (pure engine transforms; state at UI edge).
+  const editSz = useCallback((fn: (cfg: SessionZeroConfig) => SessionZeroConfig) => {
+    setSessionZeroConfig((prev) => { const next = fn(prev); sessionZeroRef.current = next; return next; });
+  }, []);
+
+  /** Reusable Session-Zero configuration modal (shown from both menu + play). */
+  function renderSessionZeroModal() {
+    if (!sessionZeroOpen) return null;
+    const cfg = sessionZeroConfig;
+    const pct = pillarPercentages(cfg);
+    const TONE_UI: Record<CampaignTone, string> = {
+      "dark-fantasy": "แฟนตาซีมืดหม่น", heroic: "วีรบุรุษ", mystery: "ปริศนา", horror: "สยองขวัญ",
+    };
+    return (
+      <div className="sheet-overlay" onClick={() => setSessionZeroOpen(false)}>
+        <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
+            <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🎭 Session Zero</span>
+            <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setSessionZeroOpen(false)}>✕</button>
+          </div>
+          <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 12, color: "#8A7F9E" }}>กำหนดโทน ความปลอดภัย และสไตล์ของแคมเปญก่อนเริ่มเล่น (ไม่บังคับ — ข้ามได้) ป้อนข้อมูลนี้จะถูกส่งให้ DM เคารพทุกข้อ</div>
+
+            {/* Tone / genre */}
+            <div>
+              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>โทน / แนวเรื่อง</div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {TONE_ORDER.map((t) => (
+                  <button key={t} className={"btn" + (cfg.tone === t ? " btn-gold" : "")}
+                    style={{ flex: "1 0 40%", fontSize: 12, padding: "6px" }}
+                    onClick={() => editSz((c0) => setTone(c0, t))}>{TONE_UI[t]}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Pillar weights */}
+            <div>
+              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>น้ำหนักสามเสาหลัก ({pct.combat}/{pct.exploration}/{pct.social})</div>
+              {([["combat", "⚔️ ต่อสู้"], ["exploration", "🧭 สำรวจ"], ["social", "💬 สังคม"]] as const).map(([key, label]) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: "#8A7F9E", width: 80 }}>{label}</span>
+                  <input type="range" min={0} max={100} step={5} value={cfg.pillars[key]}
+                    onChange={(e) => editSz((c0) => setPillars(c0, { [key]: Number(e.target.value) }))}
+                    style={{ flex: 1 }} />
+                  <span style={{ fontSize: 12, color: "#C9BFE0", width: 32, textAlign: "right" }}>{cfg.pillars[key]}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Safety tools */}
+            <div>
+              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>Safety Tools</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input className="input-main" placeholder="เส้นต้องห้าม (line) — ห้ามปรากฏ" value={szLineInput}
+                  onChange={(e) => setSzLineInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && szLineInput.trim()) { editSz((c0) => addLine(c0, szLineInput)); setSzLineInput(""); } }}
+                  style={{ fontSize: 12, padding: "6px 10px" }} />
+                <button className="btn" style={{ fontSize: 12 }} disabled={!szLineInput.trim()}
+                  onClick={() => { editSz((c0) => addLine(c0, szLineInput)); setSzLineInput(""); }}>+ line</button>
+              </div>
+              {cfg.safety.lines.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                  {cfg.safety.lines.map((l) => (
+                    <button key={l} className="btn btn-red" style={{ fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => editSz((c0) => removeLine(c0, l))}>{l} ✕</button>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input className="input-main" placeholder="ม่านบัง (veil) — ตัดฉาก ไม่บรรยายตรง ๆ" value={szVeilInput}
+                  onChange={(e) => setSzVeilInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && szVeilInput.trim()) { editSz((c0) => addVeil(c0, szVeilInput)); setSzVeilInput(""); } }}
+                  style={{ fontSize: 12, padding: "6px 10px" }} />
+                <button className="btn" style={{ fontSize: 12 }} disabled={!szVeilInput.trim()}
+                  onClick={() => { editSz((c0) => addVeil(c0, szVeilInput)); setSzVeilInput(""); }}>+ veil</button>
+              </div>
+              {cfg.safety.veils.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                  {cfg.safety.veils.map((v) => (
+                    <button key={v} className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => editSz((c0) => removeVeil(c0, v))}>{v} ✕</button>
+                  ))}
+                </div>
+              )}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#C9BFE0" }}>
+                <input type="checkbox" checked={cfg.safety.xCard} onChange={(e) => editSz((c0) => setXCard(c0, e.target.checked))} />
+                เปิดใช้ X-card (หยุด/ข้ามฉากได้ทันที)
+              </label>
+            </div>
+
+            {/* Starting situation */}
+            <div>
+              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>สถานการณ์เริ่มต้น (ไม่บังคับ)</div>
+              <input className="input-main" placeholder="สถานที่เริ่มต้น" value={cfg.situation.location}
+                onChange={(e) => editSz((c0) => setStartingSituation(c0, { location: e.target.value }))}
+                style={{ fontSize: 12, padding: "6px 10px", marginBottom: 6 }} />
+              <input className="input-main" placeholder="Hook เปิดเรื่อง" value={cfg.situation.hook}
+                onChange={(e) => editSz((c0) => setStartingSituation(c0, { hook: e.target.value }))}
+                style={{ fontSize: 12, padding: "6px 10px", marginBottom: 6 }} />
+              <div style={{ display: "flex", gap: 6 }}>
+                <input className="input-main" placeholder="NPC ผูกพัน (ชื่อ)" value={cfg.situation.bondNpc.name}
+                  onChange={(e) => editSz((c0) => setStartingSituation(c0, { bondNpc: { name: e.target.value } }))}
+                  style={{ fontSize: 12, padding: "6px 10px" }} />
+                <input className="input-main" placeholder="ความสัมพันธ์" value={cfg.situation.bondNpc.relationship}
+                  onChange={(e) => editSz((c0) => setStartingSituation(c0, { bondNpc: { relationship: e.target.value } }))}
+                  style={{ fontSize: 12, padding: "6px 10px" }} />
+              </div>
+            </div>
+
+            <button className="btn btn-gold" style={{ padding: "10px", fontSize: 14 }} onClick={() => setSessionZeroOpen(false)}>
+              บันทึกกฎบัตร
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function entryNarration(text: string) { return { id: nextId(), type: "dm", text }; }
   function entryPlayer(text: string) { return { id: nextId(), type: "player", text }; }
@@ -2197,7 +2336,7 @@ export default function DnDSolo() {
       // Include scene anchor + story context for combat narration too
       const sceneAnchor = `[CURRENT SCENE: ${sc || "?"} — ผู้เล่นอยู่ที่นี่ ห้ามเปลี่ยนสถานที่]\n`;
       const newHist = [...hist, { role: "user", content: `${sceneAnchor}${summary}` }];
-      const res = await callDM(buildSystemPrompt(cc, getPacingForPrompt(), summarizeMemory(campaignMemoryRef.current)), newHist);
+      const res = await callDM(buildSystemPrompt(cc, getPacingForPrompt(), summarizeMemory(campaignMemoryRef.current), summarizeSessionZero(sessionZeroRef.current)), newHist);
       const entries = [entryNarration(res.narration)];
       logValidationWarnings(res, entries);
       let nc = applyUpdates(res.updates, cc, entries);
@@ -3923,6 +4062,43 @@ export default function DnDSolo() {
     narrateCombatEvent(`[Long Rest] ${cc.name} พักผ่อนเต็มคืนและตื่นขึ้นมาในตอนเช้า — รู้สึกสดชื่น HP เต็ม spell slots คืนทั้งหมด บรรยายเช้าวันใหม่สั้นๆ อย่าแนะนำให้พักอีกเพราะเพิ่งตื่นนอนมาใหม่`, cc, scene, baseLog, history);
   }
 
+  /**
+   * Task #16 — Exploration/travel turn (out of combat). Advances ~1 hour of
+   * in-game time and runs a deterministic exploration turn: a random-encounter
+   * check + (on a hit) an oracle random event, logged as a procedural beat so the
+   * solo player gets an exploration loop without an LLM round-trip. RNG (d20 +
+   * d100s) lives HERE at the UI edge; the engine (resolveExplorationTurn) is pure.
+   */
+  function exploreAction() {
+    if (thinking || combat) return;
+    const d20 = () => Math.floor(Math.random() * 20) + 1;
+    const d100 = () => Math.floor(Math.random() * 100) + 1;
+    const turn = resolveExplorationTurn({
+      hoursAdvanced: 1,
+      encounterChancePer20: 6, // 30% per exploration turn
+      encounterRoll: d20(),
+      focusRoll: d100(), actionRoll: d100(), themeRoll: d100(),
+    });
+    const newTime = engineAdvanceHours(turn.hoursAdvanced);
+    setGameTime(newTime);
+    const entries = [
+      entrySystem(turn.summary),
+      entrySystem(`⏰ เวลาผ่านไป ${turn.hoursAdvanced} ชม. → ${gameTimeToString(newTime)}`),
+    ];
+    const baseLog = [...log, ...entries];
+    setLog(baseLog);
+    persist(c, scene, baseLog, combat, history);
+    // On an encounter, hand the oracle beat to the DM so it can narrate/escalate
+    // (mirrors how other solo beats are surfaced). No-op wording keeps it a hint,
+    // not a forced combat — the DM decides how the situation unfolds.
+    if (turn.encounter.triggered && turn.event) {
+      narrateCombatEvent(
+        `[Exploration Event] ระหว่างเดินทาง เกิดเหตุการณ์สุ่ม (oracle): ${turn.event.focusLabel} — แนวคิด "${turn.event.meaning.prompt}". บรรยายสั้น ๆ ว่าเกิดอะไรขึ้นบนเส้นทาง แล้วจบด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจ (อาจนำไปสู่การต่อสู้ การสำรวจ หรือการเจรจา ตามความเหมาะสม)`,
+        c, scene, baseLog, history,
+      );
+    }
+  }
+
   function applyAsi() {
     if (asiPicks.length !== 2 || !c || !c.pendingAsi) return;
     const cc = { ...c, abilities: { ...c.abilities } };
@@ -4272,7 +4448,7 @@ export default function DnDSolo() {
     setThinking(true);
     try {
       const hist = [{ role: "user", content: `[เริ่มแคมเปญใหม่] สร้างฉากเปิดที่น่าติดตามสำหรับ ${cc.name} (${RACES[cc.race].th} ${CLASSES[cc.cls].th} level 1, ภูมิหลัง ${BACKGROUNDS[cc.background].th}). เริ่มในเมืองเล็กหรือโรงเตี๊ยมพร้อม hook ภารกิจแรก ทำให้ภูมิหลังมีผลกับฉากเปิด\n\nสำคัญมาก: ต้องใช้ฟิลด์ "world_map" ใน response แรกนี้เพื่อสร้างแผนที่โลกที่สมบูรณ์ — เมืองเริ่มต้นเป็น hub + สถานที่รอบๆ 3-5 แห่ง (ร้านค้า, โรงเตี๊ยม, วัด) + พื้นที่ป่า/ถนน 2-3 แห่ง + ดันเจี้ยน/ซากปรักหักพัง 2-3 แห่ง เชื่อมด้วยทิศ (n/s/e/w/ne/nw/se/sw) ใช้ id snake_case ภาษาอังกฤษคงที่ ผู้เล่นจะเห็นสถานที่ทั้งหมดบนแผนที่ (มี fog-of-war สำหรับที่ยังไม่ไป)` }];
-      const res = await callDM(buildSystemPrompt(cc, getPacingForPrompt()), hist);
+      const res = await callDM(buildSystemPrompt(cc, getPacingForPrompt(), summarizeMemory(campaignMemoryRef.current), summarizeSessionZero(sessionZeroRef.current)), hist);
       const newHist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
       const e2 = [...entries, entryNarration(res.narration)];
       const sc = res.scene || "จุดเริ่มต้น";
@@ -4291,6 +4467,17 @@ export default function DnDSolo() {
       // Apply updates (items, conditions, buffs)
       let finalCc = cc;
       if (res.updates) finalCc = applyUpdates(res.updates, cc, e2);
+      // Task #16: seed the Session-Zero starting situation as the first campaign
+      // facts (place + bond NPC) so continuity carries from turn one. Only when the
+      // player actually authored a starting situation (else nothing to seed).
+      const sz0 = sessionZeroRef.current;
+      if (hasStartingSituation(sz0)) {
+        rememberFact("place", "sz_start_location", sz0.situation.location, sz0.situation.hook);
+        e2.push(entrySystem(`🎭 จุดเริ่มต้น (Session Zero): ${sz0.situation.location} — ${sz0.situation.hook}`));
+      }
+      if (sz0.situation.bondNpc.name) {
+        rememberFact("npc", "sz_bond_npc", sz0.situation.bondNpc.name, sz0.situation.bondNpc.relationship);
+      }
       setLog(e2); setScene(sc); setHistory(newHist); setMap(mp); setC(finalCc);
       persist(finalCc, sc, e2, null, newHist);
       setHasSave(true);
@@ -4318,6 +4505,10 @@ export default function DnDSolo() {
     const restoredMem = startNewSession(normalizeCampaignMemory((save as any).campaignMemory));
     campaignMemoryRef.current = restoredMem;
     setCampaignMemory(restoredMem);
+    // Task #16: restore the Session-Zero charter (default if the save predates it).
+    const restoredSz = normalizeSessionZero((save as any).sessionZeroConfig);
+    sessionZeroRef.current = restoredSz;
+    setSessionZeroConfig(restoredSz);
     setC(cc); setScene(save.scene); setLog(save.log || []); setCombat(save.combat || null); setHistory(save.history || []); setMap(mp);
     idRef.current = Math.max(0, ...(save.log || []).map((e: any) => e.id || 0));
     setPhase(cc && cc.dead ? "dead" : "play");
@@ -4332,6 +4523,9 @@ export default function DnDSolo() {
     const freshMem = createCampaignMemory();
     campaignMemoryRef.current = freshMem;
     setCampaignMemory(freshMem);
+    const freshSz = createDefaultSessionZero();
+    sessionZeroRef.current = freshSz;
+    setSessionZeroConfig(freshSz);
     setHasSave(false); setC(null); setLog([]); setCombat(null); setHistory([]); setScene(""); setMap(null);
     setDungeonBlueprint(null); setDungeonRun(null);
     setPhase("menu");
@@ -4356,6 +4550,9 @@ export default function DnDSolo() {
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {hasSave && <button className="btn btn-gold" style={{ padding: 14 }} onClick={continueGame}>▶ เล่นต่อจากเซฟ</button>}
             <button className="btn" style={{ padding: 14 }} onClick={() => setPhase("create")}>✦ เริ่มแคมเปญใหม่</button>
+            <button className="btn" style={{ padding: "10px 14px", fontSize: 13 }} onClick={() => setSessionZeroOpen(true)}>
+              🎭 Session Zero (ไม่บังคับ){isDefaultSessionZero(sessionZeroConfig) ? "" : " ✓"}
+            </button>
             {/* Quick-start sample characters */}
             <div style={{ borderTop: "1px solid #3A3054", paddingTop: 12, marginTop: 4 }}>
               <div style={{ fontSize: 11, color: "#8A7F9E", marginBottom: 8 }}>⚡ เริ่มเล่นทันที:</div>
@@ -4422,6 +4619,7 @@ export default function DnDSolo() {
               </div>
             </div>
           )}
+          {renderSessionZeroModal()}
         </div>
       </div>
     );
@@ -4720,6 +4918,10 @@ export default function DnDSolo() {
                 🔮 ถามออราเคิล — ตัดสินความไม่แน่นอนแบบ solo (ไม่ต้องรอ DM)
               </button>
               <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
+                onClick={() => { setSessionZeroOpen(true); setMoreMenuOpen(false); }}>
+                🎭 Session Zero — โทน, safety tools, น้ำหนักสามเสาหลัก
+              </button>
+              <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
                 onClick={() => { setDmHelperOpen(true); setMoreMenuOpen(false); }}>
                 🤖 AI DM Helper — ดูสถานะ engine, intent, narrative
               </button>
@@ -4761,6 +4963,9 @@ export default function DnDSolo() {
           </div>
         </div>
       )}
+
+      {/* SESSION ZERO MODAL — Task #16 campaign charter (deterministic engine: src/lib/engine/sessionZero.ts) */}
+      {renderSessionZeroModal()}
 
       {/* ORACLE MODAL — Phase 5 solo GM emulator (deterministic engine: src/lib/engine/oracle.ts) */}
       {oracleOpen && (
@@ -5607,6 +5812,7 @@ export default function DnDSolo() {
         c={c} cls={cls} combat={combat} thinking={thinking} input={input} setInput={setInput}
         submitAction={submitAction} submitCombatTalk={submitCombatTalk}
         shortRest={shortRest} longRest={longRest} openReprepare={openReprepare}
+        exploreAction={exploreAction}
       />
     </div>
   );

@@ -15,11 +15,13 @@ export interface DMChatProps {
   shortRest: () => void;
   longRest: () => void;
   openReprepare: () => void;
+  /** Task #16 — solo exploration/travel turn (procedural, no LLM round-trip). */
+  exploreAction: () => void;
 }
 
 export default function DMChat({
   c, cls, combat, thinking, input, setInput,
-  submitAction, submitCombatTalk, shortRest, longRest, openReprepare,
+  submitAction, submitCombatTalk, shortRest, longRest, openReprepare, exploreAction,
 }: DMChatProps) {
   return (
       <div style={{ borderTop: "1px solid #3A3054", background: "rgba(20,16,32,0.95)", padding: "10px 14px", paddingBottom: "calc(10px + env(safe-area-inset-bottom))" }}>
@@ -45,6 +47,7 @@ export default function DMChat({
                 ))}
               </>
             )}
+            <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking} onClick={exploreAction}>🧭 สำรวจ/เดินทาง</button>
             <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking || (c.hitDiceLeft || 0) <= 0} onClick={shortRest}>⛺ พักสั้น ({c.hitDiceLeft || 0})</button>
             <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking} onClick={longRest}>🌙 พักยาว</button>
             {/* Task #14: re-prepare (prepared casters only — Cleric/Druid/Paladin/Wizard) */}
