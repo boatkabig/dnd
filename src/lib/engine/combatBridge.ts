@@ -421,6 +421,14 @@ export interface RawCombatantInput {
   maxHp?: number;
   speed?: number;
   isPlayer: boolean;
+  /**
+   * Stage C (combat-state migration): the caller's already-rolled initiative
+   * total. When provided, the bridge OWNS this value and the UI derives its
+   * initiative order/pointer from getCombatView() instead of holding a parallel
+   * copy. When omitted, a placeholder (players before enemies) keeps the
+   * HP-only migration path unchanged.
+   */
+  initiative?: number;
 }
 
 /** Build a CombatBridgeState from loose app combatant blobs (empty enemyProfiles). */
@@ -428,8 +436,10 @@ export function buildBridgeState(inputs: RawCombatantInput[]): CombatBridgeState
   const combatants: Combatant[] = inputs.map((o) => ({
     characterId: o.id,
     name: o.name,
-    // Initiative order is Stage C's concern; HP migration only needs identity.
-    initiative: o.isPlayer ? 20 : 10,
+    // Stage C: when the caller seeds its already-rolled initiative, the bridge
+    // owns it (UI order/pointer projects from getCombatView). Otherwise fall
+    // back to the HP-migration placeholder (players before enemies).
+    initiative: o.initiative ?? (o.isPlayer ? 20 : 10),
     isPlayer: o.isPlayer,
     position: { x: 0, y: 0 },
     ac: o.ac,
