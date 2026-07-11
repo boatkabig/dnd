@@ -46,17 +46,17 @@ self.addEventListener("fetch", (event) => {
         .catch(() => caches.match(request).then((r) => r || caches.match("/")))
     );
   } else {
+    // Network-first for scripts/styles/assets: always fetch fresh when online
+    // (a hashed JS bundle changes name, but dev bundles reuse URLs, so cache-first
+    // here would pin the browser to stale code). Cache is only an offline fallback.
     event.respondWith(
-      caches.match(request).then((cached) => {
-        return (
-          cached ||
-          fetch(request).then((response) => {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-            return response;
-          })
-        );
-      })
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
   }
 });

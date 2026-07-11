@@ -68,10 +68,15 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
-        {/* Phase 6: Register service worker for PWA offline support */}
+        {/* Service worker: register in production (PWA/offline); in development,
+            actively unregister any existing SW + clear its caches so a stale
+            bundle can never mask freshly-edited code. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `if ('serviceWorker' in navigator) { window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); }); }`,
+            __html:
+              process.env.NODE_ENV === "production"
+                ? `if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));}`
+                : `if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});if(self.caches){caches.keys().then(ks=>ks.forEach(k=>caches.delete(k))).catch(()=>{});}}`,
           }}
         />
       </body>
