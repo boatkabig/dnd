@@ -7,7 +7,7 @@ import {
   BACKGROUNDS, RACES, CLASSES, FEATURES, WEAPONS, weaponByName, ARMOR,
   MAGIC_ITEMS, CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
   DIRV, MAP_ICON, wornHas,
-  applyDamageModifiers, COVER_AC_BONUS, passivePerception, rateEncounterDifficulty,
+  applyDamageModifiers, passivePerception, rateEncounterDifficulty,
   gameTimeToString, getLightLevelForHour, grappleCheck, canDualWield,
   ALIGNMENTS, LANGUAGES, ORIGIN_FEATS, WEAPON_MASTERIES,
   type Quest,
@@ -74,6 +74,9 @@ import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components
 import { buildBridgeState, applyBridgeDamage, planMultiattackSequence } from "@/lib/engine/combatBridge";
 import { rollDeathSave, resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName } from "@/lib/engine/effects";
+// Phase 3: spell-legality (2024) + vision/LOS wiring — engine-owned rules
+import { canCast2024, type SpellLegalityReason } from "@/lib/engine/magic";
+import { coverBetween, attackVisibilityModifier, type Obstacle } from "@/lib/engine/vision";
 
 /**
  * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
@@ -360,6 +363,41 @@ function attackerHasAdvVs(e: any): boolean {
   const conds = e.conditions || [];
   return conds.some((c: string) => ["restrained", "blinded", "paralyzed", "petrified", "prone", "stunned", "unconscious", "grappled"].includes(c));
 }
+// Thai wording for an illegal cast blocked by engine/magic.canCast2024.
+// (The engine owns the RULE + returns a reason code; the UI owns the wording.)
+function spellLegalityMessageTh(spellName: string, spellLevel: number, slotLevel: number, reason: SpellLegalityReason): string {
+  switch (reason) {
+    case "not_known":
+      return `⛔ ร่าย ${spellName} ไม่ได้ — ยังไม่ได้เรียน/เตรียมเวทนี้`;
+    case "below_spell_level":
+      return `⛔ ร่าย ${spellName} ไม่ได้ — เวทระดับ ${spellLevel} ต้องใช้ slot ระดับ ${spellLevel} ขึ้นไป (เลือก slot ${slotLevel})`;
+    case "slot_out_of_range":
+      return `⛔ ร่าย ${spellName} ไม่ได้ — ระดับ slot ${slotLevel} ไม่ถูกต้อง`;
+    case "no_slot":
+      return `⛔ ร่าย ${spellName} ไม่ได้ — ไม่มี spell slot ระดับ ${slotLevel} เหลือ (ไม่เสีย slot)`;
+    default:
+      return `⛔ ร่าย ${spellName} ไม่ได้`;
+  }
+}
+
+// D&D 2024 cover for a player→enemy attack, computed through engine/vision.coverBetween.
+// Other LIVING enemies lying on the line grant half cover (a creature gives half
+// cover, RAW). Creatures never give total cover, so the target is always targetable.
+// Returns the AC/DEX-save bonus (0/2/5) the cover confers on the defender.
+function coverForTarget(cb: any, targetUid: string): { bonus: number; label: string } {
+  if (!cb?.playerPos || !cb?.enemyPositions?.[targetUid]) return { bonus: 0, label: "" };
+  const obstacles: Obstacle[] = [];
+  for (const other of cb.enemies || []) {
+    if (other.uid === targetUid || other.hpNow <= 0) continue;
+    const p = cb.enemyPositions?.[other.uid];
+    if (p) obstacles.push({ pos: p, cover: "half" });
+  }
+  const res = coverBetween(cb.playerPos, cb.enemyPositions[targetUid], obstacles);
+  if (!isFinite(res.acBonus) || res.acBonus <= 0) return { bonus: 0, label: "" };
+  const label = res.level === "half" ? "half cover" : res.level === "threeQuarters" ? "three-quarter cover" : "";
+  return { bonus: res.acBonus, label };
+}
+
 export function sneakDice(level: number) { return Math.ceil(level / 2); }
 // critThreshold moved below hasFeature definition (which it depends on)
 // Check if character has any concentration buff active.
@@ -2063,6 +2101,20 @@ export default function DnDSolo() {
       entries.push(entrySystem(`⚠️ โหลดเวท "${spellIndex}" จาก SRD ไม่ได้`));
       return { cc, cb, endsTurn: true };
     }
+    // === Phase 3: D&D 2024 spell-legality gate (engine/magic.canCast2024) ===
+    // Enforces known/prepared + valid slot (incl. upcast) BEFORE any slot is
+    // spent or cast event emitted. Illegal casts are blocked with a Thai
+    // message and do NOT consume the turn (endsTurn:false) or a slot.
+    const legality = canCast2024({
+      spellLevel: sp.level,
+      slotLevel,
+      slots: cc.slots || [],
+      isKnownOrPrepared: (cc.knownSpells || []).includes(spellIndex),
+    });
+    if (!legality.ok) {
+      entries.push(entrySystem(spellLegalityMessageTh(sp.name, sp.level, slotLevel, legality.reason)));
+      return { cc, cb, endsTurn: false };
+    }
     entries.push(entrySystem(`✨ กำลังร่าย ${sp.name} (Lv.${sp.level} ${sp.school})${slotLevel > sp.level ? ` อัปเคสต์เป็น slot ${slotLevel}` : ""}`));
 
     // Emit cast spell event (for features/items that trigger on spell cast)
@@ -2111,16 +2163,24 @@ export default function DnDSolo() {
         targets = alive.slice(0, 1);
       }
       for (const t of targets) {
-        let adv: "none" | "advantage" | "disadvantage" = t.glow || ncb.surprise || ncb.invisible || attackerHasAdvVs(t) ? "advantage" : "none";
-        if (hasDisadv(nc)) adv = adv === "advantage" ? "none" : "disadvantage";
+        // 2024 unseen-attacker/target via engine/vision (spell attack rolls).
+        const sAttackerSeesTarget = !(t.conditions && t.conditions.includes("invisible"));
+        const sTargetSeesAttacker = !(nc.hiddenAdv || ncb.surprise || ncb.invisible);
+        const sVisMod = attackVisibilityModifier(sAttackerSeesTarget, sTargetSeesAttacker);
+        let adv: "none" | "advantage" | "disadvantage" = (sVisMod === "advantage" || t.glow || attackerHasAdvVs(t)) ? "advantage" : "none";
+        if (sVisMod === "disadvantage" || hasDisadv(nc)) adv = adv === "advantage" ? "none" : "disadvantage";
         let atkModTotal = spellAtkMod(nc);
         // Bless applies to spell attacks too
         if ((nc.buffs || []).some((b: any) => b.name === "Bless")) {
           atkModTotal += d(4);
         }
+        // D&D 2024 cover (engine/vision.coverBetween) raises the target's effective AC.
+        const sCover = coverForTarget(ncb, t.uid);
+        const sEffectiveAC = t.ac + sCover.bonus;
         const atk = rollD20(atkModTotal, adv);
         if (t.glow) t.glow = false;
-        const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= t.ac);
+        const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= sEffectiveAC);
+        if (sCover.bonus > 0) entries.push(entrySystem(`🛡️ ${t.th}: ${sCover.label} (+${sCover.bonus} AC = ${sEffectiveAC})`));
         let extra: string | null = null;
         if (hit) {
           const dr = rollFormula(sp.damage || "1d6");
@@ -2179,7 +2239,10 @@ export default function DnDSolo() {
         // Restrained enemies have disadvantage on DEX saves
         let saveAdv: "none" | "disadvantage" = "none";
         if (saveAbil === "dex" && t.conditions && t.conditions.includes("restrained")) saveAdv = "disadvantage";
-        const sv = rollD20(monSave(t, saveAbil), saveAdv);
+        // D&D 2024 cover (engine/vision.coverBetween): half/three-quarter cover
+        // adds its bonus to the defender's DEX saving throws (Fireball etc.).
+        const saveCover = saveAbil === "dex" ? coverForTarget(ncb, t.uid) : { bonus: 0, label: "" };
+        const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus, saveAdv);
         const failed = sv.total < dc;
         let dmg = failed ? (aoeRoll?.total || 0) : sp.saveSuccess === "half" ? Math.floor((aoeRoll?.total || 0) / 2) : 0;
         // === NEW: apply spell damage type resistance/immunity/vulnerability ===
@@ -2448,48 +2511,23 @@ export default function DnDSolo() {
       let meleeAdjacentDisadv = isRanged && dist <= 1;
       // Ranged attacks against prone target have disadvantage (melee has advantage vs prone)
       let proneRangedDisadv = isRanged && target.conditions && target.conditions.includes("prone");
-      // === D&D 2024 Cover System ===
-      // Calculate cover for the target based on other enemies blocking line of sight
-      // (simplified: if any other alive enemy is adjacent to target AND closer to player → half cover +2 AC)
-      // Total cover (can't target) is rare — we skip it for now
-      let targetCoverAC = 0;
-      let targetCoverLabel = "";
-      if (cb.playerPos && cb.enemyPositions?.[target.uid]) {
-        const targetPos = cb.enemyPositions[target.uid];
-        // Check if any other enemy provides cover to the target
-        // (an enemy between player and target that is closer to player)
-        for (const other of cb.enemies) {
-          if (other.uid === target.uid || other.hpNow <= 0) continue;
-          const otherPos = cb.enemyPositions?.[other.uid];
-          if (!otherPos) continue;
-          // Vector from player to target
-          const dx = targetPos.x - cb.playerPos.x;
-          const dy = targetPos.y - cb.playerPos.y;
-          // Vector from player to other
-          const ox = otherPos.x - cb.playerPos.x;
-          const oy = otherPos.y - cb.playerPos.y;
-          // Check if other is "between" player and target (roughly on the line, closer)
-          const distToOther = Math.max(Math.abs(ox), Math.abs(oy));
-          const distToTarget = Math.max(Math.abs(dx), Math.abs(dy));
-          if (distToOther >= distToTarget) continue;
-          // Check if other is roughly on the line (within 1 square of the line)
-          // Cross product approximation
-          const cross = Math.abs(dx * oy - dy * ox);
-          const lineLen = Math.sqrt(dx * dx + dy * dy);
-          if (lineLen === 0) continue;
-          const perpDist = cross / lineLen;
-          if (perpDist <= 1) {
-            // Other enemy provides cover — at least half cover (+2)
-            // If 2+ enemies provide cover → three-quarter (+5)
-            targetCoverAC = targetCoverAC === 0 ? COVER_AC_BONUS["half"] : COVER_AC_BONUS["three-quarter"];
-            targetCoverLabel = targetCoverAC === COVER_AC_BONUS["half"] ? "half cover" : "three-quarter cover";
-          }
-        }
-      }
+      // === D&D 2024 Cover System (engine/vision.coverBetween) ===
+      // Cover is computed by tracing the player→target line and treating any
+      // living enemy on that line as half cover (a creature grants half cover).
+      const coverRes = coverForTarget(cb, target.uid);
+      const targetCoverAC = coverRes.bonus;
+      const targetCoverLabel = coverRes.label;
       // Apply cover bonus to target's effective AC for this attack
       const effectiveTargetAC = target.ac + targetCoverAC;
-      // Advantages: hidden, surprise, invisible, target glowing (Faerie Fire), target has advantage-conditions, Help action, Vex mastery
-      let adv: "none" | "advantage" | "disadvantage" = (cc.hiddenAdv || cb.surprise || cb.invisible || target.glow || target.helpBuff || cc.vexTarget === target.uid || attackerHasAdvVs(target)) ? "advantage" : "none";
+      // === D&D 2024 unseen-attacker / unseen-target (engine/vision) ===
+      // targetSeesAttacker=false when the player is hidden/surprising/invisible
+      // → attacker advantage; attackerSeesTarget=false when the target is
+      // Invisible (and player has no special sense) → attacker disadvantage.
+      const attackerSeesTarget = !(target.conditions && target.conditions.includes("invisible"));
+      const targetSeesAttacker = !(cc.hiddenAdv || cb.surprise || cb.invisible);
+      const visMod = attackVisibilityModifier(attackerSeesTarget, targetSeesAttacker);
+      // Advantages: unseen attacker, target glowing (Faerie Fire), target has advantage-conditions, Help action, Vex mastery
+      let adv: "none" | "advantage" | "disadvantage" = (visMod === "advantage" || target.glow || target.helpBuff || cc.vexTarget === target.uid || attackerHasAdvVs(target)) ? "advantage" : "none";
       // Consume helpBuff + vexTarget on attack (D&D 5e: advantage lasts until first attack)
       if (target.helpBuff) {
         target.helpBuff = false;
@@ -2499,8 +2537,8 @@ export default function DnDSolo() {
         cc.vexTarget = null;
         entries.push(entrySystem(`⚔️ Vex advantage consumed`));
       }
-      // Disadvantages: player's debuff conditions, ranged long range, prone target (ranged only), melee adjacent (ranged only)
-      if (hasDisadv(cc) || rangedDisadv || proneRangedDisadv || meleeAdjacentDisadv) adv = adv === "advantage" ? "none" : "disadvantage";
+      // Disadvantages: unseen target, player's debuff conditions, ranged long range, prone target (ranged only), melee adjacent (ranged only)
+      if (visMod === "disadvantage" || hasDisadv(cc) || rangedDisadv || proneRangedDisadv || meleeAdjacentDisadv) adv = adv === "advantage" ? "none" : "disadvantage";
       // Bless buff: +1d4 to attack rolls (data-driven: read from active buffs)
       let atkModTotal = attackMod(cc, w);
       let blessDie = 0;
@@ -5143,11 +5181,9 @@ export default function DnDSolo() {
                           const sp = await fetchSpell(idx, 1, c.level);
                           if (!sp) { setLog((prev) => [...prev, entrySystem("⚠️ Spell not found")]); return; }
                           const slotLv = sp.level === 0 ? 0 : Math.max(sp.level, 1);
-                          // Check slot availability
-                          if (sp.level > 0 && (c.slots[sp.level - 1] || 0) <= 0) {
-                            setLog((prev) => [...prev, entrySystem(`No Lv.${sp.level} slots left`)]);
-                            return;
-                          }
+                          // Legality (known/prepared + slot availability) is enforced
+                          // authoritatively by the engine (canCast2024) inside
+                          // castSRDSpell, which blocks with a Thai message + no slot spent.
                           playerCombatAction("spell", `${idx}@${slotLv}`);
                         } finally { setThinking(false); }
                       })();
