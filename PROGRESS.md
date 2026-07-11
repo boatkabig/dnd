@@ -1,7 +1,7 @@
 # DND Solo — Build Progress
 
 Branch: `feat/build-to-completion` · Baseline: **D&D 2024** · Mode: engine-first rebuild.
-Last updated: 2026-07-10. Detailed roadmap lives at `.claude/plans/build-to-completion.md` (local, gitignored).
+Last updated: 2026-07-11 (this session: stripped Claude commit-trailers via history-rewrite `45b4530`; deep "does-it-affect-gameplay" verification audit; 4 edge-bug fixes; **next = combat turn-loop migration off the bridge — see "NEXT PHASE" below**). Detailed roadmap lives at `.claude/plans/build-to-completion.md` (local, gitignored).
 
 ## Architecture (target)
 
@@ -46,6 +46,26 @@ LLM DM  /api/dm  (OpenAI-compatible endpoint; tool/function calling; narrates + 
 - Content → **Open5e API v2** (2024 document / SRD 5.2) ONLY; dnd5eapi.co / 2014 fallback dropped.
 - Character level cap 20; post-20 is a separate tier/mythic layer, not continued leveling.
 - Deployment is a private single-user host (localStorage persistence by design; security out of scope).
+
+## ⚠️ NEXT PHASE (2026-07-11 review) — combat is still HYBRID: drive the turn loop off the bridge
+
+Deep re-review confirmed the bridge is used as a per-attack CALCULATOR (a throwaway `startBridgeCombat` + `skipActionSpend:true`, `CombatView.tsx:113`), NOT the turn-loop source of truth. "Stage C landed" is display-only projection — the real turn flow is still legacy "player → all enemies". So these WRONG #1–6 correctness bugs are STILL LIVE (not mere refactor tails):
+
+- **Initiative doesn't drive turns** — `currentInitIdx` is set at combat start and never advances; flow is player-then-all-enemies, not initiative order. `DnDSolo.tsx:1902`.
+- **Surprise skips the enemy turn** — still does "enemy loses first-turn retaliation"; 2024 = disadvantage on the initiative roll ONLY, never lose a turn. `DnDSolo.tsx:3213, 3633`.
+- **Movement wrong unit** — `movementLeft` held in FEET (30) but decremented per-SQUARE (1) → 30 squares instead of 6. `DnDSolo.tsx:1873, 3300`.
+- **Action economy legacy** — bonus/action/reaction/movement not driven through the bridge `actionTrackers`/`spendAction`/`endTurn`.
+- **HP 0 outside combat forced back to 1** — trap/DM damage can't drop the player to unconscious/death-saves. `DnDSolo.tsx:3994`.
+- **Monster turn** — bridge has `endTurn`/`moveBy`/`runEnemyTurn` but the UI never drives them as the backbone.
+- **Spell targeting incomplete** — many casts pick the first enemy; AoE origin fixed to the player's position.
+- **Concentration data** — Spiritual Weapon wrongly in `CONCENTRATION_SPELL_NAMES` (`effects.ts:641`); concentration should derive from the spell's own `concentration` field (Open5e v2), not a hard-coded name list. (Verify Spiritual Weapon's 2024 status against Open5e v2 before changing — 2024 may differ from 2014.)
+
+**Directive (do in this order):** migrate the whole turn loop to `CombatBridgeState` and delete legacy `cb` piece by piece — **initiative → surprise → movement → action economy → HP/death**. Maps onto the Stage C–F plan below, but the point is to DRIVE the loop off the bridge (advance `currentInitIdx`, call `endTurn`/`nextTurn`, spend from `actionTrackers`), not just project displays off it.
+
+### Project-quality (same review)
+- `tsc --noEmit` fails on a stale `.next/types/validator.ts` referencing the deleted `/api/srd` route — a build-cache artifact (clean after `rm -rf .next` / `next build`), NOT a source error; make the gate robust (build before tsc, or exclude `.next`).
+- eslint: 3 errors — an archive test calls a React Hook outside a component; the compliance script uses `require()`.
+- `.serena/` was untracked (now gitignored).
 
 ## Pending
 
