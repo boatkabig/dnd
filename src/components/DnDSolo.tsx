@@ -71,7 +71,8 @@ import AdventureLog from "@/components/game/AdventureLog";
 import CharacterSheet from "@/components/game/CharacterSheet";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
-import { buildBridgeState, applyBridgeDamage } from "@/lib/engine/combatBridge";
+import { buildBridgeState, applyBridgeDamage, planMultiattackSequence } from "@/lib/engine/combatBridge";
+import { rollDeathSave, resolveContestedAction } from "@/lib/engine/combat";
 
 /**
  * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
@@ -1787,10 +1788,16 @@ export default function DnDSolo() {
       // Multi-attack: use Open5e structured attacks if available, otherwise legacy e.attacks[] / fallback
       // Open5e structured attacks come from `e.structuredAttacks[]` (NormalizedCreatureAttack[])
       // Legacy e.attacks[] come from BESTIARY {atk, dmg, name} format
-      const structuredAtks = e.structuredAttacks as any[] | undefined;
-      const numAttacks = structuredAtks && structuredAtks.length > 1
-        ? Math.min(structuredAtks.length, 3)  // Multiattack: up to 3 attacks from Open5e
-        : (e.attacks && e.attacks.length > 1 ? Math.min(2, e.attacks.length) : 1);
+      // Multiattack: prefer the plan parsed from the stat block's Multiattack action
+      // text (engine combatBridge.planMultiattackSequence → e.g. Bite + Claw), falling
+      // back to raw structured attacks, then legacy attack list, then a single attack.
+      const maSeq = planMultiattackSequence(e.actions);
+      const structuredAtks = (maSeq ?? e.structuredAttacks) as any[] | undefined;
+      const numAttacks = maSeq
+        ? maSeq.length
+        : (structuredAtks && structuredAtks.length > 1
+            ? Math.min(structuredAtks.length, 3)  // Multiattack: up to 3 attacks from Open5e
+            : (e.attacks && e.attacks.length > 1 ? Math.min(2, e.attacks.length) : 1));
       for (let atkIdx = 0; atkIdx < numAttacks; atkIdx++) {
         if (nc.hp <= 0) break;
         // Pick attack data: prefer Open5e structured → legacy e.attacks[] → fallback to e.atk/e.dmg
@@ -2308,15 +2315,18 @@ export default function DnDSolo() {
     let cb = { ...combat0, enemies: combat0.enemies.map((e: any) => ({ ...e })) };
     const entries: any[] = [];
 
-    // --- unconscious: death save loop ---
+    // --- unconscious: death save loop (routed through engine combat.rollDeathSave;
+    //     3 successes = stable, 3 failures = dead, nat-20 = revive 1 HP, nat-1 = 2 failures) ---
     if (cc.hp <= 0 && !cc.dead) {
       const r = rollD20(0);
-      let ds = { ...cc.deathSaves };
-      if (r.die === 20) { cc.hp = 1; ds = { s: 0, f: 0 }; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
-      else if (r.total >= 10) { ds.s += 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${ds.s}/3` }); }
-      else { ds.f += r.die === 1 ? 2 : 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${ds.f}/3` }); }
+      const prev = { s: cc.deathSaves.s, f: cc.deathSaves.f };
+      const dsr = rollDeathSave({ successes: prev.s, failures: prev.f }, r.die);
+      const ds = { s: dsr.successes, f: dsr.failures };
+      if (dsr.state === "revived") { cc.hp = 1; entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
+      else if (dsr.successes > prev.s) { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${ds.s}/3` }); }
+      else { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${ds.f}/3` }); }
       cc.deathSaves = ds;
-      if (ds.f >= 3) {
+      if (dsr.state === "dead") {
         cc.dead = true;
         entries.push(entrySystem(`☠️ ${cc.name} เสียชีวิต...`));
         const finalLog = [...log0, ...entries];
@@ -2324,7 +2334,7 @@ export default function DnDSolo() {
         setPhase("dead");
         return;
       }
-      if (ds.s >= 3 || cc.hp > 0) {
+      if (dsr.state === "stable" || cc.hp > 0) {
         if (cc.hp <= 0) { entries.push(entrySystem("อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป")); }
         cc.deathSaves = { s: 0, f: 0 };
         if (cc.hp <= 0) cc.hp = 1;
@@ -3159,33 +3169,48 @@ export default function DnDSolo() {
         entries.push(entrySystem("🫥 Ring of Invisibility: you fade — next attack has advantage, enemies attack you with disadvantage"));
       }
     } else if (kind === "grapple") {
-      // D&D 2024 Grapple: Unarmed Strike → target makes STR or DEX save vs DC 8+prof+STR
+      // D&D 2024 Grapple (engine combat.resolveContestedAction): Unarmed Strike →
+      // target makes STR or DEX save (its choice) vs DC = 8 + STR mod + PB. No contested check.
       const target = cb.enemies.find((e: any) => e.hpNow > 0);
       if (target) {
-        const grappleDC = 8 + profByLevel(cc.level) + mod(cc.abilities.str);
-        const targetSaveMod = Math.max(monSave(target, "str"), monSave(target, "dex"));
-        const sv = rollD20(targetSaveMod, "none");
-        const success = sv.total >= grappleDC; // target succeeds = escapes grapple
-        entries.push({ id: nextId(), type: "roll", title: `จับตรึง ${target.th} (STR/DEX save vs DC ${grappleDC})`, roll: sv, dc: grappleDC, success: !success, extra: !success ? `${target.th} ถูกตรึง (Grappled — speed 0)` : `${target.th} หลุดจากการจับ` });
-        if (!success) {
+        const res = resolveContestedAction({
+          type: "grapple",
+          attackerId: "player",
+          targetId: target.uid,
+          attackerAthleticsMod: mod(cc.abilities.str),
+          attackerProficiencyBonus: profByLevel(cc.level),
+          targetDefenseMod: monSave(target, "str"),
+          targetDexSaveMod: monSave(target, "dex"),
+        });
+        const sv = { die: res.targetRoll, other: null, mod: res.targetTotal - res.targetRoll, total: res.targetTotal, adv: "none" as const };
+        entries.push({ id: nextId(), type: "roll", title: `จับตรึง ${target.th} (STR/DEX save vs DC ${res.saveDC})`, roll: sv, dc: res.saveDC, success: res.success, extra: res.success ? `${target.th} ถูกตรึง (Grappled — speed 0)` : `${target.th} หลุดจากการจับ` });
+        if (res.success) {
           if (!target.conditions) target.conditions = [];
-          if (!target.conditions.includes("grappled")) target.conditions.push("grappled");
+          const cond = res.conditionApplied || "grappled";
+          if (!target.conditions.includes(cond)) target.conditions.push(cond);
           target.speedReduced = (target.speedReduced || 0) + 999; // speed = 0 while grappled
         }
       }
     } else if (kind === "shove") {
-      // D&D 2024 Shove: Unarmed Strike → target makes STR or DEX save vs DC 8+prof+STR
-      // Option: knock prone OR push 5ft
+      // D&D 2024 Shove (engine combat.resolveContestedAction): Unarmed Strike →
+      // target makes STR or DEX save (its choice) vs DC = 8 + STR mod + PB. Here: knock Prone.
       const target = cb.enemies.find((e: any) => e.hpNow > 0);
       if (target) {
-        const shoveDC = 8 + profByLevel(cc.level) + mod(cc.abilities.str);
-        const targetSaveMod = Math.max(monSave(target, "str"), monSave(target, "dex"));
-        const sv = rollD20(targetSaveMod, "none");
-        const success = sv.total >= shoveDC; // target succeeds = resists shove
-        entries.push({ id: nextId(), type: "roll", title: `ผลัก/ล้ม ${target.th} (STR/DEX save vs DC ${shoveDC})`, roll: sv, dc: shoveDC, success: !success, extra: !success ? `${target.th} ล้ม (Prone)` : `${target.th} ต้านทานได้` });
-        if (!success) {
+        const res = resolveContestedAction({
+          type: "shove_prone",
+          attackerId: "player",
+          targetId: target.uid,
+          attackerAthleticsMod: mod(cc.abilities.str),
+          attackerProficiencyBonus: profByLevel(cc.level),
+          targetDefenseMod: monSave(target, "str"),
+          targetDexSaveMod: monSave(target, "dex"),
+        });
+        const sv = { die: res.targetRoll, other: null, mod: res.targetTotal - res.targetRoll, total: res.targetTotal, adv: "none" as const };
+        entries.push({ id: nextId(), type: "roll", title: `ผลัก/ล้ม ${target.th} (STR/DEX save vs DC ${res.saveDC})`, roll: sv, dc: res.saveDC, success: res.success, extra: res.success ? `${target.th} ล้ม (Prone)` : `${target.th} ต้านทานได้` });
+        if (res.success) {
           if (!target.conditions) target.conditions = [];
-          if (!target.conditions.includes("prone")) target.conditions.push("prone");
+          const cond = res.conditionApplied || "prone";
+          if (!target.conditions.includes(cond)) target.conditions.push(cond);
         }
       }
     } else if (kind === "dual_wield") {

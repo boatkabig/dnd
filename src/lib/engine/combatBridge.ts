@@ -210,6 +210,56 @@ export function parseMultiattack(
   };
 }
 
+/**
+ * Expand a creature's parsed Multiattack into the ORDERED list of structured
+ * attacks to perform on its turn (e.g. Brown Bear → [Bite, Claw]; Owlbear →
+ * [Rend, Rend]). Returns null when the creature has no usable Multiattack, so
+ * callers fall back to a single attack.
+ *
+ * Rule source: the count and referenced actions live ONLY in the Multiattack
+ * desc text (Open5e v2 carries no structured attacks on the Multiattack action
+ * itself) — parseMultiattack decodes that, and this maps each referenced action
+ * name to its first structured attack. `optionalActionNames` (flexible pools
+ * like "Scimitar or Shortbow in any combination") fill any remaining generic
+ * attack count round-robin.
+ */
+export function planMultiattackSequence(
+  actions: Array<Pick<NormalizedCreatureAction, "name" | "desc" | "attacks">> | undefined | null,
+): NormalizedCreatureAttack[] | null {
+  if (!actions || actions.length === 0) return null;
+  const plan = parseMultiattack(actions);
+  if (!plan || plan.totalAttacks <= 1) return null;
+
+  const attackByAction = new Map<string, NormalizedCreatureAttack>();
+  const allAttacks: NormalizedCreatureAttack[] = [];
+  for (const a of actions) {
+    const atks = a.attacks ?? [];
+    for (const atk of atks) allAttacks.push(atk);
+    if (atks.length > 0) attackByAction.set(a.name.toLowerCase(), atks[0]);
+  }
+  if (allAttacks.length === 0) return null;
+
+  const seq: NormalizedCreatureAttack[] = [];
+  for (const fe of plan.fixedEntries) {
+    const atk =
+      attackByAction.get(fe.actionName.toLowerCase()) ??
+      allAttacks.find((a) => a.name.toLowerCase() === fe.actionName.toLowerCase());
+    if (atk) for (let i = 0; i < fe.count; i++) seq.push(atk);
+  }
+
+  const fixedCount = plan.fixedEntries.reduce((s, e) => s + e.count, 0);
+  const generalCount = Math.max(0, plan.totalAttacks - fixedCount);
+  const pool = plan.optionalActionNames
+    .map((n) => attackByAction.get(n.toLowerCase()))
+    .filter((a): a is NormalizedCreatureAttack => !!a);
+  for (let i = 0; i < generalCount; i++) {
+    seq.push(pool.length > 0 ? pool[i % pool.length] : allAttacks[0]);
+  }
+
+  if (seq.length <= 1) return null;
+  return seq.slice(0, 8); // safety cap against pathological stat blocks
+}
+
 /** Build performAttack()-ready pieces from one structured stat-block attack. */
 export function buildAttackRequestFromCreatureAttack(
   attack: NormalizedCreatureAttack,
