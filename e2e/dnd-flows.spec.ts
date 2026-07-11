@@ -71,6 +71,24 @@ test("🌙 long rest logs full restoration (HP + spell slots + hit dice)", async
   await expect(page.getByText(/พักยาว \(8 ชม\./)).toBeVisible();
 });
 
+// ── 3b. Exploration turn advances time + logs a procedural beat ──────────────
+test("🧭 exploration action logs a travel turn (encounter check)", async ({ page }) => {
+  const dm = mockDm(page, [OPENING_RESPONSE]);
+  await dm.install();
+  await mockIntent(page);
+  await page.goto("/");
+
+  await reachPlayScreen(page, "Wanda Wayfarer");
+
+  await page.getByRole("button", { name: /สำรวจ\/เดินทาง/ }).click();
+
+  // The pure exploration engine always writes a summary line for the turn
+  // (deterministic regardless of the injected d20/d100 outcome) plus a
+  // time-advance line — both surfaced to the game log.
+  await expect(page.getByText(/สำรวจ\/เดินทาง 1 ชม\./)).toBeVisible();
+  await expect(page.getByText(/เวลาผ่านไป 1 ชม\./)).toBeVisible();
+});
+
 // ── 4. Shop economy: buying decrements gold ──────────────────────────────────
 test("🏪 buying a weapon in the shop decrements the character's gold", async ({ page }) => {
   const dm = mockDm(page, [OPENING_RESPONSE]);

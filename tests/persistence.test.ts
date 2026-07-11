@@ -9,7 +9,7 @@ import {
 } from "../src/lib/engineAdapters";
 
 /**
- * Persistence robustness: lock in the v1→v4 save migrations (migrateLegacySave)
+ * Persistence robustness: lock in the v1→v5 save migrations (migrateLegacySave)
  * and a save→load round-trip through the versioned localStorage layer.
  *
  * Runs under vitest's node environment (no DOM), so we install a minimal
@@ -27,7 +27,15 @@ function installLocalStorage() {
   return store;
 }
 
-describe("migrateLegacySave: v1 → v4", () => {
+const DEFAULT_SESSION_ZERO = {
+  tone: "dark-fantasy",
+  safety: { lines: [], veils: [], xCard: true },
+  pillars: { combat: 50, exploration: 50, social: 50 },
+  situation: { location: "", hook: "", bondNpc: { name: "", relationship: "" } },
+  version: 1,
+};
+
+describe("migrateLegacySave: v1 → v5", () => {
   it("migrates a bare v1 save (no version) to the current version", () => {
     const v1: any = {
       c: { name: "Aria", hp: 10, gold: 15 },
@@ -38,7 +46,7 @@ describe("migrateLegacySave: v1 → v4", () => {
     const out = migrateLegacySave(v1);
 
     expect(out.version).toBe(SAVE_VERSION);
-    expect(SAVE_VERSION).toBe(4);
+    expect(SAVE_VERSION).toBe(5);
     // v1→v2: map + history added
     expect(out.map).toEqual({ nodes: {}, edges: [], current: null });
     expect(out.history).toEqual([]);
@@ -51,6 +59,8 @@ describe("migrateLegacySave: v1 → v4", () => {
     expect(out.c.conditions).toEqual([]);
     // v3→v4: campaign memory continuity store
     expect(out.campaignMemory).toEqual({ facts: [], sessionNumber: 1, version: 1 });
+    // v4→v5: session-zero charter
+    expect(out.sessionZeroConfig).toEqual(DEFAULT_SESSION_ZERO);
     // original data preserved
     expect(out.c.name).toBe("Aria");
     expect(out.c.gold).toBe(15);
@@ -83,7 +93,7 @@ describe("migrateLegacySave: v1 → v4", () => {
 
   it("is idempotent on an already-current save", () => {
     const current: any = {
-      version: 4,
+      version: 5,
       c: { name: "Cael", buffs: [{ name: "Haste" }] },
       scene: "keep",
       log: [],
@@ -93,12 +103,36 @@ describe("migrateLegacySave: v1 → v4", () => {
       gameTime: { day: 1, hour: 8 },
       quests: [],
       campaignMemory: { facts: [{ id: "f1", text: "met the king" }], sessionNumber: 2, version: 1 },
+      sessionZeroConfig: { ...DEFAULT_SESSION_ZERO, tone: "horror" },
     };
     const out = migrateLegacySave(current);
-    expect(out.version).toBe(4);
+    expect(out.version).toBe(5);
     // pre-existing campaign memory is not clobbered
     expect(out.campaignMemory.sessionNumber).toBe(2);
     expect(out.campaignMemory.facts).toEqual([{ id: "f1", text: "met the king" }]);
+    // pre-existing session-zero charter is not clobbered
+    expect(out.sessionZeroConfig.tone).toBe("horror");
+  });
+
+  it("back-fills the v5 session-zero charter for a v4 save", () => {
+    const v4: any = {
+      version: 4,
+      c: { name: "Zed", buffs: [] },
+      scene: "gate",
+      log: [],
+      combat: null,
+      map: { nodes: {}, edges: [], current: null },
+      history: [],
+      gameTime: { day: 1, hour: 8 },
+      quests: [],
+      campaignMemory: { facts: [], sessionNumber: 1, version: 1 },
+      // NOTE: no sessionZeroConfig — that's the v5 addition.
+    };
+    const out = migrateLegacySave(v4);
+    expect(out.version).toBe(SAVE_VERSION);
+    expect(out.sessionZeroConfig).toEqual(DEFAULT_SESSION_ZERO);
+    // v4 fields untouched
+    expect(out.campaignMemory).toEqual({ facts: [], sessionNumber: 1, version: 1 });
   });
 
   it("passes through null/undefined without throwing", () => {
