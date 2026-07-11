@@ -438,4 +438,47 @@ assert(rThai1.data?.updates?.quest_add?.id !== rThai2.data?.updates?.quest_add?.
 
 console.log(`\n=== Robustness Hardening Results: ${pass} passed, ${fail} failed ===\n`);
 
+// === Bug fix: world_map location "dir" — full-word / bad values must not
+// drop the whole world_map array (see WorldMapLocationSchema.dir) ===
+console.log("\n=== Bug fix: world_map location dir tolerance ===\n");
+
+// D1: full-word direction "north" parses and normalizes to "n"
+console.log("\nD1: world_map location dir 'north' normalizes to 'n'");
+const worldMapFullWordDir = {
+  narration: "test",
+  world_map: [{ id: "town", name: "Town", dir: "north" }],
+};
+const rD1 = validateDMResponse(worldMapFullWordDir);
+assert(rD1.success === true, "D1: world_map with dir 'north' succeeds");
+assert(rD1.data?.world_map?.[0]?.dir === "n", "D1: dir 'north' normalized to 'n'");
+
+// D2: garbage dir value falls back to a default instead of dropping world_map
+console.log("\nD2: world_map location with garbage dir falls back, world_map not dropped");
+const worldMapBadDir = {
+  narration: "test",
+  world_map: [{ id: "somewhere", name: "Somewhere", dir: "sideways" }],
+};
+const rD2 = validateDMResponse(worldMapBadDir);
+assert(rD2.success === true, "D2: world_map with garbage dir still succeeds");
+assert(rD2.data?.world_map != null, "D2: world_map not dropped");
+assert(!!rD2.data?.world_map?.[0]?.dir, "D2: dir falls back to a default value");
+
+// D3: one bad dir among several locations must not drop the valid siblings
+console.log("\nD3: world_map array with one bad dir keeps valid sibling locations");
+const worldMapMixedDirs = {
+  narration: "test",
+  world_map: [
+    { id: "town", name: "Town", dir: "n" },
+    { id: "forest", name: "Forest", dir: "garbage_dir" },
+    { id: "cave", name: "Cave", dir: "southwest" },
+  ],
+};
+const rD3 = validateDMResponse(worldMapMixedDirs);
+assert(rD3.success === true, "D3: world_map array with one bad dir still succeeds");
+assert(rD3.data?.world_map?.length === 3, "D3: all 3 locations preserved, none dropped");
+assert(rD3.data?.world_map?.[0]?.dir === "n", "D3: valid sibling 'n' preserved");
+assert(rD3.data?.world_map?.[2]?.dir === "sw", "D3: valid sibling 'southwest' normalized to 'sw'");
+
+console.log(`\n=== Bug Fix Results: ${pass} passed, ${fail} failed ===\n`);
+
 process.exit(fail > 0 ? 1 : 0);

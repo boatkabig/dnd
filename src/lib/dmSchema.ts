@@ -63,6 +63,44 @@ function toArray(v: unknown): unknown {
 }
 
 /* ======================================================================
+ * COMPASS DIRECTIONS — world_map / map_update location "dir" field
+ * (NOT the dungeon connection direction enum below, which also has up/down)
+ * ====================================================================== */
+
+const VALID_COMPASS_DIRS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
+
+/** Full-word (and obvious punctuated) variants → canonical abbreviation. */
+const COMPASS_DIR_ALIASES: Record<string, string> = {
+  north: "n",
+  south: "s",
+  east: "e",
+  west: "w",
+  northeast: "ne",
+  northwest: "nw",
+  southeast: "se",
+  southwest: "sw",
+};
+
+/**
+ * Case-insensitive compass direction normalization with alias fallback.
+ * Strips spaces/dots/dashes/underscores so "north-east" / "N.E." / "north_east"
+ * all resolve. Unrecognized input is passed through untouched — the enum below
+ * will reject it and `.catch(...)` supplies a safe default instead of failing
+ * the whole location (and thus the whole world_map array).
+ */
+function normalizeCompassDir(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const key = raw.trim().toLowerCase().replace(/[.\s_-]+/g, "");
+  if ((VALID_COMPASS_DIRS as readonly string[]).includes(key)) return key;
+  return COMPASS_DIR_ALIASES[key] ?? raw;
+}
+
+const CompassDirSchema = z.preprocess(
+  normalizeCompassDir,
+  z.enum(VALID_COMPASS_DIRS).catch("n"),
+);
+
+/* ======================================================================
  * SCENE TYPES
  * ====================================================================== */
 
@@ -123,7 +161,7 @@ export const WorldMapLocationSchema = z.object({
   id: z.string().regex(/^[a-z0-9_]+$/, "id must be snake_case lowercase").min(1),
   name: z.string().min(1),
   type: z.enum(["town", "building", "room", "dungeon", "wilderness", "place"]).catch("place"),
-  dir: z.enum(["n", "s", "e", "w", "ne", "nw", "se", "sw"]).optional(),
+  dir: CompassDirSchema.optional(),
   from: z.string().nullable().optional(),
   description: z.string().optional(),
 });
@@ -133,7 +171,7 @@ export const MapUpdateSchema = z.object({
     id: z.string().regex(/^[a-z0-9_]+$/).min(1),
     name: z.string().min(1),
     type: z.enum(["town", "building", "room", "dungeon", "wilderness", "place"]).catch("place"),
-    dir: z.enum(["n", "s", "e", "w", "ne", "nw", "se", "sw"]).optional(),
+    dir: CompassDirSchema.optional(),
     from: z.string().nullable().optional(),
   }).optional(),
   move_to: z.string().optional(),
