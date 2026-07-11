@@ -124,6 +124,26 @@ export const EnvironmentSchema = z.enum([
  * SKILL CHECK REQUEST
  * ====================================================================== */
 
+const VALID_ABILITIES = ["str", "dex", "con", "int", "wis", "cha"] as const;
+
+/** Full-word variants → canonical abbreviation, same pattern as CONDITION_ALIASES. */
+const ABILITY_ALIASES: Record<string, string> = {
+  strength: "str",
+  dexterity: "dex",
+  constitution: "con",
+  intelligence: "int",
+  wisdom: "wis",
+  charisma: "cha",
+};
+
+/** Case-insensitive ability match with full-word alias fallback; unrecognized passes through untouched. */
+function normalizeAbility(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const key = raw.trim().toLowerCase();
+  if ((VALID_ABILITIES as readonly string[]).includes(key)) return key;
+  return ABILITY_ALIASES[key] ?? raw;
+}
+
 export const SkillCheckSchema = z.object({
   type: z.literal("check"),
   skill: z.string().min(1),  // validated against SKILLS at apply-time (circular dep avoidance)
@@ -133,7 +153,7 @@ export const SkillCheckSchema = z.object({
 
 export const SavingThrowSchema = z.object({
   type: z.literal("save"),
-  ability: z.enum(["str", "dex", "con", "int", "wis", "cha"]),
+  ability: z.preprocess(normalizeAbility, z.enum(VALID_ABILITIES)),
   dc: z.number().int().min(1).max(40),
   on_fail_damage: z.string().optional(),  // dice formula like "2d6"
   half_on_success: z.boolean().optional(),
@@ -143,6 +163,69 @@ export const RequiresSchema = z.discriminatedUnion("type", [
   SkillCheckSchema,
   SavingThrowSchema,
 ]);
+
+const REQUIRES_TYPE_ALIASES: Record<string, string> = {
+  skill_check: "check",
+  abilitycheck: "check",
+  ability_check: "check",
+  saving_throw: "save",
+  savingthrow: "save",
+  save_throw: "save",
+  savethrow: "save",
+};
+
+/**
+ * Normalize known LLM shape-variance in `requires` BEFORE validation runs:
+ *  - a single-element array is unwrapped (extra elements warn, same
+ *    toArray-style leniency used for world_map / dungeon rooms).
+ *  - `type` aliases ("skill_check"/"ability_check" → "check",
+ *    "saving_throw"/"save_throw" → "save") and case/spacing variance folded
+ *    to the canonical literal; `type` is inferred from sibling fields
+ *    (`ability`/`save`/`stat` → "save", `skill`/`check` → "check") when omitted.
+ *  - common alt field names folded into the canonical ones: `check` → `skill`,
+ *    `save`/`stat`/`saving_throw` → `ability`.
+ *  - a numeric-string `dc` ("13") coerced to a number.
+ * A bare string `requires` (free-form prose) is deliberately NOT coerced —
+ * unlike quest_add (where a bare title fully seeds a valid quest object), a
+ * `requires` string cannot seed the REQUIRED `dc` field (min 1, no default),
+ * so any object built from it would need a fabricated DC. Inventing a number
+ * the DM never sent violates the "engine doesn't trust the LLM" principle, so
+ * a bare string is left to the normal drop+warn path in salvageTopLevelFields
+ * (dropped cleanly with a warning, never crashing).
+ */
+function normalizeRequiresShape(raw: unknown, warnings: string[]): unknown {
+  let val = raw;
+  if (Array.isArray(val)) {
+    if (val.length > 1) {
+      warnings.push(`requires: DM sent an array of ${val.length} — using the first, extra items ignored`);
+    }
+    val = val[0];
+  }
+  if (val === null || val === undefined || typeof val !== "object") return val;
+
+  const obj = { ...(val as Record<string, unknown>) };
+
+  if (typeof obj.type === "string") {
+    const key = obj.type.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    obj.type = REQUIRES_TYPE_ALIASES[key] ?? key;
+  } else if (obj.type === undefined) {
+    if (obj.ability !== undefined || obj.save !== undefined || obj.stat !== undefined) obj.type = "save";
+    else if (obj.skill !== undefined || obj.check !== undefined) obj.type = "check";
+  }
+
+  if (obj.type === "check" && obj.skill === undefined && typeof obj.check === "string") {
+    obj.skill = obj.check;
+  }
+  if (obj.type === "save" && obj.ability === undefined) {
+    const alt = obj.save ?? obj.stat ?? obj.saving_throw;
+    if (alt !== undefined) obj.ability = alt;
+  }
+  if (typeof obj.dc === "string" && /^\d+$/.test(obj.dc.trim())) {
+    obj.dc = parseInt(obj.dc.trim(), 10);
+  }
+
+  return obj;
+}
 
 /* ======================================================================
  * COMBAT
@@ -485,6 +568,24 @@ function questFromTitle(title: string): Record<string, unknown> {
 }
 
 /**
+ * Coerce `quest_add.objectives` bare strings into the required {text, done?}
+ * shape — the DM commonly emits a plain list of objective strings (or a
+ * single bare string) instead of wrapping each one in an object, which
+ * otherwise fails per-item as "expected object, received string" (each array
+ * element is validated against QuestObjectiveSchema, an object schema).
+ * A single bare string is wrapped into a one-element array; an array's
+ * string items are converted individually (object items pass through
+ * untouched, so a mix of strings and proper objects is tolerated too).
+ */
+function normalizeQuestObjectives(raw: unknown): unknown {
+  if (typeof raw === "string") return [{ text: raw }];
+  if (Array.isArray(raw)) {
+    return raw.map((item) => (typeof item === "string" ? { text: item } : item));
+  }
+  return raw;
+}
+
+/**
  * Normalize known LLM shape-variance inside `updates` BEFORE validation runs,
  * so normal variance doesn't invalidate an otherwise-valid field:
  *  - conditions_add / conditions_remove: case-insensitive + alias match
@@ -501,6 +602,9 @@ function questFromTitle(title: string): Record<string, unknown> {
  *    quest_update's only required field is `id`; this schema layer has no
  *    access to existing quest state to resolve title → id, so a malformed
  *    string quest_update is left to the normal invalid-field drop/warn path.
+ *    quest_add's `objectives` sub-field is separately normalized (bare
+ *    string / array of bare strings → {text} objects) via
+ *    `normalizeQuestObjectives` — see its doc comment.
  * Returns a new object; does not mutate `rawUpdates`.
  */
 function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
@@ -541,6 +645,17 @@ function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: st
       out[field] = coerceString(val);
     }
     // else: already a plain object (or an un-coercible string) — leave untouched
+
+    // quest_add objects — whether passed through untouched above or just
+    // unwrapped from an array — may still carry a malformed `objectives`
+    // (bare string, or an array of bare strings); normalize before validation.
+    if (field === "quest_add") {
+      const q = out[field];
+      if (q && typeof q === "object" && !Array.isArray(q) && "objectives" in (q as Record<string, unknown>)) {
+        const qObj = q as Record<string, unknown>;
+        out[field] = { ...qObj, objectives: normalizeQuestObjectives(qObj.objectives) };
+      }
+    }
   }
 
   return out;
@@ -624,15 +739,22 @@ export function validateDMResponse(raw: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // Normalize known shape-variance in `updates` BEFORE validation, so it
-  // feeds BOTH the strict parse below and the lenient salvage path with the
-  // same already-normalized data (dropped/truncated items are still logged
-  // to `warnings` either way).
+  // Normalize known shape-variance in `updates` / `requires` BEFORE
+  // validation, so it feeds BOTH the strict parse below and the lenient
+  // salvage path with the same already-normalized data (dropped/truncated
+  // items are still logged to `warnings` either way).
   let normalizedRaw: unknown = raw;
   if (typeof raw === "object" && raw !== null) {
     const rawObj0 = raw as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
     if (rawObj0.updates && typeof rawObj0.updates === "object" && !Array.isArray(rawObj0.updates)) {
-      normalizedRaw = { ...rawObj0, updates: normalizeUpdatesShape(rawObj0.updates as Record<string, unknown>, warnings) };
+      patch.updates = normalizeUpdatesShape(rawObj0.updates as Record<string, unknown>, warnings);
+    }
+    if (rawObj0.requires !== undefined) {
+      patch.requires = normalizeRequiresShape(rawObj0.requires, warnings);
+    }
+    if (Object.keys(patch).length > 0) {
+      normalizedRaw = { ...rawObj0, ...patch };
     }
   }
 

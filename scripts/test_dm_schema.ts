@@ -436,6 +436,117 @@ assert(rThai1.data?.updates?.quest_add?.title === "หาสร้อย", "R15:
 assert(!!rThai1.data?.updates?.quest_add?.id && rThai1.data?.updates?.quest_add?.id !== "quest", "R15: id is not the bare fallback constant");
 assert(rThai1.data?.updates?.quest_add?.id !== rThai2.data?.updates?.quest_add?.id, "R15: two distinct Thai titles get distinct ids");
 
+// R16: quest_add is a proper object, but `objectives` is an array of BARE
+// STRINGS instead of {text, done?} objects — this is the shape that still
+// dropped with "Invalid input: expected object, received string" even after
+// R12/R13 (each objectives array element is validated against
+// QuestObjectiveSchema, an object schema, so a string item fails per-item).
+console.log("\nR16: quest_add.objectives as an array of bare strings coerced to {text} objects");
+const questObjectivesStringArr = {
+  narration: "test",
+  updates: {
+    quest_add: {
+      id: "q1",
+      title: "Find the amulet",
+      description: "find it",
+      objectives: ["Find the amulet", "Return it to the elder"],
+    },
+  },
+};
+const rR16 = validateDMResponse(questObjectivesStringArr);
+assert(rR16.success === true, "R16: quest_add with bare-string objectives succeeds");
+assert(rR16.data?.updates?.quest_add?.objectives.length === 2, "R16: both objectives preserved");
+assert(rR16.data?.updates?.quest_add?.objectives[0].text === "Find the amulet", "R16: first objective text preserved");
+assert(rR16.data?.updates?.quest_add?.objectives[1].text === "Return it to the elder", "R16: second objective text preserved");
+
+// R17: quest_add.objectives is a SINGLE bare string (not even wrapped in an array)
+console.log("\nR17: quest_add.objectives as a single bare string coerced to a one-element array");
+const questObjectivesSingleString = {
+  narration: "test",
+  updates: {
+    quest_add: {
+      id: "q1",
+      title: "Find the amulet",
+      description: "find it",
+      objectives: "Find the amulet and return it",
+    },
+  },
+};
+const rR17 = validateDMResponse(questObjectivesSingleString);
+assert(rR17.success === true, "R17: quest_add with single-string objectives succeeds");
+assert(rR17.data?.updates?.quest_add?.objectives.length === 1, "R17: one objective synthesized");
+assert(rR17.data?.updates?.quest_add?.objectives[0].text === "Find the amulet and return it", "R17: objective text preserved");
+
+// R18: quest_add.objectives mixes bare strings AND proper {text} objects —
+// both forms tolerated in the same array.
+console.log("\nR18: quest_add.objectives mix of [string, {text}] both survive");
+const questObjectivesMixed = {
+  narration: "test",
+  updates: {
+    quest_add: {
+      id: "q1",
+      title: "Find the amulet",
+      description: "find it",
+      objectives: ["Find the amulet", { text: "Return it", done: true }],
+    },
+  },
+};
+const rR18 = validateDMResponse(questObjectivesMixed);
+assert(rR18.success === true, "R18: mixed objectives array succeeds");
+assert(rR18.data?.updates?.quest_add?.objectives[0].text === "Find the amulet", "R18: bare string objective coerced");
+assert(rR18.data?.updates?.quest_add?.objectives[1].done === true, "R18: proper object objective preserved untouched");
+
+// === requires hardening: tolerate reasonable LLM shape variance instead of
+// hard-dropping the whole field on a partial mismatch ===
+
+// R19: requires sent as a single-element array (same toArray-style leniency
+// used elsewhere) unwraps to the object.
+console.log("\nR19: requires as a single-element array unwraps");
+const requiresArray = {
+  narration: "test",
+  requires: [{ type: "check", skill: "athletics", dc: 13 }],
+};
+const rR19 = validateDMResponse(requiresArray);
+assert(rR19.success === true, "R19: requires as 1-item array succeeds");
+assert(rR19.data?.requires?.type === "check", "R19: requires normalized to a single object");
+
+// R20: requires type alias ("skill_check"/"saving_throw") and alternate field
+// names (ability sent as `save`) are folded to the canonical shape.
+console.log("\nR20: requires type aliases + alt field names tolerated");
+const requiresAltCheck = { narration: "test", requires: { type: "skill_check", skill: "athletics", dc: 13 } };
+const rR20a = validateDMResponse(requiresAltCheck);
+assert(rR20a.success === true, "R20: type alias 'skill_check' normalizes to 'check'");
+assert(rR20a.data?.requires?.type === "check", "R20: requires.type is 'check'");
+
+const requiresAltSave = { narration: "test", requires: { type: "saving_throw", save: "dex", dc: 13 } };
+const rR20b = validateDMResponse(requiresAltSave);
+assert(rR20b.success === true, "R20: type alias 'saving_throw' + alt field 'save' normalizes");
+assert(rR20b.data?.requires?.type === "save" && (rR20b.data?.requires as { ability?: string })?.ability === "dex", "R20: requires.ability derived from alt field 'save'");
+
+// R21: requires.ability full-word ("dexterity") and requires.dc as a numeric
+// string ("13") are both coerced instead of dropped.
+console.log("\nR21: requires ability full-word + numeric-string dc coerced");
+const requiresFullWordAbility = { narration: "test", requires: { type: "save", ability: "dexterity", dc: 13 } };
+const rR21a = validateDMResponse(requiresFullWordAbility);
+assert(rR21a.success === true, "R21: ability full-word 'dexterity' succeeds");
+assert((rR21a.data?.requires as { ability?: string })?.ability === "dex", "R21: ability normalized to 'dex'");
+
+const requiresStringDc = { narration: "test", requires: { type: "check", skill: "athletics", dc: "13" } };
+const rR21b = validateDMResponse(requiresStringDc);
+assert(rR21b.success === true, "R21: numeric-string dc succeeds");
+assert((rR21b.data?.requires as { dc?: number })?.dc === 13, "R21: dc coerced to number 13");
+
+// R22: a bare-string `requires` (free-form prose) is DELIBERATELY not coerced
+// — it cannot seed the required `dc`, so fabricating a DC the DM never sent
+// would violate "engine doesn't trust the LLM". It must drop cleanly with a
+// warning (never crash, never invent a check).
+console.log("\nR22: bare-string requires drops cleanly with a warning (no crash, no fabricated DC)");
+const requiresBareString = { narration: "test", requires: "athletics check DC 13" };
+const rR22 = validateDMResponse(requiresBareString);
+assert(rR22.data?.narration === "test", "R22: narration still salvaged (no crash)");
+assert(rR22.data?.requires == null, "R22: un-coercible bare-string requires dropped, not fabricated");
+assert(rR22.warnings.some((w) => w.includes("requires")) || rR22.errors.some((e) => e.includes("requires")), "R22: drop is reported (warn/error), not silent");
+
 console.log(`\n=== Robustness Hardening Results: ${pass} passed, ${fail} failed ===\n`);
 
 // === Bug fix: world_map location "dir" — full-word / bad values must not
