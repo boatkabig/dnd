@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createLLMClient } from "@/lib/llm";
+import { buildDmResponseTool, DM_TOOL_NAME } from "@/lib/dmSchema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,10 +56,18 @@ async function callLLMWithTimeout(
         messages: payload.messages,
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
+        tools: [buildDmResponseTool()],
+        tool_choice: { type: "function", function: { name: DM_TOOL_NAME } },
       },
       { signal: controller.signal },
     );
-    const text: string = completion?.choices?.[0]?.message?.content ?? "";
+    const message = completion?.choices?.[0]?.message;
+    // Preferred transport: forced tool call → arguments is a JSON string.
+    const call = message?.tool_calls?.[0];
+    const toolArgs: string | undefined = call && call.type === "function" ? call.function.arguments : undefined;
+    if (toolArgs) return toolArgs;
+    // Defensive fallback: endpoint ignored tool_choice and answered in prose/content.
+    const text: string = message?.content ?? "";
     return text || "";
   } finally {
     clearTimeout(timeout);
