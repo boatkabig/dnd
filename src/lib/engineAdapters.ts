@@ -420,7 +420,7 @@ export function listFeatureTriggers(): ReadonlyArray<FeatureTriggerDef> {
  * 4. GAME STATE ADAPTER — wrap legacy save/load with versioning
  * ============================================================ */
 
-export const SAVE_VERSION = 3; // bumped from v2 to support new state fields
+export const SAVE_VERSION = 4; // v4: campaignMemory continuity store (Phase 5 solo layer)
 
 export interface LegacySave {
   c: any; // character
@@ -431,6 +431,11 @@ export interface LegacySave {
   map: any;
   gameTime?: { day: number; hour: number };
   quests?: Quest[];
+  /** Phase 5 solo continuity store (CampaignMemory) — kept `any` here to avoid a
+   *  cross-module import in this adapter; DnDSolo normalizes it on load. */
+  campaignMemory?: any;
+  dungeonBlueprint?: any;
+  dungeonRun?: any;
   version?: number;
 }
 
@@ -452,6 +457,10 @@ export function migrateLegacySave(raw: any): LegacySave {
     if (out.c && !out.c.feats) out.c.feats = [];
     if (out.c && !out.c.deathSaves) out.c.deathSaves = { s: 0, f: 0 };
     if (out.c && !out.c.conditions) out.c.conditions = [];
+  }
+  if (v < 4) {
+    // v3 → v4: add campaign memory continuity store
+    out.campaignMemory = out.campaignMemory || { facts: [], sessionNumber: 1, version: 1 };
   }
   out.version = SAVE_VERSION;
   return out;
