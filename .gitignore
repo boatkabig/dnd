@@ -72,3 +72,6 @@ download/*.html
 
 # Serena MCP working dir
 /.serena/
+
+# agent scratchpad (audit/review reports)
+/scratchpad/
