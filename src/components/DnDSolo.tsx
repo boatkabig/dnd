@@ -91,6 +91,7 @@ import {
   createCampaignMemory, normalizeCampaignMemory, appendFact, startNewSession,
   summarizeMemory, type CampaignMemory, type FactKind,
 } from "@/lib/engine/campaignMemory";
+import { sellPrice as sellPriceOf, bargainOutcome } from "@/lib/engine/economy";
 
 /**
  * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
@@ -4605,17 +4606,11 @@ export default function DnDSolo() {
                           }}>ซื้อ</button>
                         <button className="btn" style={{ padding: "3px 6px", fontSize: 9 }}
                           onClick={() => {
-                            // D&D 5e Bargaining: Persuasion check vs DC = 10 + (price / 100)
-                            const bargainDC = Math.min(20, 10 + Math.floor(basePrice / 100));
+                            // D&D 5e Bargaining: Persuasion check vs a price-scaled DC.
+                            // Resolved by the pure economy engine (src/lib/engine/economy.ts);
+                            // RNG (the d20 roll) is injected here at the UI edge.
                             const r = rollD20(skillMod(c, "persuasion"));
-                            const success = r.total >= bargainDC;
-                            let discount = 0;
-                            if (success) {
-                              discount = Math.min(30, Math.floor((r.total - bargainDC) * 5)); // up to 30% off
-                            } else {
-                              discount = -10; // merchant offended, +10% price
-                            }
-                            const newPrice = Math.max(1, Math.floor(basePrice * (1 - discount / 100)));
+                            const { dc: bargainDC, success, discountPct: discount, price: newPrice } = bargainOutcome(r.total, basePrice);
                             setLog([...log, entrySystem(`🗣️ เจรจา ${w.th}: Persuasion ${r.total} vs DC ${bargainDC} → ${success ? `สำเร็จ! ลด ${discount}% → ${newPrice} gp` : `ล้มเหลว! ราคาเพิ่ม ${Math.abs(discount)}% → ${newPrice} gp`}`)]);
                           }}>เจรจา</button>
                       </div>
@@ -4720,7 +4715,7 @@ export default function DnDSolo() {
                         const magicMatch = (MAGIC_ITEMS as any)[item];
                         const conMatch = (CONSUMABLES as any)[item];
                         const basePrice = w?.price || armorMatch?.[1]?.price || magicMatch?.price || conMatch?.price || 5;
-                        const sellPrice = Math.floor(basePrice * 0.5);
+                        const sellPrice = sellPriceOf(basePrice);
                         return (
                           <div key={i} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <div>
