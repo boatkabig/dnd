@@ -5,25 +5,18 @@ Last updated: 2026-07-11 (session-limit checkpoint: #12–#16 done+merged to `ma
 
 ## ⏭ SESSION HANDOFF — 2026-07-11 (session-limit checkpoint, READ FIRST)
 
-**Where main is:** `main` HEAD = `c8c6ce7`. Tasks **#12–#16 are DONE and merged to main** (death-saves outside combat, DM number-string coercion, concentration single-source, LLM tool-calling probe, DM `/api/dm` tool/function-calling migration). Task-system list #12–#20 is the live tracker.
+**Where main is:** Tasks **#12–#17 are DONE and merged to main** (death-saves outside combat, DM number-string coercion, concentration single-source, LLM tool-calling probe, DM `/api/dm` tool/function-calling migration, combat turn-loop migration). Task-system list #12–#21 is the live tracker.
 
-**Where the uncommitted work is:** active branch = **`feat/combat-turn-loop`** (task #17, NOT yet merged). Working tree has **uncommitted** changes to `src/components/DnDSolo.tsx` + `src/lib/engine/combatBridge.ts` = Stages 1+2 below. **Nothing on this branch is committed yet — do not lose it.**
+### Task #17 (P0 combat turn-loop migration) — ✅ DONE, merged
+Delivered (tsc 0 · vitest 219 · e2e 8/8): real initiative-interleaved per-combatant loop `runEnemyPhase` off `getCombatView(bridge).order` + `endTurn` (item 1); enemy AI extracted to pure `src/lib/engine/enemyAI.ts` `runEnemyTurn` (item 2); movement 5× bug fixed — `moveCost = dist*5` feet, gate vs `cb.movementLeft`, UI `canMove` feet-consistent (item 4); turn boundaries via bridge `endTurn` (item 3 **partial**). New tests: `enemy-ai.test.ts` (5) + `combat-turn-loop.test.ts` (4).
 
-### Task #17 (P0 combat turn-loop migration) — staged, IN PROGRESS
-- **Stage 1 — DONE (uncommitted):** movement 5× bug fixed — squares↔feet made consistent, routed through `combatBridge.moveBy`. Independently verified `tsc=0`, `e2e 8/8`. Surgical diff.
-- **Stage 2 — DONE (uncommitted):** pure refactor — extracted the per-enemy turn body of `enemyAttacks` into a standalone `enemyTurn(...)`; `enemyAttacks` is now a thin initiative loop. Behavior-identical (in-loop `continue`/`break` translated to returns).
-- **Stage 3 — IN PROGRESS (agent `afc3f21cae828074c`, may not survive session end):** the real interleaved per-combatant turn loop — a helper that walks `getCombatView(bridge).order`, runs `enemyTurn` for each non-player in initiative order via bridge `endTurn` (advances pointer + reseeds budgets), and yields to the interactive player UI when `order[idx]` is the player. **Subsumes all 4 enemy entry points at `:2758 / :3288 / :3718 / :4017+:4454`.** Highest-risk stage (real behavioral change: interleaving). Hard gate = `e2e 8/8`.
-
-### RESUME #17 (do this first next session)
-1. `git status` on `feat/combat-turn-loop`. Check whether Stage-3 agent `afc3f21cae828074c` completed and left more edits in `DnDSolo.tsx`; review the loop diff closely.
-2. **If Stage 3 died / incomplete:** Stages 1+2 are safe and green on their own — either (a) commit Stages 1+2 alone first (movement fix + refactor, both e2e-green, real value) then re-dispatch Stage 3 with the spec above, or (b) re-dispatch Stage 3 to finish in-tree.
-3. Verify (hard bar): `rm -rf .next && node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` → 0; `node ./node_modules/vitest/vitest.mjs run` → green; `npm run e2e` → **8/8**.
-4. Commit → `git checkout main && git merge --ff-only feat/combat-turn-loop && git push origin main` → delete branch → mark **#17 completed** in task list.
+**Item 3 residual (deferred follow-up):** legacy `cb.bonusUsed`/`extraAction`/per-enemy `reactionUsed` flags + manual resets still run **in parallel** with `endTurn` (bridge-**mirrored**, not bridge-**authoritative**). `cb.movementLeft` remains the gameplay gate; `moveBy`/`setMovement` keep the bridge tracker in lockstep but are decorative for gating. Full removal of the parallel `cb` flags = a wide, lower-value, higher-risk change → folded into #20 tech-debt.
 
 ### Then, in order (all touch DnDSolo.tsx → run sequential, one branch each)
 - **#18 (P2)** Wire rest to engine: `DnDSolo.tsx:4036` longRest / `:4148` shortRest → `engine/rest.ts`; then delete dead `lib/rest.ts` + `engine/rest.ts` duplication per #20.
 - **#19 (P2)** Spell targeting: thread `combatTargetId` into `castSRDSpell` (currently ignored, hits `alive[0]` @ `:2456/:2526`); AoE origin hardcoded @ `:2446` → add origin picker.
-- **#20 (P3)** Tech-debt: move `RollTicket`/`d`/`makeCharacter`/`SRD_OK` to `src/lib/**` (break Character* circular imports); fix 3 eslint errors; delete stale "loses first-turn retaliation" log @ `:3222/:3642`; add `"typecheck":"rimraf .next && tsc --noEmit"`; **death-save out-of-combat UI indicator/button follow-up (carried from #12)**.
+- **#20 (P3)** Tech-debt: move `RollTicket`/`d`/`makeCharacter`/`SRD_OK` to `src/lib/**` (break Character* circular imports); fix 3 eslint errors; delete stale "loses first-turn retaliation" log @ `:3222/:3642`; add `"typecheck":"rimraf .next && tsc --noEmit"`; **death-save out-of-combat UI indicator/button follow-up (carried from #12)**; **make bridge action-economy authoritative — remove the parallel `cb.bonusUsed`/`extraAction`/`reactionUsed` flags (carried from #17 item 3)**.
+- **#21 (P2)** De-monolith `DnDSolo.tsx` (5553 → target <800 lines): remaining panels + wire `src/lib/store` reducer. Blocked by #17–#20 (logic must leave the file first). Concrete panel split to be brainstormed with the user before starting.
 
 ### Env quirks (verify discipline)
 - `rtk` hook compresses command output → use `rtk proxy git …` for raw git.
