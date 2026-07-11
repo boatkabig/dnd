@@ -61,7 +61,7 @@ import {
   generateProceduralDungeon, type ProceduralDungeonParams,
 } from "@/lib/dungeonTables";
 // Phase 1: DM response schema validation
-import { validateDMResponse, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
+import { validateDMResponse, deferConsequenceUpdates, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -459,6 +459,9 @@ engine เข้าถึง D&D 5e/2024 SRD ผ่าน Open5e v2 (api.open5e.
    • "stealth" (ซ่อนเร้น) ใช้เมื่อ "เคลื่อนที่/ซ่อนตัวไม่ให้ถูกเห็นหรือได้ยิน" (ย่องเข้าใกล้, หลบในเงา, ซุ่ม) เท่านั้น
    • ถ้า action มีทั้งย่องเข้าไปแล้วล้วงกระเป๋า ให้ใช้ sleight_of_hand เป็น check หลักของการหยิบของ (ความเงียบเป็นบริบท ไม่ต้องทอยแยกเว้นแต่จำเป็นจริง)
    • งัดกุญแจ/ปลดกับดักด้วยเครื่องมือ = "sleight_of_hand"; โน้มน้าว = persuasion; หลอกลวง/โกหก = deception; ข่มขู่ = intimidation; ปีน/ยก/ดัน = athletics; ทรงตัว/หลบหลีก = acrobatics; สังเกต/ค้นหาเบาะแส = perception หรือ investigation
+2.2 ⚠️ สำคัญมาก (เหมือนกฎ 1.1 แต่สำหรับ check/save): เมื่อ response มี "requires" ห้ามบอกผลลัพธ์ใน narration เด็ดขาด — ห้ามเขียนว่า "สำเร็จ/ล้มเหลว/ถูกจับได้/โดนจับ/ทำสำเร็จ/พลาด/หนีรอด" เพราะยังไม่ได้ทอย! narration ต้องบรรยาย "แค่จังหวะก่อนลงมือ" (เช่น "คุณย่องเข้าใกล้ มือค่อย ๆ เอื้อมไปที่กระเป๋า…") แล้วหยุด — รอ [ผลทอย] จาก engine ก่อน แล้วค่อยบรรยายผลจริงใน response ถัดไป
+2.3 ⚠️ เมื่อ response มี "requires" ห้ามใส่ผลกระทบใน "updates" (hp_delta/gold_delta/xp_award/items_remove/conditions_add/buffs ฯลฯ) — ผลกระทบทั้งหมดต้องรอ response หลังทอยเต๋าเท่านั้น มิฉะนั้นผู้เล่นจะโดนลงโทษทั้งที่ยังไม่รู้ว่าทอยผ่านหรือไม่
+2.4 ถ้าผู้เล่นถามคำถาม/บ่น/ทักท้วงเรื่องกติกา (intent=ask_question เช่น "ทำไมทอย X") อย่าสั่ง requires หรือทอยใหม่ — ตอบ/อธิบายในโลกเรื่องหรือชี้แจงสั้น ๆ แล้วปล่อยให้ผู้เล่นตัดสินใจ action ต่อเอง
 3. การต่อสู้ ใช้ "start_combat" พร้อม monster index — มอนสเตอร์ใน engine: ${Object.keys(BESTIARY).join(", ")} หรือใช้ monster index ใดก็ได้จาก Open5e (kebab-case เช่น goblin, owlbear, lich, ancient-red-dragon) เลือกความยากตาม CR รวม ~ level/4 ถึง level/2 ของผู้เล่นเดี่ยว
 4. การเปลี่ยนแปลงสถานะ (ทอง/ไอเทม/XP/conditions/buffs) ผ่าน "updates" เท่านั้น — conditions_add/remove ต้องเป็น array ของ id lowercase เหล่านี้เท่านั้น (ห้ามใช้คำอื่น/พหูพจน์/ภาษาไทย): ${Object.keys(CONDITIONS_TH).join(", ")}
 5. บรรยายกระชับ 2-5 ประโยค จบด้วยสถานการณ์ที่ชวนตัดสินใจ
@@ -3459,7 +3462,14 @@ export default function DnDSolo() {
 
       let entries = [entryNarration(res.narration)];
       logValidationWarnings(res, entries);
-      let cc = applyUpdates(res.updates, c, entries);
+      // Rule 2.3 guard: if this response asks for a check/save, its consequences
+      // (damage/gold/items/conditions/buffs) must wait for the roll — the follow-up
+      // response (res2) applies them. Otherwise the player is punished/rewarded
+      // before the dice are known, and a successful roll can't undo it.
+      const setupUpdates = res.requires && !res.start_combat
+        ? deferConsequenceUpdates(res.updates)
+        : res.updates;
+      let cc = applyUpdates(setupUpdates, c, entries);
 
       // === Narrative Pacing: track scene type + tension ===
       let sc = res.scene || scene;
