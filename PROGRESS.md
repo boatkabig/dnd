@@ -40,11 +40,21 @@ LLM DM  /api/dm  (OpenAI-compatible endpoint; tool/function calling; narrates + 
 
 ## Pending
 
-- **Next (resume here)** — finish the combat migration begun in 1c-b: (a) migrate combat **state** (initiative/round/turn loop, enemy HP) to a bridge-owned `CombatBridgeState` rendered via `getCombatView`, retiring the legacy `cb` object + inline `playerCombatAction`/`enemyAttacks` loops; (b) wire monster **Multiattack**, the engine **death-save** lifecycle, and **grapple/shove** (`combat.ts`) through the bridge. Also revisit the 1c-b re-plumb notes: Savage Attacker's `_lastWeaponDamageRoll.total` is now post-ability-mod, the combat log lost per-die detail, and the adv/disadv "ghost die" is no longer shown.
-- Extract remaining panels (sheet / inventory / dungeon / adventure log / DM chat) → thin `DnDSolo.tsx` shell, then fan out.
+- **Next (resume here)** — implement **Stage A+B** of the combat-state migration plan below (persist `startBridgeCombat` in `initCombat`; make `cb.enemies[].hpNow` a pure projection of the bridge state by rerouting all ~15 enemy-damage sites through `combatBridge`). It's the only slice with clean matching semantics and is already half-done (weapon damage flows through the bridge today). Then **#13**: wire monster **Multiattack**, the engine **death-save** lifecycle, and **grapple/shove** (`combat.ts`) through the bridge. Re-plumb notes from 1c-b to revisit: Savage Attacker's `_lastWeaponDamageRoll.total` is now post-ability-mod; the combat log lost per-die detail; the adv/disadv "ghost die" is no longer shown.
+- Extract the last two panels (dungeon map modal, DM-chat input/controls) → thinner `DnDSolo.tsx` shell. Adventure Log + Character Sheet (incl. inventory tab) already extracted.
 - **Phase 2** death/HP/concentration · **Phase 3** tool-calling DM + spell legality (wire vision here) · **Phase 4** subclass/feats/multiclass/prepared-vs-known/equipment · **Phase 5** solo systems (sidekick, oracle, exploration, campaign memory, session zero) · **Phase 6** content/economy/persistence + delete dead code trees + e2e scenarios.
 - 2024-audit fixes distributed to the phase that wires each module (most defects are dormant dead-code; fixed at wiring time, keeping one 2024 copy and deleting the 2014 duplicate).
-- Consolidate the content layer to Open5e v2 only — drop the dnd5eapi.co / 2014 fallback in `src/lib/srd.ts` (1152 lines, imported live by DnDSolo / CharacterCreation / engineAdapters / combatBridge / spells) + the `/api/srd` route. A cross-cutting refactor: each of the 5 importers must be verified against the Open5e v2 shape. Deferred (not a quick task).
+
+## Combat-state migration plan (task #12 — retire the legacy `cb`)
+
+The `cb` blob (`DnDSolo.tsx:1518-1527`: `enemies[]` with `hpNow`/`conditions`, `round`, `playerFirst`, `surprise`, `bonusUsed`, `extraAction`, `movementLeft`, `hasMoved`, `initOrder`, `currentInitIdx`, `grid`, `playerPos`, `enemyPositions`) duplicates state the engine owns inside one `CombatBridgeState.combat` (`combatBridge.ts:256-260`). The pieces are NOT equally clean to migrate — stage them so each lands whole and gate-green:
+
+- **Stage A (enabler, ship with B, never alone)**: adapter `enemyBlob → EnemyMemberInput`/`Combatant` (bestiary/SRD blobs are not `NormalizedCreature`, which `startBridgeCombat` expects), and persist `cb.bridge = startBridgeCombat(...)` in `initCombat`. On its own it's an unread second state = the disease, so it must not ship without B. Risk: MED.
+- **Stage B (the big lever)**: delete `enemies[].hpNow`, derive a read-model from `getCombatView(cb.bridge)`; reroute all ~15 `.hpNow =` sites + the `.map` HP updates (weapon ~2653-2685; cleave 2530; ready-action 1679-1680; spells 2076-2226; Spirit Guardians 2815-2832; item throws 2748; map updates 896-957) through `combatBridge.performAttack`/`applyDamage`. Keep `.enemy-card`/`.hpbar-label` markup reading `e.hpNow`/`e.hp` as projected getters. Conceptually clean (matching semantics; math already bridged), but HIGH breadth.
+- **Stage C**: initiative order + `currentInitIdx` — reconcile the app-RNG roll + its log line with engine-seeded `rollInitiative`, then derive from `getCombatView().order`+`phase` (UI at 4982-4983). Risk: HIGH (RNG/log values are e2e-visible).
+- **Stage D**: round/turn counter — `cb.round` is a per-player-action-cycle counter (incremented at 2280/2300/2795/2847/3200/3249/3547/3783), semantically ≠ the engine's per-initiative-cycle `combat.round`; reconcile before deleting (reads at 1595, 2846-2848, 3276, 4915). Risk: MED-HIGH.
+- **Stage E**: action economy — map `bonusUsed`/`extraAction`/`movementLeft`/`hasMoved` (+ `enemies[].reactionUsed` 2847/3249) onto bridge `actionTrackers` via `spendAction`/`spendMovement`/`endTurn`. Risk: MED.
+- **Stage F**: delete `cb`; UI + AI-context reads go through `getCombatView`. Risk: LOW once A-E land.
 
 ## Problems / risks encountered
 
