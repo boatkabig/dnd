@@ -1,7 +1,37 @@
 # DND Solo — Build Progress
 
 Branch: `feat/build-to-completion` · Baseline: **D&D 2024** · Mode: engine-first rebuild.
-Last updated: 2026-07-11 (this session: stripped Claude commit-trailers via history-rewrite `45b4530`; deep "does-it-affect-gameplay" verification audit; 4 edge-bug fixes; **next = combat turn-loop migration off the bridge — see "NEXT PHASE" below**). Detailed roadmap lives at `.claude/plans/build-to-completion.md` (local, gitignored).
+Last updated: 2026-07-11 (session-limit checkpoint: #12–#16 done+merged to `main`@`c8c6ce7`; #17 combat turn-loop STAGED + uncommitted on `feat/combat-turn-loop` — **see "⏭ SESSION HANDOFF" section immediately below, read first**). Detailed roadmap lives at `.claude/plans/build-to-completion.md` (local, gitignored).
+
+## ⏭ SESSION HANDOFF — 2026-07-11 (session-limit checkpoint, READ FIRST)
+
+**Where main is:** `main` HEAD = `c8c6ce7`. Tasks **#12–#16 are DONE and merged to main** (death-saves outside combat, DM number-string coercion, concentration single-source, LLM tool-calling probe, DM `/api/dm` tool/function-calling migration). Task-system list #12–#20 is the live tracker.
+
+**Where the uncommitted work is:** active branch = **`feat/combat-turn-loop`** (task #17, NOT yet merged). Working tree has **uncommitted** changes to `src/components/DnDSolo.tsx` + `src/lib/engine/combatBridge.ts` = Stages 1+2 below. **Nothing on this branch is committed yet — do not lose it.**
+
+### Task #17 (P0 combat turn-loop migration) — staged, IN PROGRESS
+- **Stage 1 — DONE (uncommitted):** movement 5× bug fixed — squares↔feet made consistent, routed through `combatBridge.moveBy`. Independently verified `tsc=0`, `e2e 8/8`. Surgical diff.
+- **Stage 2 — DONE (uncommitted):** pure refactor — extracted the per-enemy turn body of `enemyAttacks` into a standalone `enemyTurn(...)`; `enemyAttacks` is now a thin initiative loop. Behavior-identical (in-loop `continue`/`break` translated to returns).
+- **Stage 3 — IN PROGRESS (agent `afc3f21cae828074c`, may not survive session end):** the real interleaved per-combatant turn loop — a helper that walks `getCombatView(bridge).order`, runs `enemyTurn` for each non-player in initiative order via bridge `endTurn` (advances pointer + reseeds budgets), and yields to the interactive player UI when `order[idx]` is the player. **Subsumes all 4 enemy entry points at `:2758 / :3288 / :3718 / :4017+:4454`.** Highest-risk stage (real behavioral change: interleaving). Hard gate = `e2e 8/8`.
+
+### RESUME #17 (do this first next session)
+1. `git status` on `feat/combat-turn-loop`. Check whether Stage-3 agent `afc3f21cae828074c` completed and left more edits in `DnDSolo.tsx`; review the loop diff closely.
+2. **If Stage 3 died / incomplete:** Stages 1+2 are safe and green on their own — either (a) commit Stages 1+2 alone first (movement fix + refactor, both e2e-green, real value) then re-dispatch Stage 3 with the spec above, or (b) re-dispatch Stage 3 to finish in-tree.
+3. Verify (hard bar): `rm -rf .next && node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` → 0; `node ./node_modules/vitest/vitest.mjs run` → green; `npm run e2e` → **8/8**.
+4. Commit → `git checkout main && git merge --ff-only feat/combat-turn-loop && git push origin main` → delete branch → mark **#17 completed** in task list.
+
+### Then, in order (all touch DnDSolo.tsx → run sequential, one branch each)
+- **#18 (P2)** Wire rest to engine: `DnDSolo.tsx:4036` longRest / `:4148` shortRest → `engine/rest.ts`; then delete dead `lib/rest.ts` + `engine/rest.ts` duplication per #20.
+- **#19 (P2)** Spell targeting: thread `combatTargetId` into `castSRDSpell` (currently ignored, hits `alive[0]` @ `:2456/:2526`); AoE origin hardcoded @ `:2446` → add origin picker.
+- **#20 (P3)** Tech-debt: move `RollTicket`/`d`/`makeCharacter`/`SRD_OK` to `src/lib/**` (break Character* circular imports); fix 3 eslint errors; delete stale "loses first-turn retaliation" log @ `:3222/:3642`; add `"typecheck":"rimraf .next && tsc --noEmit"`; **death-save out-of-combat UI indicator/button follow-up (carried from #12)**.
+
+### Env quirks (verify discipline)
+- `rtk` hook compresses command output → use `rtk proxy git …` for raw git.
+- Use direct node paths for tooling (tsc/vitest above); `rm -rf .next` BEFORE tsc or the stale `.next` validator false-fails on the deleted `/api/srd` route.
+- Branch-per-task, ff-merge to main, keep main clean. No `Co-Authored-By` trailers on commits.
+- DM route can't run locally without `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`OPENAI_MODEL` in `.env.local` (gitignored). LLM `typhoon-v2.5-30b-a3b-instruct` @ opentyphoon HONORS forced `tool_choice`.
+
+---
 
 ## Architecture (target)
 
