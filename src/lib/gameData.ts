@@ -1,8 +1,8 @@
 /**
  * Static game data: all 12 SRD classes, all SRD races, all SRD conditions,
  * expanded equipment/magic items. This serves as the in-engine fallback and
- * baseline; the engine also dynamically fetches from /api/srd for spells and
- * monsters at runtime.
+ * baseline; the engine also dynamically fetches from Open5e v2 (via lib/srd.ts
+ * and lib/open5e.ts / the /api/open5e proxy) for spells and monsters at runtime.
  */
 
 /* ---------------- ABILITIES ---------------- */

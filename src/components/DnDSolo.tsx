@@ -13,7 +13,7 @@ import {
   type Quest,
 } from "@/lib/gameData";
 import {
-  fetchSpell, fetchMonster, srdProbe, srdListSpells, type NormalizedSpell, type NormalizedMonster,
+  fetchSpell, srdProbe, type NormalizedSpell,
 } from "@/lib/srd";
 import {
   computeAC, spellAtkMod, spellDC, getSlotTable, maxSpellLevel, getClassSpellIndices, refreshesOnShortRest,
