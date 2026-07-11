@@ -77,7 +77,7 @@ import AdventureLog from "@/components/game/AdventureLog";
 import CharacterSheet from "@/components/game/CharacterSheet";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
-import { buildBridgeState, applyBridgeDamage, planMultiattackSequence } from "@/lib/engine/combatBridge";
+import { buildBridgeState, applyBridgeDamage, planMultiattackSequence, getCombatView } from "@/lib/engine/combatBridge";
 import { rollDeathSave, resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName } from "@/lib/engine/effects";
 // Phase 3: spell-legality (2024) + vision/LOS wiring — engine-owned rules
@@ -1631,11 +1631,13 @@ export default function DnDSolo() {
     // Do NOT show "vs DC" or "MISS/HIT" — just show the roll and who goes first
     entries.push({ id: nextId(), type: "roll", title: "Initiative", roll: pInit, extra: `ศัตรูทอยได้สูงสุด ${eInitBest} — ${pInit.total >= eInitBest ? "คุณได้เริ่มก่อน" : "ศัตรูเริ่มก่อน"}` });
 
-    // Build initiative order (sorted by initiative, descending)
-    const initOrder: { uid: string; name: string; init: number; isPlayer: boolean }[] = [
-      { uid: "player", name: cc.name, init: pInit.total, isPlayer: true },
-      ...enemyInits.map((e) => ({ uid: e.uid, name: e.th, init: e.init, isPlayer: false })),
-    ].sort((a, b) => b.init - a.init);
+    // Stage C (combat-state migration): the initiative each combatant rolled
+    // above is FED INTO the bridge (below), which becomes the single owner of
+    // initiative order + values. `cb.initOrder`/`cb.currentInitIdx` are derived
+    // from getCombatView() rather than held as a parallel copy. Map uid→init so
+    // the bridge seed can carry the exact rolled totals.
+    const enemyInitByUid: Record<string, number> = {};
+    enemyInits.forEach((e) => { enemyInitByUid[e.uid] = e.init; });
 
     // D&D 2024 Surprise: enemies rolled Initiative with Disadvantage but still act normally
     const playerFirst = pInit.total >= eInitBest;
@@ -1665,16 +1667,18 @@ export default function DnDSolo() {
       grid: { w: GRID_W, h: GRID_H },
       playerPos,
       enemyPositions,
-      initOrder,
-      currentInitIdx: initOrder.findIndex((o) => o.isPlayer === playerFirst),
       movementLeft: cc.speed || 30, // D&D 5e: use character's speed (dwarf=25, monk=30+10, etc.)
       hasMoved: false,
     };
-    // Stage A (combat-state migration): the persistent bridge state OWNS enemy HP.
-    // Enemy blobs are bestiary/SRD shapes (not NormalizedCreature), so adapt them
-    // to RawCombatantInput here. `hpNow` on each blob is now a projection of this.
+    // Stage A+C (combat-state migration): the persistent bridge state OWNS enemy
+    // HP (A) and initiative order/values (C). Enemy blobs are bestiary/SRD shapes
+    // (not NormalizedCreature), so adapt them to RawCombatantInput here. `hpNow`
+    // on each blob is a projection of this; the `initiative` seed (each
+    // combatant's already-rolled total) makes the bridge the single owner of
+    // turn order — createCombat's sort reproduces the app's prior stable
+    // descending order exactly (see tests/combat-bridge.test.ts).
     cb.bridge = buildBridgeState([
-      { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30, isPlayer: true },
+      { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30, isPlayer: true, initiative: pInit.total },
       ...enemies.map((e: any) => ({
         id: e.uid,
         name: e.th,
@@ -1683,8 +1687,16 @@ export default function DnDSolo() {
         maxHp: e.hp,
         speed: typeof e.speed === "number" ? e.speed : 30,
         isPlayer: false,
+        initiative: enemyInitByUid[e.uid] ?? e.init,
       })),
     ]);
+    // Stage C: initiative order + current-turn pointer are now a projection of
+    // the seeded bridge (single source), not independently-held state. The
+    // derived order/values/flags are byte-identical to the prior local sort.
+    cb.initOrder = getCombatView(cb.bridge).order.map((o) => ({
+      uid: o.id, name: o.name, init: o.initiative, isPlayer: o.isPlayer,
+    }));
+    cb.currentInitIdx = cb.initOrder.findIndex((o: any) => o.isPlayer === playerFirst);
     return cb;
   }
 
