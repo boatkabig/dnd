@@ -2109,6 +2109,17 @@ export default function DnDSolo() {
     let endsTurn = true;
     if (sp.bonusAction) endsTurn = false;
 
+    // Single-target resolution: hit whichever enemy the player selected via the
+    // shared combatTargetId state (the SAME target-selection convention weapon
+    // attacks use — see doWeaponAttack's `payload` lookup), falling back to the
+    // first living enemy if nothing is selected or the selection has died.
+    const pickTarget = (pool: any[]) =>
+      pool.find((e: any) => e.uid === combatTargetId && e.hpNow > 0) || pool.find((e: any) => e.hpNow > 0);
+    // AoE origin: center on the selected enemy's grid position when one is chosen
+    // (reusing the same enemy-selection UI), else fall back to the player's own
+    // position — the previous, always-on default.
+    const aoeOrigin = (combatTargetId && ncb.enemyPositions?.[combatTargetId]) || ncb.playerPos;
+
     if (sp.kind === "heal") {
       const h = rollFormula(sp.heal || "1d8");
       const healAmount = h.total + mod(nc.abilities[CLASSES[nc.cls].castAbil]);
@@ -2125,21 +2136,21 @@ export default function DnDSolo() {
       }
     } else if (sp.kind === "attack") {
       const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-      // AoE targeting: use actual distance from player
+      // AoE targeting: use actual distance from the chosen origin
       let targets: any[] = [];
       if (sp.aoeType && sp.aoeSize) {
         const aoeRadiusSquares = Math.ceil(sp.aoeSize / 5);
-        // Player is the origin; include enemies within aoeRadiusSquares
         targets = alive.filter((e: any) => {
           const ePos = ncb.enemyPositions?.[e.uid];
-          if (!ePos || !ncb.playerPos) return true; // fallback if no positions
-          const dist = gridDistance(ncb.playerPos, ePos);
+          if (!ePos || !aoeOrigin) return true; // fallback if no positions
+          const dist = gridDistance(aoeOrigin, ePos);
           return dist <= aoeRadiusSquares;
         });
-        if (targets.length === 0) targets = alive.slice(0, 1); // fallback: hit nearest
+        if (targets.length === 0) { const t = pickTarget(alive); targets = t ? [t] : []; } // fallback: hit selected/nearest
         entries.push(entrySystem(`🌐 AoE ${sp.aoeType} ${sp.aoeSize}ft กระทบ ${targets.length} เป้าหมาย`));
       } else {
-        targets = alive.slice(0, 1);
+        const t = pickTarget(alive);
+        targets = t ? [t] : [];
       }
       for (const t of targets) {
         // 2024 unseen-attacker/target via engine/vision (spell attack rolls).
@@ -2196,20 +2207,21 @@ export default function DnDSolo() {
     } else if (sp.kind === "save") {
       const dc = spellDC(nc);
       const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-      // AoE targeting: use actual distance from player
+      // AoE targeting: use actual distance from the chosen origin
       let targets: any[] = [];
       if (sp.aoeType && sp.aoeSize) {
         const aoeRadiusSquares = Math.ceil(sp.aoeSize / 5);
         targets = alive.filter((e: any) => {
           const ePos = ncb.enemyPositions?.[e.uid];
-          if (!ePos || !ncb.playerPos) return true;
-          const dist = gridDistance(ncb.playerPos, ePos);
+          if (!ePos || !aoeOrigin) return true;
+          const dist = gridDistance(aoeOrigin, ePos);
           return dist <= aoeRadiusSquares;
         });
-        if (targets.length === 0) targets = alive.slice(0, 1);
+        if (targets.length === 0) { const t = pickTarget(alive); targets = t ? [t] : []; }
         entries.push(entrySystem(`🌐 AoE ${sp.aoeType} ${sp.aoeSize}ft กระทบ ${targets.length} เป้าหมาย (DC ${dc})`));
       } else {
-        targets = alive.slice(0, 1);
+        const t = pickTarget(alive);
+        targets = t ? [t] : [];
       }
       // AoE damage rolled once
       const aoeRoll = sp.damage ? rollFormula(sp.damage) : null;
@@ -2258,7 +2270,7 @@ export default function DnDSolo() {
         // Magic Missile is force damage per SRD; for other auto-hit spells, fall back to sp.damageType.
         const sDmgType = (sp.index === "magic-missile" ? "force" : (sp.damageType || "force")).toLowerCase();
         for (let dart = 0; dart < dartsCount; dart++) {
-          const tgt = ncb.enemies.find((e: any) => e.hpNow > 0);
+          const tgt = pickTarget(ncb.enemies);
           if (!tgt) break;
           const dr = rollFormula(dartDamage);
           // === NEW: apply resistance/immunity/vulnerability to each dart ===
@@ -2274,7 +2286,7 @@ export default function DnDSolo() {
       } else {
         // Generic auto-hit
         const dr = rollFormula(sp.damage || "1d6");
-        const tgt = alive[0];
+        const tgt = pickTarget(alive);
         if (tgt) {
           // === NEW: apply resistance/immunity/vulnerability ===
           const sDmgType = (sp.damageType || "force").toLowerCase();
@@ -2341,8 +2353,9 @@ export default function DnDSolo() {
       if (sp.conditionsAdd && sp.conditionsAdd.length > 0) {
         const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
         for (const cond of sp.conditionsAdd) {
-          // Single-target conditions apply to first enemy; AoE to all in range
-          const targets = sp.aoeType ? alive : alive.slice(0, 1);
+          // Single-target conditions apply to the selected enemy; AoE to all in range
+          const primary = pickTarget(alive);
+          const targets = sp.aoeType ? alive : (primary ? [primary] : []);
           for (const t of targets) {
             if (!t.conditions) t.conditions = [];
             if (!t.conditions.includes(cond)) {

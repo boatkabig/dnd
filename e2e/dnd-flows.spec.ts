@@ -147,3 +147,50 @@ test("✨ casting Magic Missile in combat consumes a spell slot", async ({ page 
   // Exactly one level-1 slot should be spent → one fewer full pip.
   await expect.poll(async () => fullPips.count()).toBeLessThan(before);
 });
+
+// ── 5b. Spell targeting honors the player's selected enemy (Task #19) ───────
+const TWO_FROG_COMBAT: MockDmResponse = {
+  narration: "E2E_FLOWS_TWOFROG_a_pair_of_frogs_blink",
+  scene: "จุดเริ่มต้น",
+  // Two frogs (atk 0 / dmg "0" in the bestiary) so the wizard survives no
+  // matter how many retries the spell-attack-roll loop below needs.
+  start_combat: { monsters: ["frog", "frog"] },
+};
+
+test("✨ casting a single-target spell damages the SELECTED (non-first) enemy", async ({ page }) => {
+  const dm = mockDm(page, [OPENING_RESPONSE, TWO_FROG_COMBAT]);
+  await dm.install();
+  await mockIntent(page);
+  await page.goto("/");
+
+  await quickStartWizard(page);
+
+  await submitAction(page, "เดินเข้าไปในถ้ำ");
+  await expect(page.getByText("E2E_FLOWS_TWOFROG_a_pair_of_frogs_blink")).toBeVisible();
+
+  const enemyCards = page.locator(".enemy-card");
+  await expect(enemyCards).toHaveCount(2);
+  const readHp = () => Promise.all([0, 1].map((i) => enemyCards.nth(i).locator(".hpbar-label").innerText()));
+  const initialHp = await readHp();
+
+  // Select the SECOND frog as the target — the same enemy-card click
+  // convention already used to select weapon-attack targets.
+  await enemyCards.nth(1).click();
+
+  // Fire Bolt (a bundled SEED cantrip, single-target spell-attack-roll) can
+  // miss, so retry a bounded number of casts; frogs deal 0 damage, so this is
+  // safe regardless of how many rounds it takes.
+  const spellButton = page.getByRole("button", { name: /Fire Bolt/ });
+  let afterHp = initialHp;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await page.getByRole("button", { name: /ร่ายเวท/ }).click();
+    await spellButton.click();
+    await page.waitForTimeout(150);
+    afterHp = await readHp();
+    if (afterHp[1].trim() !== initialHp[1].trim()) break;
+  }
+
+  // The SELECTED (2nd) frog took the damage; the unselected (1st) frog didn't.
+  expect(afterHp[1].trim()).not.toBe(initialHp[1].trim());
+  expect(afterHp[0].trim()).toBe(initialHp[0].trim());
+});
