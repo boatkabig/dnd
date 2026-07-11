@@ -9,6 +9,7 @@
 
 import { fetchSpell, srdListSpells, type NormalizedSpell } from "./srd";
 import { CLASSES, mod, profByLevel, SLOT_TABLE, HALF_CASTER_SLOTS, MAGIC_ITEMS } from "./gameData";
+import { featAcBonus } from "./engine/progression";
 
 /* ----------------- AC computation (D&D 2024 rules) ----------------- */
 // D&D 2024 armor rules:
@@ -21,6 +22,8 @@ import { CLASSES, mod, profByLevel, SLOT_TABLE, HALF_CASTER_SLOTS, MAGIC_ITEMS }
 //   D&D 2024: no more STR requirement for heavy armor, no more stealth disadvantage (simplified)
 export function computeAC(c: any): number {
   const armor = (c.worn || []).map((n: string) => MAGIC_ITEMS[n]).find((m: any) => m && m.slot === "armor");
+  // Phase 4: Fighting Style — Defense grants +1 AC while wearing armor.
+  const defenseBonus = featAcBonus(c.feats || [], !!armor);
   let ac: number;
   if (armor) {
     const dexMod = mod(c.abilities.dex);
@@ -54,7 +57,7 @@ export function computeAC(c: any): number {
     if (b.name === "Shield Of Faith" || b.name === "Shield of Faith") ac += 2;
     if (b.name === "Slow") ac -= 2;
   }
-  return ac;
+  return ac + defenseBonus;
 }
 
 /* ----------------- Spellbook cache ----------------- */
