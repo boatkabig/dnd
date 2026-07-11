@@ -186,6 +186,16 @@
 .s-bad { color: #E0766D; border-color: var(--dnd-red); }
 
 /* Messages */
+.msg-dm, .msg-player, .msg-system {
+  /* Bug fix: long unbroken DM narration (URLs, long words, Thai runs without
+     browser word-segmentation) forced these blocks wider than their scroll
+     container, which flips the parent's overflow-y:auto into overflow-x:auto
+     too (CSS overflow computed-value rule) — an unwanted horizontal scrollbar
+     on the play screen's log/chat area. Breaking anywhere avoids that without
+     touching layout/spacing. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .msg-dm { background: #1E1830; border: 1px solid var(--dnd-border); border-radius: 12px 12px 12px 4px; padding: 10px 14px; margin: 8px 0; line-height: 1.65; white-space: pre-wrap; }
 .msg-player { background: #2C2348; border-radius: 12px 12px 4px 12px; padding: 8px 12px; margin: 8px 0 8px 15%; color: #E9E2F5; }
 .msg-system { text-align: center; font-size: 12px; color: #B9A96A; margin: 6px 0; }
