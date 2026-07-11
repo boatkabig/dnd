@@ -348,6 +348,98 @@ export function startBridgeCombat(
 }
 
 // ============================================================================
+// 3b. HP-MIGRATION SEAM — build a bridge from loose app blobs + apply raw damage
+// ============================================================================
+//
+// The live app (DnDSolo.tsx) keeps its combatants as loosely-typed bestiary/SRD
+// blobs, NOT NormalizedCreature, so it can't feed startBridgeCombat directly.
+// These two helpers are the minimal adapter that lets the persistent bridge OWN
+// enemy HP while the UI keeps its blob shapes:
+//   - buildBridgeState: blob → Combatant (id/name/ac/hp/speed) → CombatBridgeState.
+//   - applyBridgeDamage: apply an ALREADY-FINAL damage amount (resistances +
+//     feature dice already layered by the caller) to a target and return the new
+//     persistent state + newHP. Empty resistances are used on the seeded
+//     combatants, so this is a pure `newHP = max(0, hp - amount)` — the caller
+//     reads newHP back as its projected `hpNow` (single owner = the bridge).
+
+/** Minimal combatant descriptor for building a bridge state from app blobs. */
+export interface RawCombatantInput {
+  id: string;
+  name: string;
+  ac: number;
+  hp: number;
+  maxHp?: number;
+  speed?: number;
+  isPlayer: boolean;
+}
+
+/** Build a CombatBridgeState from loose app combatant blobs (empty enemyProfiles). */
+export function buildBridgeState(inputs: RawCombatantInput[]): CombatBridgeState {
+  const combatants: Combatant[] = inputs.map((o) => ({
+    characterId: o.id,
+    name: o.name,
+    // Initiative order is Stage C's concern; HP migration only needs identity.
+    initiative: o.isPlayer ? 20 : 10,
+    isPlayer: o.isPlayer,
+    position: { x: 0, y: 0 },
+    ac: o.ac,
+    hp: o.hp,
+    maxHp: o.maxHp ?? o.hp,
+    speed: o.speed ?? 30,
+    reach: 5,
+    // Empty resistances on purpose: the caller has already applied the full
+    // resist/vuln/immune + feature-dice pipeline, so applyBridgeDamage must not
+    // touch the amount again (see applyBridgeDamage / CombatView.mkCombatant).
+    resistances: [],
+    vulnerabilities: [],
+    immunities: [],
+    conditionIds: [],
+    surprised: false,
+    deathSaves: { successes: 0, failures: 0 },
+    conscious: true,
+  }));
+  const combat = createCombat(combatants, 12, 10);
+  return { combat, enemyProfiles: {} };
+}
+
+export interface ApplyBridgeDamageResult {
+  state: CombatBridgeState;
+  newHP: number;
+  /** false when the target id isn't in the bridge (caller should degrade). */
+  found: boolean;
+}
+
+/**
+ * Apply an already-final damage amount to a target in the persistent bridge
+ * state and return the updated state + newHP. Because seeded combatants carry
+ * empty resistances, this is exactly `newHP = max(0, hp - amount)` — the same
+ * arithmetic the legacy inline `hpNow = Math.max(0, hpNow - dmg)` produced.
+ */
+export function applyBridgeDamage(
+  state: CombatBridgeState,
+  targetId: string,
+  amount: number,
+  damageType: DamageType = "bludgeoning",
+): ApplyBridgeDamageResult {
+  const target = getCombatant(state.combat, targetId);
+  if (!target) return { state, newHP: 0, found: false };
+  const dmgResult = applyDamage(
+    { targetId, amount, damageType, source: "custom", isCritical: false },
+    target.hp,
+    !!target.concentratingOn,
+  );
+  const combat: CombatState = {
+    ...state.combat,
+    initiativeOrder: state.combat.initiativeOrder.map((c) =>
+      c.characterId === targetId
+        ? { ...c, hp: dmgResult.newHP, conscious: dmgResult.newHP > 0 ? c.conscious : false }
+        : c,
+    ),
+  };
+  return { state: { ...state, combat }, newHP: dmgResult.newHP, found: true };
+}
+
+// ============================================================================
 // 4. COMBAT VIEW — read-only projection for the UI / AI DM
 // ============================================================================
 
