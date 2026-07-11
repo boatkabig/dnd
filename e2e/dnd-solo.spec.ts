@@ -36,6 +36,18 @@ const TWO_GOBLIN_COMBAT_RESPONSE: MockDmResponse = {
   start_combat: { monsters: ["goblin", "goblin"] },
 };
 
+// D&D 2024 surprise: the surprised side has DISADVANTAGE on its Initiative
+// roll only — it does NOT lose or skip its turn. Two goblins (not one) so a
+// single player attack can never wipe the whole encounter before the enemy
+// phase runs — one goblin always survives to prove it still acts.
+const SURPRISE_NARRATION = "E2E_SURPRISE_NARRATION_you_catch_the_goblins_off_guard";
+
+const SURPRISE_TWO_GOBLIN_COMBAT_RESPONSE: MockDmResponse = {
+  narration: SURPRISE_NARRATION,
+  scene: "จุดเริ่มต้น",
+  start_combat: { monsters: ["goblin", "goblin"], surprise: true },
+};
+
 // One heading per ccStep (0-9) — used to confirm each step actually
 // rendered before advancing, so the loop below can't silently race ahead
 // of a still-in-flight React re-render.
@@ -83,10 +95,15 @@ async function createCharacterThroughAllSteps(page: Page, name: string): Promise
  * deviation above), then submit one free-text action (2nd /api/dm call —
  * narration + start_combat with 2 goblins). Returns the enemy-card locator
  * plus each enemy's starting HP text for the caller to act on.
+ *
+ * `expectedNarration` lets callers reuse this for a differently-mocked 2nd
+ * /api/dm response (e.g. the surprise-encounter variant below) while still
+ * asserting the correct narration actually rendered.
  */
 async function reachCombatWithTwoGoblins(
   page: Page,
   name: string,
+  expectedNarration: string = COMBAT_NARRATION,
 ): Promise<{ enemyCards: Locator; initialHp: string[] }> {
   await createCharacterThroughAllSteps(page, name);
 
@@ -95,7 +112,7 @@ async function reachCombatWithTwoGoblins(
 
   await page.getByPlaceholder("จะทำอะไรต่อ? (พิมพ์ action อิสระ...)").fill("ลุยต่อไปข้างหน้า");
   await page.getByRole("button", { name: "ส่ง" }).click();
-  await expect(page.getByText(COMBAT_NARRATION)).toBeVisible();
+  await expect(page.getByText(expectedNarration)).toBeVisible();
 
   // Combat entered: 2 enemy cards, each showing the goblin's starting HP.
   const enemyCards = page.locator(".enemy-card");
@@ -188,4 +205,50 @@ test("selecting the 2nd enemy as target and attacking damages the 2nd enemy", as
   // should be the one that took damage. Currently false — damage always
   // lands on enemy index 0 — so this assertion fails, which is expected.
   expect(afterAttackHp[1].trim()).not.toBe(initialHp[1].trim());
+});
+
+// Regression test for the fixed bug: DnDSolo.tsx used to have a leftover
+// 2014-style `if (cb.surprise) { ...; return; }` branch that RETURNED before
+// runEnemyPhase() ran, so surprised enemies never got a turn on round 1. The
+// D&D 2024 rule is Initiative-roll disadvantage ONLY — surprised creatures
+// still act normally.
+test("a surprised enemy still takes its turn on round 1 (D&D 2024: surprise = initiative disadvantage only, not a skipped turn)", async ({
+  page,
+}) => {
+  const dm = mockDm(page, [OPENING_RESPONSE, SURPRISE_TWO_GOBLIN_COMBAT_RESPONSE]);
+  await dm.install();
+  await mockIntent(page);
+
+  await page.goto("/");
+
+  await reachCombatWithTwoGoblins(page, "Sera Quickblade", SURPRISE_NARRATION);
+
+  // Every enemy turn is logged with a "<name> AI: <action>" system line the
+  // instant its turn is processed (src/lib/engine/enemyAI.ts, before any
+  // movement/range check or attack roll) — so it's a distance- and
+  // RNG-independent proof that an enemy's turn actually ran, unlike an
+  // attack-roll ticket (which depends on the goblin closing melee range —
+  // not guaranteed within a single turn on this map) or the round counter
+  // (which the OLD buggy branch also incremented, so it can't distinguish
+  // fixed vs. broken).
+  //
+  // Who wins initiative is itself RNG — surprise only disadvantages the
+  // enemies' roll, it does not guarantee the player goes first — so we can't
+  // assert on an absolute count. Instead: capture the count of these lines
+  // BEFORE the player acts, then assert it INCREASES after the player's turn
+  // ends, proving the post-player-turn enemy phase ran. Before the fix,
+  // `cb.surprise` caused an early `return` right before that exact phase, so
+  // the count would never increase.
+  const aiTurnLines = page.getByText(/Goblin AI:/);
+  const beforeCount = await aiTurnLines.count();
+
+  // One ranged attack always consumes a level-1 character's action (no Extra
+  // Attack / bonus-action features at level 1), ending the player's turn.
+  await page.getByRole("button", { name: /ยิง/ }).click();
+
+  await expect
+    .poll(() => aiTurnLines.count(), {
+      message: "expected at least one more enemy turn to be processed after the player's turn ended",
+    })
+    .toBeGreaterThan(beforeCount);
 });

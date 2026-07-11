@@ -2814,14 +2814,10 @@ export default function DnDSolo() {
             return;
           }
           // enemies act
-          if (cb.surprise) {
-            cb.surprise = false; cb.round += 1; cb.bonusUsed = false; cb.extraAction = false;
-            const finalLog = [...log0, ...entries];
-            commitCombat(cc, cb, finalLog);
-            persist(cc, scene, finalLog, cb, history);
-            setThinking(false);
-            return;
-          }
+          // D&D 2024: surprise affects the initiative ROLL only — surprised
+          // enemies still take their turn normally. Clear the round-1-only
+          // advantage flag and fall through to the normal enemy phase below.
+          if (cb.surprise) cb.surprise = false;
           // auto-spells: Spiritual Weapon + Spirit Guardians
           if (cb.spiritualWeapon) {
             const t = cb.enemies.find((e:any)=>e.hpNow>0);
@@ -3243,13 +3239,10 @@ export default function DnDSolo() {
 
     // enemies act
     if (!fled) {
-      if (cb.surprise) {
-        cb.surprise = false; cb.round += 1; cb.bonusUsed = false; cb.extraAction = false;
-        const finalLog = [...log0, ...entries];
-        commitCombat(cc, cb, finalLog);
-        persist(cc, scene, finalLog, cb, history);
-        return;
-      }
+      // D&D 2024: surprise affects the initiative ROLL only — surprised
+      // enemies still take their turn normally. Clear the round-1-only
+      // advantage flag and fall through to the normal enemy phase below.
+      if (cb.surprise) cb.surprise = false;
       if (cb.spiritualWeapon) {
         const t = cb.enemies.find((e: any) => e.hpNow > 0);
         if (t) {
