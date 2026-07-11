@@ -25,6 +25,43 @@ export const VALID_CONDITION_IDS = [
 
 export const ConditionIdSchema = z.enum(VALID_CONDITION_IDS);
 
+/** Obvious LLM variants → canonical VALID_CONDITION_IDS entry. */
+const CONDITION_ALIASES: Record<string, string> = {
+  exhausted: "exhaustion",
+  blind: "blinded",
+  charm: "charmed",
+  deaf: "deafened",
+  fear: "frightened",
+  afraid: "frightened",
+  grapple: "grappled",
+  incapacitate: "incapacitated",
+  paralyze: "paralyzed",
+  paralysis: "paralyzed",
+  petrify: "petrified",
+  petrification: "petrified",
+  poison: "poisoned",
+  restrain: "restrained",
+  stun: "stunned",
+};
+
+/** Case-insensitive condition match with alias fallback; unrecognized → null. */
+function normalizeConditionId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const key = raw.trim().toLowerCase();
+  if ((VALID_CONDITION_IDS as readonly string[]).includes(key)) return key;
+  return CONDITION_ALIASES[key] ?? null;
+}
+
+/**
+ * Coerce a bare object into a one-element array so DM output that omits the
+ * array wrapper (common when there's exactly one item) still validates.
+ * Arrays, null and undefined pass through untouched.
+ */
+function toArray(v: unknown): unknown {
+  if (v === undefined || v === null || Array.isArray(v)) return v;
+  return [v];
+}
+
 /* ======================================================================
  * SCENE TYPES
  * ====================================================================== */
@@ -207,8 +244,10 @@ export const DungeonEnterSchema = z.object({
   antagonist: z.string().optional(),
   // Full blueprint fields (optional — if present, used directly)
   entranceRoomId: z.string().optional(),
-  rooms: z.array(DungeonRoomSchema).max(30).optional(),
-  connections: z.array(DungeonConnectionSchema).max(60).default([]),
+  // DM sometimes emits a single room/connection object instead of wrapping it
+  // in an array (e.g. a 1-room dungeon) — tolerate both shapes.
+  rooms: z.preprocess(toArray, z.array(DungeonRoomSchema).max(30)).optional(),
+  connections: z.preprocess(toArray, z.array(DungeonConnectionSchema).max(60)).default([]),
   bossRoomId: z.string().optional(),
   recommendedLevel: z.number().int().min(1).max(20).optional(),
 });
@@ -348,7 +387,8 @@ export const DMResponseSchema = z.object({
   start_combat: z.union([StartCombatSchema, z.literal(true)]).nullable().optional(),
 
   // World / map / dungeon
-  world_map: z.array(WorldMapLocationSchema).max(20).nullable().optional(),
+  // Same single-object-vs-array tolerance as dungeon rooms/connections.
+  world_map: z.preprocess(toArray, z.array(WorldMapLocationSchema).max(20)).nullable().optional(),
   map_update: MapUpdateSchema.nullable().optional(),
   dungeon_enter: DungeonEnterSchema.nullable().optional(),
   dungeon_room_move: DungeonRoomMoveSchema.nullable().optional(),
@@ -372,6 +412,50 @@ export interface ValidationResult {
   warnings: string[];
   /** Original raw input (for debugging) */
   raw: unknown;
+}
+
+/**
+ * Normalize known LLM shape-variance inside `updates` BEFORE validation runs,
+ * so normal variance doesn't invalidate an otherwise-valid field:
+ *  - conditions_add / conditions_remove: case-insensitive + alias match
+ *    (e.g. "Exhausted" / "exhausted" → "exhaustion"); unrecognized entries
+ *    are dropped INDIVIDUALLY (never invalidate the whole array) and
+ *    reported via `warnings`.
+ *  - quest_add / quest_update: the apply path takes exactly one quest per
+ *    field, but the DM sometimes wraps it in an array — unwrap to the first
+ *    element; extra elements are reported via `warnings`, not silently lost.
+ * Returns a new object; does not mutate `rawUpdates`.
+ */
+function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
+  const out = { ...rawUpdates };
+
+  for (const field of ["conditions_add", "conditions_remove"] as const) {
+    const val = out[field];
+    if (!Array.isArray(val)) continue;
+    const kept: string[] = [];
+    const dropped: string[] = [];
+    for (const item of val) {
+      const norm = normalizeConditionId(item);
+      if (norm) kept.push(norm);
+      else dropped.push(String(item));
+    }
+    if (dropped.length > 0) {
+      warnings.push(`updates.${field}: dropped unrecognized condition(s): ${dropped.join(", ")}`);
+    }
+    out[field] = kept;
+  }
+
+  for (const field of ["quest_add", "quest_update"] as const) {
+    const val = out[field];
+    if (Array.isArray(val)) {
+      if (val.length > 1) {
+        warnings.push(`updates.${field}: DM sent an array of ${val.length} — using the first, extra items ignored`);
+      }
+      out[field] = val[0];
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -402,29 +486,74 @@ function salvageUpdates(rawUpdates: Record<string, unknown>, warnings: string[])
  * On failure, returns a "safe fallback" response with just narration (if available)
  * so the game doesn't crash — invalid fields are dropped.
  */
+/**
+ * Semantic dedup rules that apply regardless of which parse path (strict
+ * success or lenient salvage) produced `data` — must run on BOTH so a
+ * salvaged response gets the same "combat takes priority" / "world_map
+ * takes priority" treatment as a strictly-valid one.
+ */
+function applySemanticDedup(data: DMResponse, warnings: string[]): void {
+  // Cannot have both requires AND start_combat
+  if (data.requires && data.start_combat) {
+    warnings.push("DM sent both 'requires' and 'start_combat' — dropping 'requires' (combat takes priority)");
+    data.requires = null;
+  }
+
+  // Cannot have world_map AND map_update in same response (world_map is for first response only)
+  if (data.world_map && data.map_update) {
+    warnings.push("DM sent both 'world_map' and 'map_update' — keeping 'world_map', dropping 'map_update'");
+    data.map_update = null;
+  }
+}
+
+/**
+ * Mirror of salvageUpdates, one level up: when the WHOLE response fails
+ * strict validation (often because of ONE malformed field, e.g. a bad
+ * buffs_add deep inside `updates`), salvage every OTHER top-level field
+ * independently instead of collapsing to bare narration. Without this, a
+ * malformed sibling field would silently drop an otherwise-valid
+ * start_combat / dungeon_enter / requires / world_map / etc — the exact
+ * "valid DM intent dropped" failure mode this validator exists to prevent.
+ * `narration`, `scene` and `updates` are handled separately by the caller.
+ */
+function salvageTopLevelFields(rawObj: Record<string, unknown>, warnings: string[]): Partial<DMResponse> {
+  const shape = DMResponseSchema.shape as Record<string, z.ZodTypeAny>;
+  const salvaged: Record<string, unknown> = {};
+  for (const key of Object.keys(shape)) {
+    if (key === "narration" || key === "scene" || key === "updates") continue;
+    if (!(key in rawObj)) continue;
+    const fieldResult = shape[key].safeParse(rawObj[key]);
+    if (fieldResult.success) {
+      salvaged[key] = fieldResult.data;
+    } else {
+      warnings.push(`${key}: invalid — dropped (${fieldResult.error.issues.map((i) => i.message).join("; ")})`);
+    }
+  }
+  return salvaged as Partial<DMResponse>;
+}
+
 export function validateDMResponse(raw: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
+  // Normalize known shape-variance in `updates` BEFORE validation, so it
+  // feeds BOTH the strict parse below and the lenient salvage path with the
+  // same already-normalized data (dropped/truncated items are still logged
+  // to `warnings` either way).
+  let normalizedRaw: unknown = raw;
+  if (typeof raw === "object" && raw !== null) {
+    const rawObj0 = raw as Record<string, unknown>;
+    if (rawObj0.updates && typeof rawObj0.updates === "object" && !Array.isArray(rawObj0.updates)) {
+      normalizedRaw = { ...rawObj0, updates: normalizeUpdatesShape(rawObj0.updates as Record<string, unknown>, warnings) };
+    }
+  }
+
   // Try strict parse first
-  const result = DMResponseSchema.safeParse(raw);
+  const result = DMResponseSchema.safeParse(normalizedRaw);
 
   if (result.success) {
-    // Additional semantic checks
     const data = result.data;
-
-    // Cannot have both requires AND start_combat
-    if (data.requires && data.start_combat) {
-      warnings.push("DM sent both 'requires' and 'start_combat' — dropping 'requires' (combat takes priority)");
-      data.requires = null;
-    }
-
-    // Cannot have world_map AND map_update in same response (world_map is for first response only)
-    if (data.world_map && data.map_update) {
-      warnings.push("DM sent both 'world_map' and 'map_update' — keeping 'world_map', dropping 'map_update'");
-      data.map_update = null;
-    }
-
+    applySemanticDedup(data, warnings);
     return { success: true, data, errors, warnings, raw };
   }
 
@@ -436,7 +565,8 @@ export function validateDMResponse(raw: unknown): ValidationResult {
   }
 
   // Lenient fallback: try to extract just narration + drop everything else
-  const rawObj = (typeof raw === "object" && raw !== null) ? raw as Record<string, unknown> : {};
+  // (derive from normalizedRaw so the already-normalized `updates` is used)
+  const rawObj = (typeof normalizedRaw === "object" && normalizedRaw !== null) ? normalizedRaw as Record<string, unknown> : {};
   const narration = typeof rawObj.narration === "string" ? rawObj.narration.slice(0, 4000) : "⚠️ DM ตอบกลับไม่ถูกต้อง — ลองพิมพ์ action ใหม่";
 
   // Salvage updates field-by-field — a bad sub-update (e.g. malformed
@@ -449,11 +579,18 @@ export function validateDMResponse(raw: unknown): ValidationResult {
     }
   }
 
+  // Salvage every OTHER top-level field independently — a malformed
+  // updates.buffs_add (say) must not also drop a valid start_combat/dungeon_enter.
+  const salvagedTop = salvageTopLevelFields(rawObj, warnings);
+
   const fallback: DMResponse = {
     narration,
     updates: salvagedUpdates,
     scene: typeof rawObj.scene === "string" ? rawObj.scene.slice(0, 120) : null,
+    ...salvagedTop,
   };
+
+  applySemanticDedup(fallback, warnings);
 
   return { success: false, data: fallback, errors, warnings, raw };
 }

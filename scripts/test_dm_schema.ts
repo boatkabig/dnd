@@ -44,14 +44,17 @@ assert(r2.data?.narration === "test", "narration salvaged from absurd response")
 // Updates should be dropped (failed validation)
 assert(r2.data?.updates === null || r2.data?.updates === undefined, "absurd updates dropped");
 
-// Test 3: Invalid condition IDs rejected
-console.log("\nTest 3: Invalid condition IDs rejected");
+// Test 3: Unknown condition IDs dropped individually, valid ones kept
+// (was: whole field rejected on any bad item — now per-item salvage, see PROGRESS)
+console.log("\nTest 3: Unknown conditions dropped individually, valid ones kept");
 const invalidCond = {
   narration: "test",
   updates: { conditions_add: ["blinded", "fake_condition", "stunned"] },
 };
 const r3 = validateDMResponse(invalidCond);
-assert(!r3.success, "invalid condition fails strict validation");
+assert(r3.success === true, "mixed valid/invalid conditions still succeeds");
+assert(JSON.stringify(r3.data?.updates?.conditions_add) === JSON.stringify(["blinded", "stunned"]), "unknown condition dropped, valid ones kept");
+assert(r3.warnings.some((w) => w.includes("fake_condition")), "warning names the dropped condition");
 
 // Test 4: Cannot have both requires AND start_combat
 console.log("\nTest 4: requires + start_combat conflict resolved");
@@ -238,5 +241,150 @@ assert(!!rH4 && !rH4.success, "H4: top-level parse fails (malformed room)");
 assert(rH4?.data?.updates?.xp_award === 50, "H4: sibling updates.xp_award still salvaged");
 
 console.log(`\n=== Hardening Results: ${pass} passed, ${fail} failed ===\n`);
+
+// === Robustness Hardening: real-play shape variance (quest_add array,
+// condition aliases/case, partial updates salvage, bare-object dungeon/world_map) ===
+console.log("\n=== Robustness Hardening: LLM shape variance ===\n");
+
+// R1: quest_add sent as a 1-item array (observed in live play) — normalizes to a single object
+console.log("\nR1: quest_add as a 1-item array succeeds and normalizes to a single object");
+const questArrOne = {
+  narration: "test",
+  updates: {
+    quest_add: [{ id: "q1", title: "Find the amulet", description: "find it", objectives: [{ text: "หาสร้อย", done: false }] }],
+  },
+};
+const rR1 = validateDMResponse(questArrOne);
+assert(rR1.success === true, "R1: quest_add as 1-item array succeeds");
+assert(!Array.isArray(rR1.data?.updates?.quest_add), "R1: quest_add normalized to a single object, not an array");
+assert(rR1.data?.updates?.quest_add?.id === "q1", "R1: quest_add fields preserved");
+
+// R2: quest_add sent as a multi-item array — uses first, warns about the rest (never silently drops everything)
+console.log("\nR2: quest_add as a multi-item array uses the first, warns about extras");
+const questArrTwo = {
+  narration: "test",
+  updates: {
+    quest_add: [
+      { id: "q1", title: "Quest One", description: "d1", objectives: [{ text: "a" }] },
+      { id: "q2", title: "Quest Two", description: "d2", objectives: [{ text: "b" }] },
+    ],
+  },
+};
+const rR2 = validateDMResponse(questArrTwo);
+assert(rR2.success === true, "R2: quest_add array of 2 still succeeds (uses first)");
+assert(rR2.data?.updates?.quest_add?.id === "q1", "R2: first quest kept");
+assert(rR2.warnings.some((w) => w.includes("quest_add") && w.includes("array")), "R2: warning about extra ignored quest");
+
+// R3: quest_update sent as an array — same normalization applies
+console.log("\nR3: quest_update as a 1-item array succeeds and normalizes to a single object");
+const questUpdateArr = {
+  narration: "test",
+  updates: { quest_update: [{ id: "q1", status: "completed" }] },
+};
+const rR3 = validateDMResponse(questUpdateArr);
+assert(rR3.success === true, "R3: quest_update as array succeeds");
+assert(!Array.isArray(rR3.data?.updates?.quest_update), "R3: quest_update normalized to single object");
+
+// R4: an unknown condition mixed with valid ones — keep recognized, drop unknown, still succeed
+console.log("\nR4: unknown condition mixed with valid ones (matches the observed live-play bug)");
+const mixedConditions = {
+  narration: "test",
+  updates: { conditions_add: ["blinded", "exhausted", "not_a_real_condition"] },
+};
+const rR4 = validateDMResponse(mixedConditions);
+assert(rR4.success === true, "R4: mixed valid/invalid/alias conditions still succeeds");
+assert(JSON.stringify(rR4.data?.updates?.conditions_add) === JSON.stringify(["blinded", "exhaustion"]), "R4: alias resolved + valid kept, unknown dropped");
+assert(rR4.warnings.some((w) => w.includes("not_a_real_condition")), "R4: warning names the dropped condition");
+
+// R5: case-insensitive condition matching
+console.log("\nR5: case-insensitive condition matching");
+const caseInsensitive = {
+  narration: "test",
+  updates: { conditions_add: ["Poisoned", "STUNNED"] },
+};
+const rR5 = validateDMResponse(caseInsensitive);
+assert(rR5.success === true, "R5: case-insensitive conditions succeed");
+assert(JSON.stringify(rR5.data?.updates?.conditions_add) === JSON.stringify(["poisoned", "stunned"]), "R5: case normalized to canonical ids");
+
+// R6: a payload with mixed valid/invalid fields — apply the valid subset, never the whole payload
+console.log("\nR6: mixed valid/invalid updates fields — valid subset still applies");
+const mixedPayload = {
+  narration: "test",
+  updates: {
+    hp_delta: -15,
+    xp_award: 100,
+    buffs_add: [{ name: "Blessed", type: "not_a_type", duration: 3 }], // invalid enum, strict (no .catch())
+  },
+};
+const rR6 = validateDMResponse(mixedPayload);
+assert(!rR6.success, "R6: top-level parse fails (buffs_add invalid type)");
+assert(rR6.data?.updates?.hp_delta === -15, "R6: hp_delta salvaged from mixed payload");
+assert(rR6.data?.updates?.xp_award === 100, "R6: xp_award salvaged from mixed payload");
+assert(rR6.data?.updates?.buffs_add === undefined, "R6: only invalid buffs_add dropped, not the whole payload");
+
+// R7: dungeon_enter rooms/connections sent as bare objects instead of arrays
+console.log("\nR7: dungeon_enter rooms/connections as bare objects coerced to arrays");
+const dungeonSingleRoom = {
+  narration: "test",
+  dungeon_enter: {
+    id: "crypt2", name: "Crypt", entranceRoomId: "r1",
+    rooms: { id: "r1", name: "Entry", role: "entrance", shape: "square", size: "small", description: "d" },
+    connections: { id: "c1", from: "r1", to: "r2", type: "door", direction: "n" },
+  },
+};
+const rR7 = validateDMResponse(dungeonSingleRoom);
+assert(rR7.success === true, "R7: dungeon_enter with bare room/connection object succeeds");
+assert(Array.isArray(rR7.data?.dungeon_enter?.rooms) && rR7.data?.dungeon_enter?.rooms?.length === 1, "R7: rooms coerced to array");
+assert(Array.isArray(rR7.data?.dungeon_enter?.connections) && rR7.data?.dungeon_enter?.connections?.length === 1, "R7: connections coerced to array");
+
+// R8: world_map sent as a bare object instead of an array
+console.log("\nR8: world_map as a bare object coerced to an array");
+const worldMapSingle = {
+  narration: "test",
+  world_map: { id: "town", name: "Town", type: "town" },
+};
+const rR8 = validateDMResponse(worldMapSingle);
+assert(rR8.success === true, "R8: world_map bare object succeeds");
+assert(Array.isArray(rR8.data?.world_map) && rR8.data?.world_map?.length === 1, "R8: world_map coerced to array");
+
+// R9: a valid start_combat must survive a malformed SIBLING field (e.g. bad
+// buffs_add) — the whole response must not collapse to bare narration.
+console.log("\nR9: valid start_combat survives a malformed sibling updates field");
+const combatSurvives = {
+  narration: "A goblin ambushes you!",
+  start_combat: { monsters: ["goblin"] },
+  updates: { buffs_add: [{ name: "X", type: "bogus", duration: 3 }] }, // invalid enum, strict
+};
+const rR9 = validateDMResponse(combatSurvives);
+assert(!rR9.success, "R9: top-level parse fails (buffs_add invalid type)");
+assert(rR9.data?.start_combat != null, "R9: valid start_combat survives a malformed sibling field");
+assert(rR9.data?.updates?.buffs_add === undefined, "R9: malformed buffs_add still dropped");
+
+// R10: a valid dungeon_enter must survive a malformed sibling updates field
+console.log("\nR10: valid dungeon_enter survives a malformed sibling updates field");
+const dungeonSurvives = {
+  narration: "test",
+  dungeon_enter: { id: "crypt3", name: "Crypt", rooms: [{ id: "r1", name: "Entry", role: "entrance", shape: "square", size: "small", description: "d" }] },
+  updates: { buffs_add: [{ name: "X", type: "bogus", duration: 3 }] },
+};
+const rR10 = validateDMResponse(dungeonSurvives);
+assert(!rR10.success, "R10: top-level parse fails (buffs_add invalid type)");
+assert(rR10.data?.dungeon_enter?.id === "crypt3", "R10: valid dungeon_enter survives a malformed sibling field");
+
+// R11: a valid requires survives a malformed sibling — and semantic dedup
+// (requires vs start_combat) still applies to the salvaged fallback too.
+console.log("\nR11: semantic dedup (requires vs start_combat) applies to the salvaged fallback");
+const dedupOnFallback = {
+  narration: "test",
+  requires: { type: "check", skill: "athletics", dc: 13 },
+  start_combat: { monsters: ["goblin"] },
+  updates: { buffs_add: [{ name: "X", type: "bogus", duration: 3 }] },
+};
+const rR11 = validateDMResponse(dedupOnFallback);
+assert(!rR11.success, "R11: top-level parse fails (buffs_add invalid type)");
+assert(rR11.data?.start_combat != null, "R11: start_combat survives");
+assert(rR11.data?.requires === null, "R11: requires dropped by semantic dedup even on the salvaged fallback");
+
+console.log(`\n=== Robustness Hardening Results: ${pass} passed, ${fail} failed ===\n`);
 
 process.exit(fail > 0 ? 1 : 0);

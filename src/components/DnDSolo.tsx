@@ -543,7 +543,7 @@ engine เข้าถึง D&D 5e/2024 SRD ผ่าน Open5e v2 (api.open5e.
 1.2 ห้ามใช้คำ meta เช่น "engine", "ระบบ", "คำนวณ" ใน narration — บรรยายอยู่ในโลกแฟนตาซีเท่านั้น
 2. action ที่มีความเสี่ยง สั่ง check ผ่าน "requires" แล้วรอผลทอย
 3. การต่อสู้ ใช้ "start_combat" พร้อม monster index — มอนสเตอร์ใน engine: ${Object.keys(BESTIARY).join(", ")} หรือใช้ monster index ใดก็ได้จาก Open5e (kebab-case เช่น goblin, owlbear, lich, ancient-red-dragon) เลือกความยากตาม CR รวม ~ level/4 ถึง level/2 ของผู้เล่นเดี่ยว
-4. การเปลี่ยนแปลงสถานะ (ทอง/ไอเทม/XP/conditions/buffs) ผ่าน "updates" เท่านั้น — conditions_add/remove ใช้ id เหล่านี้เท่านั้น: ${Object.keys(CONDITIONS_TH).join(", ")}
+4. การเปลี่ยนแปลงสถานะ (ทอง/ไอเทม/XP/conditions/buffs) ผ่าน "updates" เท่านั้น — conditions_add/remove ต้องเป็น array ของ id lowercase เหล่านี้เท่านั้น (ห้ามใช้คำอื่น/พหูพจน์/ภาษาไทย): ${Object.keys(CONDITIONS_TH).join(", ")}
 5. บรรยายกระชับ 2-5 ประโยค จบด้วยสถานการณ์ที่ชวนตัดสินใจ
 6. DC แนะนำ (D&D 2024 Influence): NPC "Hesitant" DC = max(15, INT score ของ NPC); NPC ยินยอมอยู่แล้ว = auto-success; ขัดกับนิสัย NPC = auto-fail
 7. อย่าใจดีเกินไป โลกมีอันตรายจริง — ให้ XP/รางวัลเมื่อสำเร็จ (~50-200 XP ต่อเหตุการณ์สำคัญ)
@@ -640,7 +640,7 @@ Feat:
 - Passive Perception: engine คำนวณ 10 + WIS mod + proficiency (แสดงใน character sheet)
 - Grapple/Shove (D&D 2024): ปุ่มใน combat — target ทอย STR หรือ DEX save (เลือกเอง) vs DC = 8 + STR mod + PB ของคุณ → ตรึง (Grappled) หรือ ผลัก 5 ฟุต / ล้ม (Prone)
 - Dual Wield: ถ้าถืออาวุธ light ได้ bonus action โจมตีมือนอก (ดาเมจ = เต๋าอาวุธอย่างเดียว)
-- Quest Journal: ใช้ updates.quest_add { id, title, description, objectives, reward, giver } และ updates.quest_update { id, status/complete_objective }
+- Quest Journal: ใช้ updates.quest_add เป็น object เดียว (ไม่ใช่ array) { id, title, description, objectives, reward, giver } และ updates.quest_update เป็น object เดียวเช่นกัน { id, status/complete_objective } — ถ้ามีหลายเควสในเทิร์นเดียวกันให้ส่งแค่อันที่สำคัญที่สุด
 - Time/Calendar: ใช้ updates.time_delta (ชั่วโมง) — engine ติดตามวันและเวลา แสดงใน header
 - Encounter Difficulty: engine คำนวณอัตโนมัติตอน combat เริ่ม (D&D 2024: Low / Moderate / High) พร้อม XP thresholds และ CR แนะนำ
 
