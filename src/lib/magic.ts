@@ -88,6 +88,90 @@ export function consumeSpellSlot(info: SpellcastingInfo, level: number): boolean
 export function recoverAllSlots(info: SpellcastingInfo): void { info.spellSlots = [...info.spellSlotsMax]; }
 
 /* ======================================================================
+ * 8.2b PREPARED vs KNOWN SPELLCASTING (D&D 2024)
+ * ----------------------------------------------------------------------
+ * The engine OWNS the rule for "can this class change its spells, and how
+ * many spells does it hold". DnDSolo asks these helpers instead of
+ * hard-coding class logic.
+ *
+ *   Prepared casters (Cleric/Druid/Paladin/Wizard): choose a daily list;
+ *     may swap the whole list on a Long Rest. Size = ability mod + caster
+ *     level (Paladin is a half-caster → floor(level/2)). Wizard prepares
+ *     from its spellbook. Minimum 1.
+ *   Known casters (Bard/Sorcerer/Ranger/Warlock): a fixed known list; may
+ *     only swap ONE spell when they level up. Size is read from the class
+ *     "spells known" table.
+ * ====================================================================== */
+
+export type SpellcastingKind = "prepared" | "known" | "none";
+export type SpellChangeWhen = "long_rest" | "level_up" | "none";
+
+const PREPARED_CASTERS = new Set(["cleric", "druid", "paladin", "wizard"]);
+const KNOWN_CASTERS = new Set(["bard", "sorcerer", "ranger", "warlock"]);
+
+/** Half-casters advance their effective caster level at half rate (min 1). */
+const HALF_CASTERS = new Set(["paladin", "ranger"]);
+
+/** D&D 2024 "Spells Known" tables for the fixed-known classes (index 0 = Lv.1). */
+const SPELLS_KNOWN_TABLE: Record<string, number[]> = {
+  bard:     [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 15, 16, 18, 19, 19, 20, 22, 22, 22],
+  sorcerer: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 13, 13, 14, 14, 15, 15, 15, 15],
+  ranger:   [0, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11],
+  warlock:  [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15],
+};
+
+export function getSpellcastingKind(cls: string): SpellcastingKind {
+  const k = cls.toLowerCase();
+  if (PREPARED_CASTERS.has(k)) return "prepared";
+  if (KNOWN_CASTERS.has(k)) return "known";
+  return "none";
+}
+
+/** When (if ever) a class may change which spells it holds. */
+export function getSpellChangeWhen(cls: string): SpellChangeWhen {
+  const kind = getSpellcastingKind(cls);
+  if (kind === "prepared") return "long_rest";
+  if (kind === "known") return "level_up";
+  return "none";
+}
+
+/**
+ * Maximum number of leveled spells the class may hold at once
+ * (prepared list size for prepared casters, known list size for known casters).
+ * Cantrips are NOT counted here. Returns 0 for non-casters.
+ */
+export function getMaxSpellsHeld(cls: string, level: number, abilityMod: number): number {
+  const k = cls.toLowerCase();
+  const lv = Math.max(1, Math.min(20, level));
+  if (PREPARED_CASTERS.has(k)) {
+    const casterLevel = HALF_CASTERS.has(k) ? Math.floor(lv / 2) : lv;
+    return Math.max(1, abilityMod + Math.max(1, casterLevel));
+  }
+  if (KNOWN_CASTERS.has(k)) {
+    return SPELLS_KNOWN_TABLE[k]?.[lv - 1] ?? 0;
+  }
+  return 0;
+}
+
+/** Convenience: full description of a class's spellcasting management rule. */
+export interface SpellcastingRule {
+  kind: SpellcastingKind;
+  changeWhen: SpellChangeWhen;
+  maxHeld: number;         // 0 for non-casters (unlimited/na)
+  fromSpellbook: boolean;  // Wizard prepares from a spellbook
+}
+
+export function getSpellcastingRule(cls: string, level: number, abilityMod: number): SpellcastingRule {
+  const kind = getSpellcastingKind(cls);
+  return {
+    kind,
+    changeWhen: getSpellChangeWhen(cls),
+    maxHeld: getMaxSpellsHeld(cls, level, abilityMod),
+    fromSpellbook: cls.toLowerCase() === "wizard",
+  };
+}
+
+/* ======================================================================
  * 8.3 CAST SPELL
  * ====================================================================== */
 

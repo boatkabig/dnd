@@ -64,6 +64,12 @@ import {
 import { validateDMResponse, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
+// Phase 4: progression engine — subclass features + feat effects
+import {
+  hasClassFeature, featAttackBonus, featDamageBonus,
+  getAvailableSubclasses, needsSubclassChoice, getSubclassById,
+} from "@/lib/engine/progression";
+import { getSpellcastingRule } from "@/lib/magic";
 // 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
 import { createStore, createInitialState, createPlayerState } from "@/lib/store";
 import CharacterCreation from "@/components/game/CharacterCreation";
@@ -277,10 +283,10 @@ function getMelee(c: any) { return WEAPONS[c.weapon] || WEAPONS[CLASSES[c.cls].w
 function getRanged(c: any) { return c.ranged ? WEAPONS[c.ranged] : null; }
 
 // Feature check — must be defined before skillMod (which uses it for Expertise)
+// Phase 4: delegate to the progression engine so the check covers the full
+// Lv.1-20 class table PLUS the chosen subclass's features (not just Lv.1-5).
 export function hasFeature(c: any, key: string) {
-  const f = FEATURES[c.cls] || {};
-  for (let lv = 1; lv <= c.level; lv++) if ((f[lv] || []).some((x: any) => x.k === key)) return true;
-  return false;
+  return hasClassFeature(c.cls, c.level, c.subclass, key);
 }
 
 export function skillMod(c: any, skillKey: string) {
@@ -319,6 +325,8 @@ export function saveMod(c: any, abil: string) {
 export function attackMod(c: any, w: any) {
   const weap = w || getMelee(c);
   let m0 = mod(c.abilities[weap.abil]) + profByLevel(c.level) + (weap.plus || 0);
+  // Phase 4: Fighting Style — Archery grants +2 to ranged weapon attack rolls.
+  m0 += featAttackBonus(c.feats || [], weap);
   // D&D 5e/2024 Exhaustion: -2/level to ALL D20 Tests (includes attack rolls)
   m0 -= exhaustionPenalty(c);
   return m0;
@@ -410,7 +418,11 @@ function hasConcentration(cc: any): boolean {
 function getActiveConcentrationBuff(cc: any): any | null {
   return (cc.buffs || []).find((b: any) => isConcentrationSpellName(b.name)) || null;
 }
-function critThreshold(c: any) { return hasFeature(c, "improved_critical") ? 19 : 20; }
+function critThreshold(c: any) {
+  // Champion: Superior Critical (Lv.15) crits on 18-20; Improved Critical (Lv.3) on 19-20.
+  if (hasFeature(c, "superior_critical")) return 18;
+  return hasFeature(c, "improved_critical") ? 19 : 20;
+}
 
 /* ---------------- MAP ENGINE ---------------- */
 function emptyMap() { return { nodes: {} as Record<string, any>, edges: [] as [string, string][], current: null as string | null }; }
@@ -1500,6 +1512,15 @@ export default function DnDSolo() {
           entries.push(entrySystem(`🎯 Expertise unlock! เลือก 2 สกิลเพิ่ม proficiency ×2 — เปิดที่ character sheet → Skills tab`));
         }
       });
+      // Phase 4: subclass — prompt at unlock level, then grant subclass features on level-up.
+      if (needsSubclassChoice(nc.cls, nc.level, nc.subclass)) {
+        entries.push(entrySystem(`🎓 เลือก Subclass ได้แล้ว! เปิดหน้าตัวละครเพื่อเลือกสาย (subclass) ของ ${CLASSES[nc.cls].th}`));
+      } else if (nc.subclass) {
+        const sub = getSubclassById(nc.subclass);
+        (sub?.features?.[nc.level] || []).forEach((f: any) => {
+          entries.push(entrySystem(`✨ ${sub!.th}: ${f.th} — ${f.desc}`));
+        });
+      }
     }
     return nc;
   }
@@ -2605,6 +2626,9 @@ export default function DnDSolo() {
         // B4: Track last weapon damage roll for Savage Attacker reroll
         (cb as any)._lastWeaponDamageRoll = { formula: dmgDie, total: dmg, damageType: w.dmgType || "slashing" };
         let parts = [`${dmgDie}+${abilDmgMod}${w.plus ? ` (อาวุธ +${w.plus})` : ""}${w.versatileDmg && dmgDie === w.versatileDmg ? " (2H)" : ""} = ${dmg}`];
+        // Phase 4: Fighting Style — Dueling grants +2 damage with a one-handed melee weapon.
+        const duelBonus = featDamageBonus(cc.feats || [], w);
+        if (duelBonus > 0) { dmg += duelBonus; parts.push(`Dueling +${duelBonus}`); }
         if (blessDie > 0) parts.push(`Bless +${blessDie}`);
         if (baneDie > 0) parts.push(`Bane -${baneDie}`);
         // D&D 2024 Critical Hit: roll ALL damage dice twice (weapon dice + Sneak Attack + Hunter's Mark + Smite + Hex + any other dice)
@@ -3776,6 +3800,24 @@ export default function DnDSolo() {
     persist(cc, scene, finalLog, combat, history);
   }
 
+  function chooseSubclass(subId: string) {
+    if (!c) return;
+    const sub = getSubclassById(subId);
+    if (!sub) return;
+    const cc = { ...c, subclass: subId };
+    const entries = [entrySystem(`🎓 เลือก Subclass: ${sub.th}`)];
+    // Grant (log) all subclass features already unlocked at the current level.
+    for (let lv = 1; lv <= cc.level; lv++) {
+      (sub.features?.[lv] || []).forEach((f: any) => {
+        entries.push(entrySystem(`✨ ${f.th} — ${f.desc}`));
+      });
+    }
+    cc.ac = computeAC(cc);
+    const finalLog = [...log, ...entries];
+    setC(cc); setLog(finalLog);
+    persist(cc, scene, finalLog, combat, history);
+  }
+
   function shortRest() {
     if (thinking || combat) return;
     if ((c.hitDiceLeft || 0) <= 0) {
@@ -3863,6 +3905,25 @@ export default function DnDSolo() {
 
   function learnSpell(index: string) {
     if ((c.knownSpells || []).includes(index)) return;
+    // Phase 4: enforce the D&D 2024 prepared/known cap via the magic engine.
+    // Known casters (Bard/Sorcerer/Ranger/Warlock) hold a FIXED number of leveled
+    // spells; they may only swap on level-up. Cantrips (level 0) don't count.
+    const castAbil = CLASSES[c.cls]?.castAbil;
+    const learningLevel = availableSpells.find((s) => s.index === index)?.level ?? 1;
+    if (castAbil && learningLevel > 0) {
+      const rule = getSpellcastingRule(c.cls, c.level, mod(c.abilities[castAbil]));
+      if (rule.kind === "known" && rule.maxHeld > 0) {
+        // Count leveled spells currently known (exclude confirmed cantrips).
+        const leveledKnown = (c.knownSpells || []).filter((idx: string) => {
+          const info = availableSpells.find((s) => s.index === idx);
+          return info ? info.level > 0 : true;
+        }).length;
+        if (leveledKnown >= rule.maxHeld) {
+          setLog((prev) => [...prev, entrySystem(`📕 รู้เวทครบจำนวนแล้ว (${leveledKnown}/${rule.maxHeld}) — ${CLASSES[c.cls].th} เป็น Known caster เปลี่ยนเวทได้เฉพาะตอนเลเวลอัพ`)]);
+          return;
+        }
+      }
+    }
     const cc = { ...c, knownSpells: [...(c.knownSpells || []), index] };
     const entries = [entrySystem(`📖 Learned spell: ${index.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}`)];
     const finalLog = [...log, ...entries];
@@ -4263,6 +4324,27 @@ export default function DnDSolo() {
                 <button className="btn" disabled={asiPicks.length === 0} onClick={() => setAsiPicks([])}>Clear</button>
                 <button className="btn btn-gold" style={{ flex: 1 }} disabled={asiPicks.length !== 2} onClick={applyAsi}>Confirm ({asiPicks.length}/2)</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUBCLASS MODAL — appears once the class reaches its subclass level (not in combat) */}
+      {c && !combat && !c.pendingAsi && needsSubclassChoice(c.cls, c.level, c.subclass) && (
+        <div className="sheet-overlay">
+          <div className="sheet-modal" style={{ maxWidth: 480 }}>
+            <div style={{ padding: "14px 16px" }}>
+              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🎓 เลือก Subclass</span>
+              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>สาย{CLASSES[c.cls].th} — เลือก 1 (กำหนดความสามารถพิเศษ)</div>
+              {getAvailableSubclasses(c.cls, c.level).map((sub) => (
+                <div key={sub.id} style={{ padding: "8px 4px", borderBottom: "1px dashed #2E2748" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <b style={{ color: "#E0A83E", fontSize: 14 }}>{sub.th}</b>
+                    <button className="btn btn-gold" style={{ padding: "3px 14px" }} onClick={() => chooseSubclass(sub.id)}>เลือก</button>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#9C92B8", marginTop: 3 }}>{sub.desc}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
