@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
-  ABILS, ABIL_TH, mod, profByLevel, XP_THRESHOLDS, SKILLS, CONDITIONS_TH,
+  ABILS, ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
   DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
   BACKGROUNDS, RACES, CLASSES, FEATURES, WEAPONS, weaponByName, ARMOR,
   MAGIC_ITEMS, CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
@@ -73,6 +73,7 @@ import {
 import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
 import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
 import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
+import { gainXP } from "@/lib/leveling";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -708,7 +709,7 @@ export default function DnDSolo() {
     });
 
     // === 3. (3c) xp_award — gainXP does the full class math (HP/slots/feats) =
-    if (xp_award) nc = gainXP(nc, xp_award, entries);
+    if (xp_award) nc = gainXP(nc, xp_award, (t) => entries.push(entrySystem(t)));
 
     // === 4. (3b) time_delta — WorldClock sync + rest timers + forced march ==
     if (time_delta) {
@@ -966,64 +967,6 @@ export default function DnDSolo() {
     }
   }
 
-  function gainXP(cc: any, amount: number, entries: any[]) {
-    let nc = { ...cc, xp: cc.xp + amount };
-    entries.push(entrySystem(`+${amount} XP (รวม ${nc.xp})`));
-    while (nc.level < 20 && nc.xp >= XP_THRESHOLDS[nc.level]) {
-      const cls = CLASSES[nc.cls];
-      const hpGain = Math.floor(cls.hitDie / 2) + 1 + mod(nc.abilities.con);
-      nc = {
-        ...nc, level: nc.level + 1,
-        maxHp: nc.maxHp + hpGain, hp: nc.hp + hpGain,
-        hitDiceLeft: Math.min(nc.level + 1, (nc.hitDiceLeft || 0) + 1),
-      };
-      if (cls.caster) {
-        const newSlotsMax = getSlotTable(nc.cls, nc.level);
-        // Preserve used slots — add new slots from level up
-        const oldSlotsMax = nc.slotsMax || [];
-        const newSlots = newSlotsMax.map((max: number, i: number) => {
-          const oldMax = oldSlotsMax[i] || 0;
-          const oldCur = nc.slots[i] || 0;
-          // Gain the difference (new slots from level-up are filled)
-          return Math.min(max, oldCur + (max - oldMax));
-        });
-        nc.slotsMax = newSlotsMax;
-        nc.slots = newSlots;
-      }
-      // Replenish per-day resources
-      nc.rageUsed = 0;
-      nc.kiUsed = 0;
-      nc.sorceryPoints = nc.level;
-      nc.layOnHandsPool = nc.level * 5;
-      nc.bardicInspirationUsed = 0;
-      nc.ac = computeAC(nc);
-      entries.push(entrySystem(`🎉 LEVEL UP! → Level ${nc.level} (Max HP +${hpGain}, Proficiency +${profByLevel(nc.level)})`));
-      // Phase 2: use extended features (Lv.1-20) instead of FEATURES (Lv.1-5 only)
-      const allFeatures = getExtendedFeatures()[nc.cls] || {};
-      (allFeatures[nc.level] || []).forEach((f: any) => {
-        entries.push(entrySystem(`✨ ปลดความสามารถใหม่: ${f.th} — ${f.desc}`));
-        if (f.k === "asi") nc.pendingAsi = (nc.pendingAsi || 0) + 1;
-        // D&D 5e/2024: Bard gets Expertise at Lv.3, Lv.10 (gains 2 Expertise picks each time)
-        // Rogue gets Expertise at Lv.1, Lv.6 (gains 2 Expertise picks each time)
-        // We track pending Expertise picks via `nc.pendingExpertise`
-        if (f.k === "expertise") {
-          nc.pendingExpertise = (nc.pendingExpertise || 0) + 2;
-          entries.push(entrySystem(`🎯 Expertise unlock! เลือก 2 สกิลเพิ่ม proficiency ×2 — เปิดที่ character sheet → Skills tab`));
-        }
-      });
-      // Phase 4: subclass — prompt at unlock level, then grant subclass features on level-up.
-      if (needsSubclassChoice(nc.cls, nc.level, nc.subclass)) {
-        entries.push(entrySystem(`🎓 เลือก Subclass ได้แล้ว! เปิดหน้าตัวละครเพื่อเลือกสาย (subclass) ของ ${CLASSES[nc.cls].th}`));
-      } else if (nc.subclass) {
-        const sub = getSubclassById(nc.subclass);
-        (sub?.features?.[nc.level] || []).forEach((f: any) => {
-          entries.push(entrySystem(`✨ ${sub!.th}: ${f.th} — ${f.desc}`));
-        });
-      }
-    }
-    return nc;
-  }
-
   /* -------- combat engine -------- */
   async function initCombat(monsterIds: string[], cc: any, entries: any[], surprise = false) {
     const ids = (monsterIds || []).slice(0, 6);
@@ -1216,7 +1159,7 @@ export default function DnDSolo() {
       const totalXP = cb.enemies.reduce((a: number, e: any) => a + (e.xp || 50), 0);
       const numEnemies = cb.enemies.length;
       entries.push(entrySystem(`🏆 ชนะ! กำจัดศัตรูทั้งหมดแล้ว`));
-      const nc = gainXP(cc, totalXP, entries);
+      const nc = gainXP(cc, totalXP, (t) => entries.push(entrySystem(t)));
       // Phase 1 fix: auto-generate loot from reward tables (instead of relying on LLM freeform)
       // D&D 2024: calculate difficulty from XP + party level, then roll reward items
       const difficulty = calculateDifficulty(totalXP, numEnemies, nc.level, 1);
