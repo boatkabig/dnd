@@ -8,6 +8,7 @@ import {
   sidekickTurnIntent,
   getSidekickFeatures,
   hasSidekickFeature,
+  resolveSidekickAttack,
   SIDEKICK_BASES,
   type SidekickTurnContext,
 } from "../src/lib/engine/sidekick";
@@ -133,5 +134,45 @@ describe("sidekickTurnIntent — decision ladder", () => {
     expect(
       sidekickTurnIntent(warrior, { ...base, enemyInReach: false }).action,
     ).toBe("disengage");
+  });
+});
+
+describe("resolveSidekickAttack — pure, injected dice", () => {
+  const warrior = buildSidekick(SIDEKICK_BASES.guard, "warrior", 5); // toHit +5, dmgBonus +1, crit 19
+
+  it("hits when d20 + toHit meets AC and adds the ability damage bonus", () => {
+    const r = resolveSidekickAttack(warrior, { targetAc: 14, d20: 12, damageDiceTotal: 4 });
+    expect(r.hit).toBe(true);
+    expect(r.crit).toBe(false);
+    expect(r.total).toBe(12 + warrior.attack.toHit);
+    expect(r.damage).toBe(4 + warrior.attack.damageBonus);
+  });
+
+  it("misses when the total is below AC (and deals 0)", () => {
+    const r = resolveSidekickAttack(warrior, { targetAc: 25, d20: 5, damageDiceTotal: 6 });
+    expect(r.hit).toBe(false);
+    expect(r.damage).toBe(0);
+  });
+
+  it("a natural 1 always misses even against low AC", () => {
+    expect(resolveSidekickAttack(warrior, { targetAc: 1, d20: 1, damageDiceTotal: 6 }).hit).toBe(false);
+  });
+
+  it("a natural 20 always hits and crits, doubling the weapon dice", () => {
+    const r = resolveSidekickAttack(warrior, { targetAc: 99, d20: 20, damageDiceTotal: 4, critDiceTotal: 3 });
+    expect(r.hit).toBe(true);
+    expect(r.crit).toBe(true);
+    expect(r.damage).toBe(4 + 3 + warrior.attack.damageBonus);
+  });
+
+  it("Improved Critical (warrior Lv.3+) crits on a 19 that hits", () => {
+    const r = resolveSidekickAttack(warrior, { targetAc: 10, d20: 19, damageDiceTotal: 4, critDiceTotal: 4 });
+    expect(r.crit).toBe(true);
+  });
+
+  it("a 19 that would miss does not crit", () => {
+    const r = resolveSidekickAttack(warrior, { targetAc: 30, d20: 19, damageDiceTotal: 4 });
+    expect(r.hit).toBe(false);
+    expect(r.crit).toBe(false);
   });
 });

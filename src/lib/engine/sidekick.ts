@@ -14,7 +14,7 @@
  * No Math.random / Date.now. Any roll needed by the turn logic is INJECTED.
  */
 
-import { getProficiencyBonus } from "./character.js";
+import { getProficiencyBonus } from "./character";
 
 export type SidekickClass = "warrior" | "expert" | "spellcaster";
 
@@ -292,6 +292,61 @@ export function sidekickTurnIntent(
   }
 
   return { action: "disengage", reason: "ถอนตัวเพื่อหาตำแหน่งที่ดีกว่า", targetsAlly: false };
+}
+
+/* ======================================================================
+ * ATTACK RESOLUTION — pure, deterministic (dice INJECTED)
+ * ====================================================================== */
+
+export interface SidekickAttackParams {
+  /** target's (effective) AC */
+  targetAc: number;
+  /** the natural d20 roll (1-20), injected by the caller */
+  d20: number;
+  /** total of the weapon's damage DICE only (ability/prof added here). */
+  damageDiceTotal: number;
+  /** extra dice total rolled again for a crit (D&D 2024 "roll dice twice"). */
+  critDiceTotal?: number;
+}
+
+export interface SidekickAttackResult {
+  hit: boolean;
+  crit: boolean;
+  toHit: number;
+  /** d20 + toHit */
+  total: number;
+  /** final damage (0 on a miss), always >= 1 on a hit. */
+  damage: number;
+}
+
+/**
+ * Resolve one sidekick weapon/spell attack against a target AC.
+ *
+ * Pure and deterministic — every random input (the d20, the damage dice) is
+ * injected. A natural 1 always misses; a natural 20 always hits. A crit occurs
+ * on a hit whose d20 met the block's critRange (20, or 19 with Improved
+ * Critical) and rolls the weapon dice twice (2024 rule).
+ *
+ * NOTE: this resolves the sidekick's OWN roll only. It never writes enemy HP —
+ * the caller applies `result.damage` through the app's bridge seam
+ * (hitEnemy/applyEnemyDamage), keeping the combat bridge the single HP owner.
+ */
+export function resolveSidekickAttack(
+  block: SidekickBlock,
+  params: SidekickAttackParams,
+): SidekickAttackResult {
+  const toHit = block.attack.toHit;
+  const total = params.d20 + toHit;
+  const isNat20 = params.d20 === 20;
+  const isNat1 = params.d20 === 1;
+  const hit = !isNat1 && (isNat20 || total >= params.targetAc);
+  const crit = hit && params.d20 >= block.attack.critRange;
+  let damage = 0;
+  if (hit) {
+    const critDice = crit ? (params.critDiceTotal ?? params.damageDiceTotal) : 0;
+    damage = Math.max(1, params.damageDiceTotal + critDice + block.attack.damageBonus);
+  }
+  return { hit, crit, toHit, total, damage };
 }
 
 /* ======================================================================

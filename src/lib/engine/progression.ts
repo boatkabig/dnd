@@ -115,6 +115,164 @@ export function featDamageBonus(feats: string[], weapon?: WeaponLike): number {
   return 0;
 }
 
+/**
+ * Great Weapon Master (heavy melee) / Sharpshooter (ranged) −5/+10 power attack.
+ *
+ * D&D 2024: with the relevant feat you may choose, before an attack, to take
+ * −5 on the attack roll for +10 on the damage roll. GWM qualifies only with a
+ * HEAVY MELEE weapon; Sharpshooter only with a RANGED weapon. The toggle is the
+ * caller's (`enabled`); this helper gates on the feat being present AND the
+ * weapon qualifying, and returns the concrete modifiers so the UI never inlines
+ * the −5/+10 itself.
+ */
+export interface PowerAttackMods {
+  applies: boolean;
+  /** −5 when it applies, else 0. */
+  toHit: number;
+  /** +10 when it applies, else 0. */
+  damage: number;
+  /** which feat/weapon combination fired (or why it didn't). */
+  reason: string;
+}
+
+function isHeavyMelee(w?: WeaponLike): boolean {
+  return !w?.ranged && !!w?.properties?.includes("heavy");
+}
+
+export function powerAttackModifiers(
+  feats: string[] = [],
+  weapon: WeaponLike | undefined,
+  enabled: boolean,
+): PowerAttackMods {
+  if (!enabled) return { applies: false, toHit: 0, damage: 0, reason: "off" };
+  const gwm = hasFeatEffect(feats, "great_weapon_master") && isHeavyMelee(weapon);
+  const ss = hasFeatEffect(feats, "sharpshooter") && !!weapon?.ranged;
+  if (gwm || ss) {
+    return { applies: true, toHit: -5, damage: 10, reason: gwm ? "great_weapon_master" : "sharpshooter" };
+  }
+  return { applies: false, toHit: 0, damage: 0, reason: "no_qualifying_feat_or_weapon" };
+}
+
+/**
+ * Does a character (by class) EVEN have a power-attack feat available to toggle?
+ * Used by the UI to decide whether to render the −5/+10 control at all.
+ */
+export function hasPowerAttackFeat(feats: string[] = []): boolean {
+  return hasFeatEffect(feats, "great_weapon_master") || hasFeatEffect(feats, "sharpshooter");
+}
+
+/* ======================================================================
+ * ASI-GRANTING FEATS (Keen Mind / Actor / Resilient …) — idempotent grants
+ * ====================================================================== */
+
+export type AbilityKey = "str" | "dex" | "con" | "int" | "wis" | "cha";
+
+const ABILITY_ALIASES: Record<string, AbilityKey> = {
+  str: "str", strength: "str",
+  dex: "dex", dexterity: "dex",
+  con: "con", constitution: "con",
+  int: "int", intelligence: "int",
+  wis: "wis", wisdom: "wis",
+  cha: "cha", charisma: "cha",
+};
+
+/** Feats that grant a FIXED +1 to a specific ability (2024 PHB). */
+const FIXED_ABILITY_FEATS: Record<string, AbilityKey> = {
+  keen_mind: "int",
+  actor: "cha",
+};
+
+/** Parse the chosen ability out of a raw feat string (e.g. "resilient-(constitution)"). */
+function parseChosenAbility(raw: string): AbilityKey | null {
+  const lower = String(raw).toLowerCase();
+  for (const alias of Object.keys(ABILITY_ALIASES)) {
+    if (new RegExp(`\\b${alias}\\b`).test(lower)) return ABILITY_ALIASES[alias];
+  }
+  return null;
+}
+
+export interface FeatGrant {
+  /** the raw feat identifier this grant came from (idempotency key). */
+  source: string;
+  ability: AbilityKey;
+  /** +1 ability-score increase. */
+  abilityBonus: number;
+  /** save proficiency granted alongside the increase (Resilient). */
+  saveProficiency?: AbilityKey;
+}
+
+/**
+ * The ability-score grants a feat list confers. Fixed-ability feats
+ * (Keen Mind → INT, Actor → CHA) always resolve; Resilient reads its chosen
+ * ability out of the raw feat string (e.g. "Resilient (Constitution)") and
+ * additionally grants a save proficiency. Unknown feats contribute nothing.
+ */
+export function featGrants(feats: string[] = []): FeatGrant[] {
+  const out: FeatGrant[] = [];
+  for (const raw of feats) {
+    const id = normalizeFeatId(raw);
+    if (FIXED_ABILITY_FEATS[id]) {
+      out.push({ source: raw, ability: FIXED_ABILITY_FEATS[id], abilityBonus: 1 });
+    } else if (id === "resilient") {
+      const ab = parseChosenAbility(raw);
+      if (ab) out.push({ source: raw, ability: ab, abilityBonus: 1, saveProficiency: ab });
+    }
+  }
+  return out;
+}
+
+/** Net ability-score bonuses from grant-feats, as an ability→delta map. */
+export function featAbilityBonuses(feats: string[] = []): Record<AbilityKey, number> {
+  const base: Record<AbilityKey, number> = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+  for (const g of featGrants(feats)) base[g.ability] += g.abilityBonus;
+  return base;
+}
+
+export interface FeatGrantInput {
+  feats?: string[];
+  abilities: Record<string, number>;
+  /** raw feat sources already applied (idempotency ledger). */
+  featGrantsApplied?: string[];
+  /** save proficiencies already held. */
+  saveProficiencies?: string[];
+}
+
+export interface ApplyFeatGrantsResult {
+  abilities: Record<string, number>;
+  featGrantsApplied: string[];
+  saveProficiencies: string[];
+  /** grants newly applied by THIS call (empty when nothing changed). */
+  applied: FeatGrant[];
+}
+
+/**
+ * Apply ASI-granting feats to a character, IDEMPOTENTLY. Each grant is keyed by
+ * its raw feat `source` and recorded in `featGrantsApplied`; applying the same
+ * feat list twice is a no-op the second time (so re-renders / reloads never
+ * double the +1). Ability scores are capped at 20. Resilient also adds a save
+ * proficiency. Returns fresh objects — the caller recomputes derived stats
+ * (max HP on CON change, AC on DEX change) at its own seam.
+ */
+export function applyFeatGrants(ch: FeatGrantInput): ApplyFeatGrantsResult {
+  const appliedLedger = new Set(ch.featGrantsApplied ?? []);
+  const abilities = { ...ch.abilities };
+  const saves = new Set(ch.saveProficiencies ?? []);
+  const newlyApplied: FeatGrant[] = [];
+  for (const g of featGrants(ch.feats ?? [])) {
+    if (appliedLedger.has(g.source)) continue; // idempotent guard
+    abilities[g.ability] = Math.min(20, (abilities[g.ability] ?? 10) + g.abilityBonus);
+    if (g.saveProficiency) saves.add(g.saveProficiency);
+    appliedLedger.add(g.source);
+    newlyApplied.push(g);
+  }
+  return {
+    abilities,
+    featGrantsApplied: [...appliedLedger],
+    saveProficiencies: [...saves],
+    applied: newlyApplied,
+  };
+}
+
 /* ======================================================================
  * ACTIVE FEATURE KEYS (class Lv.1-20 + chosen subclass)
  * ====================================================================== */

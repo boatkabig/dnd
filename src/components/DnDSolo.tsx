@@ -68,8 +68,13 @@ import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 import {
   hasClassFeature, featAttackBonus, featDamageBonus,
   getAvailableSubclasses, needsSubclassChoice, getSubclassById,
+  powerAttackModifiers, hasPowerAttackFeat, applyFeatGrants,
 } from "@/lib/engine/progression";
-import { getSpellcastingRule } from "@/lib/magic";
+import { getSpellcastingRule, canReprepareOnLongRest, reprepareSpells } from "@/lib/magic";
+import {
+  buildSidekick, sidekickTurnIntent, resolveSidekickAttack,
+  SIDEKICK_BASES, type SidekickClass,
+} from "@/lib/engine/sidekick";
 // 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
 import { createStore, createInitialState, createPlayerState } from "@/lib/store";
 import CharacterCreation from "@/components/game/CharacterCreation";
@@ -235,6 +240,9 @@ export function makeCharacter(name: string, raceKey: string, classKey: string, b
     slots: cls.caster ? getSlotTable(classKey, level) : [],
     slotsMax: cls.caster ? getSlotTable(classKey, level) : [],
     knownSpells: opts?.knownSpells || [],
+    // Task #14: prepared casters keep a spellbook (pool) distinct from the
+    // currently-prepared list (knownSpells). Starts equal to the known list.
+    spellbook: [...(opts?.knownSpells || [])],
     deathSaves: { s: 0, f: 0 }, dead: false,
     worn: [] as string[], venomUsed: false,
     buffs: [] as any[],
@@ -280,6 +288,12 @@ function migrateChar(o: any) {
   if (n.bardicInspirationUsed === undefined) n.bardicInspirationUsed = 0;
   if (n.sorceryPoints === undefined) n.sorceryPoints = n.level || 1;
   if (!Array.isArray(n.knownSpells)) n.knownSpells = [];
+  // Task #14: back-fill the spellbook pool for saves that predate it (prepared
+  // casters). Superset must at least contain the currently-prepared spells.
+  if (!Array.isArray(n.spellbook)) n.spellbook = [...n.knownSpells];
+  else for (const s of n.knownSpells) if (!n.spellbook.includes(s)) n.spellbook.push(s);
+  if (!Array.isArray(n.featGrantsApplied)) n.featGrantsApplied = [];
+  if (!Array.isArray(n.saveProficiencies)) n.saveProficiencies = [];
   if (n.slots === undefined || n.slotsMax === undefined) {
     const t = cls.caster ? getSlotTable(n.cls, n.level) : [];
     n.slots = t.slice(); n.slotsMax = t.slice();
@@ -836,6 +850,13 @@ export default function DnDSolo() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [combatMenu, setCombatMenu] = useState<"" | "spell" | "item">("");
+  // Task #14: GWM/Sharpshooter −5/+10 power-attack toggle (engine-gated per attack)
+  const [powerAttackOn, setPowerAttackOn] = useState(false);
+  // Task #14: prepared-caster long-rest re-prepare modal
+  const [reprepareOpen, setReprepareOpen] = useState(false);
+  const [reprepareSel, setReprepareSel] = useState<string[]>([]);
+  // Task #14: companion recruit picker (out of combat)
+  const [recruitOpen, setRecruitOpen] = useState(false);
   // 1c-b: which enemy the player has selected to attack (null → first alive fallback)
   const [combatTargetId, setCombatTargetId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -1119,6 +1140,40 @@ export default function DnDSolo() {
    * are stripped out and layered around the reducer below. All React setters are
    * deferred to the very end, after every computation has succeeded.
    */
+  /**
+   * Task #14: apply ASI-granting feats idempotently at the feat-grant seam.
+   * The engine (progression.applyFeatGrants) owns the rule + the idempotency
+   * ledger; this wrapper just folds the result onto the character, logs the new
+   * grants, and recomputes derived stats (max HP on CON, AC on DEX/armor).
+   */
+  function applyFeatGrantsToChar(nc: any, entries: any[]): any {
+    const res = applyFeatGrants({
+      feats: nc.feats || [],
+      abilities: nc.abilities,
+      featGrantsApplied: nc.featGrantsApplied || [],
+      saveProficiencies: nc.saveProficiencies || [],
+    });
+    if (res.applied.length === 0) return nc; // nothing new → no-op (idempotent)
+    const oldConMod = mod(nc.abilities.con);
+    const out: any = {
+      ...nc,
+      abilities: res.abilities,
+      featGrantsApplied: res.featGrantsApplied,
+      saveProficiencies: res.saveProficiencies,
+    };
+    for (const g of res.applied) {
+      entries.push(entrySystem(`💪 Feat: +1 ${ABIL_TH[g.ability] || g.ability.toUpperCase()}${g.saveProficiency ? ` + ความชำนาญ Saving Throw (${ABIL_TH[g.saveProficiency] || g.saveProficiency.toUpperCase()})` : ""}`));
+    }
+    const newConMod = mod(out.abilities.con);
+    if (newConMod > oldConMod) {
+      const diff = (newConMod - oldConMod) * (out.level || 1);
+      out.maxHp += diff; out.hp += diff;
+      entries.push(entrySystem(`❤️ CON เพิ่มขึ้น → Max HP +${diff}`));
+    }
+    out.ac = computeAC(out);
+    return out;
+  }
+
   function applyUpdates(u: any, cc: any, entries: any[]) {
     if (!u) return cc;
 
@@ -1160,6 +1215,13 @@ export default function DnDSolo() {
       dead: after.player.dead,
       lastLongRestHoursAgo: after.player.lastLongRestHoursAgo, lastShortRestHoursAgo: after.player.lastShortRestHoursAgo,
     };
+    // Task #14: ASI-granting feats (Keen Mind/Actor/Resilient). A newly-granted
+    // feat just landed in nc.feats above; applyFeatGrants adds its +1 ability
+    // (and save proficiency for Resilient) IDEMPOTENTLY — the featGrantsApplied
+    // ledger means a re-applied update never doubles the bonus. Derived stats
+    // (max HP on CON, AC on DEX/armor) are recomputed at this same seam.
+    nc = applyFeatGrantsToChar(nc, entries);
+
     const newQuests = after.quests;
     let newGameTime = gameTime;
 
@@ -2635,6 +2697,11 @@ export default function DnDSolo() {
         baneDie = d(4);
         atkModTotal -= baneDie;
       }
+      // Task #14: GWM/Sharpshooter −5/+10 power attack. The engine gates on the
+      // feat being present AND the weapon qualifying (heavy melee / ranged); the
+      // −5 is applied to the roll here and the matching +10 to damage below.
+      const powerAtk = powerAttackModifiers(cc.feats || [], w, powerAttackOn);
+      if (powerAtk.applies) atkModTotal += powerAtk.toHit;
       // Note: Exhaustion penalty is already applied inside attackMod() — do NOT subtract again here
       // (D&D 2024: -2/level to all D20 Tests including attack rolls)
       // === Engine seam (1c-b): resolve the to-hit + base weapon damage through
@@ -2688,6 +2755,8 @@ export default function DnDSolo() {
         // B4: Track last weapon damage roll for Savage Attacker reroll
         (cb as any)._lastWeaponDamageRoll = { formula: dmgDie, total: dmg, damageType: w.dmgType || "slashing" };
         let parts = [`${dmgDie}+${abilDmgMod}${w.plus ? ` (อาวุธ +${w.plus})` : ""}${w.versatileDmg && dmgDie === w.versatileDmg ? " (2H)" : ""} = ${dmg}`];
+        // Task #14: GWM/Sharpshooter +10 damage (paired with the −5 to-hit above).
+        if (powerAtk.applies) { dmg += powerAtk.damage; parts.push(`${powerAtk.reason === "sharpshooter" ? "Sharpshooter" : "GWM"} +${powerAtk.damage}`); }
         // Phase 4: Fighting Style — Dueling grants +2 damage with a one-handed melee weapon.
         const duelBonus = featDamageBonus(cc.feats || [], w);
         if (duelBonus > 0) { dmg += duelBonus; parts.push(`Dueling +${duelBonus}`); }
@@ -3467,6 +3536,17 @@ export default function DnDSolo() {
         narrateCombatEvent(`[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e: any) => e.th).join(", ")}. HP คงเหลือ ${cc.hp}/${cc.maxHp}. บรรยายผลหลังการต่อสู้และอาจให้ loot — อย่าลืมอ้างถึงแผลที่ได้รับและสภาพรอบตัวในฉากเดิม`, cc, scene, finalLog, history);
         return;
       }
+      // Task #14: sidekick assist acts at the END of the player's turn, before
+      // the enemies. Its damage routes through hitEnemy (bridge-owned HP).
+      runSidekickAssist(cb, cc, entries);
+      const skEnd = checkCombatEnd(cb, cc, entries);
+      cc = skEnd.cc;
+      if (skEnd.ended) {
+        const finalLog = [...log0, ...entries];
+        commitCombat(cc, null, finalLog);
+        narrateCombatEvent(`[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e: any) => e.th).join(", ")}. HP คงเหลือ ${cc.hp}/${cc.maxHp}. บรรยายผลหลังการต่อสู้และอาจให้ loot — อย่าลืมอ้างถึงแผลที่ได้รับและสภาพรอบตัวในฉากเดิม`, cc, scene, finalLog, history);
+        return;
+      }
       // Tick buff durations BEFORE enemies attack (= end of player's turn)
       cc = tickBuffs(cc, entries);
       cc = enemyAttacks(cb, cc, entries);
@@ -3972,9 +4052,9 @@ export default function DnDSolo() {
     // spells; they may only swap on level-up. Cantrips (level 0) don't count.
     const castAbil = CLASSES[c.cls]?.castAbil;
     const learningLevel = availableSpells.find((s) => s.index === index)?.level ?? 1;
+    const rule = castAbil ? getSpellcastingRule(c.cls, c.level, mod(c.abilities[castAbil])) : null;
     if (castAbil && learningLevel > 0) {
-      const rule = getSpellcastingRule(c.cls, c.level, mod(c.abilities[castAbil]));
-      if (rule.kind === "known" && rule.maxHeld > 0) {
+      if (rule && rule.kind === "known" && rule.maxHeld > 0) {
         // Count leveled spells currently known (exclude confirmed cantrips).
         const leveledKnown = (c.knownSpells || []).filter((idx: string) => {
           const info = availableSpells.find((s) => s.index === idx);
@@ -3986,11 +4066,135 @@ export default function DnDSolo() {
         }
       }
     }
-    const cc = { ...c, knownSpells: [...(c.knownSpells || []), index] };
+    // Task #14: prepared casters add to the SPELLBOOK (pool). It only becomes
+    // "prepared" (castable) if there's room under the prepared cap; otherwise
+    // the player must re-prepare after a long rest to swap it in. Cantrips are
+    // always prepared. Known casters keep prepared == spellbook.
+    const spellbook = [...(c.spellbook || c.knownSpells || [])];
+    if (!spellbook.includes(index)) spellbook.push(index);
     const entries = [entrySystem(`📖 Learned spell: ${index.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}`)];
+    let knownSpells = c.knownSpells || [];
+    const isCantrip = learningLevel === 0;
+    if (rule && rule.kind === "prepared" && rule.maxHeld > 0 && !isCantrip) {
+      const preparedLeveled = knownSpells.filter((idx: string) => {
+        const info = availableSpells.find((s) => s.index === idx);
+        return info ? info.level > 0 : true;
+      }).length;
+      if (preparedLeveled >= rule.maxHeld) {
+        entries.push(entrySystem(`📗 เพิ่มลงสมุดเวทแล้ว แต่เตรียมเวทเต็ม (${preparedLeveled}/${rule.maxHeld}) — พักยาวแล้วกด "🔄 เตรียมเวทใหม่" เพื่อสลับเข้ามาเตรียม`));
+      } else {
+        knownSpells = [...knownSpells, index];
+      }
+    } else {
+      knownSpells = [...knownSpells, index];
+    }
+    const cc = { ...c, knownSpells, spellbook };
     const finalLog = [...log, ...entries];
     setC(cc); setLog(finalLog);
     persist(cc, scene, finalLog, combat, history);
+  }
+
+  /**
+   * Task #14: re-prepare a prepared caster's spells (Cleric/Druid/Paladin/
+   * Wizard). Available at/after a long rest. The engine (magic.reprepareSpells)
+   * owns the cap + which classes may swap; cantrips are always kept. `selection`
+   * is the desired list of LEVELED spell indices from the spellbook.
+   */
+  async function openReprepare() {
+    if (thinking || combat || !canReprepareOnLongRest(c.cls)) return;
+    // Populate availableSpells (level info for the whole class list) so the modal
+    // can tell cantrips (always prepared) from leveled spells (capped).
+    if (availableSpells.length === 0) await openSpellBrowser();
+    // Seed the selection with the currently-prepared leveled spells.
+    const leveledPrepared = (c.knownSpells || []).filter((idx: string) => {
+      const info = availableSpells.find((s) => s.index === idx);
+      return info ? info.level > 0 : true;
+    });
+    setReprepareSel(leveledPrepared);
+    setReprepareOpen(true);
+  }
+
+  function commitReprepare(selection: string[]) {
+    const castAbil = CLASSES[c.cls]?.castAbil;
+    if (!castAbil || !canReprepareOnLongRest(c.cls)) { setReprepareOpen(false); return; }
+    const spellbook: string[] = c.spellbook || c.knownSpells || [];
+    // Cantrips (level 0) are always prepared and never counted against the cap.
+    const isCantripIdx = (idx: string) => {
+      const info = availableSpells.find((s) => s.index === idx);
+      return info ? info.level === 0 : false;
+    };
+    const cantrips = (c.knownSpells || []).filter(isCantripIdx);
+    // Only LEVELED spells are managed by the cap; drop any cantrip that leaked in.
+    const desiredLeveled = selection.filter((idx) => !isCantripIdx(idx));
+    const res = reprepareSpells(c.cls, c.level, mod(c.abilities[castAbil]), spellbook, desiredLeveled);
+    if (!res.ok) { setReprepareOpen(false); return; }
+    const knownSpells = [...cantrips.filter((x: string) => !res.prepared.includes(x)), ...res.prepared];
+    const cc = { ...c, knownSpells };
+    const entries = [entrySystem(`🔄 เตรียมเวทใหม่: ${res.reasonTh} — เตรียม ${res.prepared.length} เวท`)];
+    const finalLog = [...log, ...entries];
+    setC(cc); setLog(finalLog); setReprepareOpen(false);
+    persist(cc, scene, finalLog, combat, history);
+  }
+
+  /* -------- Task #14: sidekick companion -------- */
+  function recruitSidekick(config: { baseKey: string; klass: SidekickClass } | null) {
+    if (!c) return;
+    const cc: any = { ...c };
+    if (config && SIDEKICK_BASES[config.baseKey]) {
+      cc.sidekick = { baseKey: config.baseKey, klass: config.klass, level: Math.max(1, Math.min(10, c.level || 1)) };
+    } else {
+      delete cc.sidekick;
+    }
+    const entries = [entrySystem(config ? `🐕 รับสหาย: ${SIDEKICK_BASES[config!.baseKey]?.name} (${config!.klass})` : "🐾 ปลดสหายแล้ว")];
+    const finalLog = [...log, ...entries];
+    setC(cc); setLog(finalLog); setRecruitOpen(false);
+    persist(cc, scene, finalLog, combat, history);
+  }
+
+  /**
+   * Run the sidekick's automatic assist turn. The engine (sidekick.ts) owns the
+   * stat block, the deterministic turn-intent ladder, and the attack resolution;
+   * this only rolls the injected dice and routes damage through hitEnemy so the
+   * combat bridge stays the single owner of enemy HP. Companion HP is not
+   * tracked (assist-only, enemies target the player) — a deliberately light
+   * integration. No-op when there is no sidekick or no living enemy.
+   */
+  function runSidekickAssist(cb: any, cc: any, entries: any[]) {
+    const sk = cc?.sidekick;
+    if (!sk || !cb || !Array.isArray(cb.enemies)) return;
+    const base = SIDEKICK_BASES[sk.baseKey];
+    if (!base) return;
+    const living = cb.enemies.filter((e: any) => e.hpNow > 0);
+    if (living.length === 0) return;
+    const block = buildSidekick(base, sk.klass, Math.max(1, Math.min(10, sk.level || cc.level || 1)));
+    const intent = sidekickTurnIntent(block, {
+      selfHpFraction: 1, // untracked HP → treat as healthy (assist-only)
+      woundedAllyHpFraction: cc.maxHp > 0 ? cc.hp / cc.maxHp : null,
+      enemyInReach: true,
+      hasSpellSlot: !!block.spellcasting,
+      canHeal: false, // this light wiring only performs offensive assists
+    });
+    if (intent.action !== "attack" && intent.action !== "cast_attack") {
+      entries.push(entrySystem(`🐕 ${base.name}: ${intent.reason}`));
+      return;
+    }
+    const target = living.find((e: any) => e.uid === combatTargetId) || living[0];
+    for (let i = 0; i < block.attacksPerAction; i++) {
+      if (target.hpNow <= 0) break;
+      const d20 = d(20);
+      const res = resolveSidekickAttack(block, {
+        targetAc: target.ac,
+        d20,
+        damageDiceTotal: rollFormula(block.attack.damageDice).total,
+        critDiceTotal: rollFormula(block.attack.damageDice).total,
+      });
+      if (res.hit) {
+        hitEnemy(cb, target, res.damage);
+        entries.push(entrySystem(`🐕 ${base.name} ${intent.action === "cast_attack" ? "ร่ายเวทใส่" : "โจมตี"} ${target.th}: ${res.crit ? "CRIT! " : ""}${res.damage} dmg → ${target.hpNow <= 0 ? "ล้ม!" : `${target.hpNow} HP`}`));
+      } else {
+        entries.push(entrySystem(`🐕 ${base.name} โจมตี ${target.th} พลาด (d20=${d20})`));
+      }
+    }
   }
 
   /* -------- new game flow -------- */
@@ -4419,6 +4623,83 @@ export default function DnDSolo() {
         </div>
       )}
 
+      {/* Task #14: RE-PREPARE modal (prepared casters, at/after long rest) */}
+      {reprepareOpen && c && (() => {
+        const castAbil = CLASSES[c.cls]?.castAbil;
+        const abilMod = castAbil ? mod(c.abilities[castAbil]) : 0;
+        const maxHeld = getSpellcastingRule(c.cls, c.level, abilMod).maxHeld;
+        const book: string[] = c.spellbook || c.knownSpells || [];
+        // Only LEVELED spells are managed here (cantrips are always prepared).
+        const leveledBook = book.filter((idx) => {
+          const info = availableSpells.find((s) => s.index === idx);
+          return info ? info.level > 0 : true;
+        });
+        const pretty = (idx: string) => idx.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const toggle = (idx: string) => setReprepareSel((sel) =>
+          sel.includes(idx) ? sel.filter((x) => x !== idx) : (sel.length < maxHeld ? [...sel, idx] : sel));
+        return (
+          <div className="sheet-overlay" onClick={() => setReprepareOpen(false)}>
+            <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
+                <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🔄 เตรียมเวทใหม่ ({reprepareSel.length}/{maxHeld})</span>
+                <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setReprepareOpen(false)}>✕</button>
+              </div>
+              <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกเวทที่จะเตรียม (สูงสุด {maxHeld} เวท) — cantrip เตรียมอัตโนมัติเสมอ</div>
+                {leveledBook.length === 0 && <div style={{ fontSize: 12, color: "#8A7F9E" }}>ยังไม่มีเวทในสมุด — เรียนเวทก่อน (📜 → เวทมนตร์)</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4, maxHeight: 320, overflowY: "auto" }}>
+                  {leveledBook.map((idx) => {
+                    const on = reprepareSel.includes(idx);
+                    const full = !on && reprepareSel.length >= maxHeld;
+                    return (
+                      <button key={idx} className={"btn" + (on ? " btn-gold" : "")} style={{ textAlign: "left", padding: "6px 10px", opacity: full ? 0.5 : 1 }}
+                        disabled={full} onClick={() => toggle(idx)}>
+                        {on ? "✅" : "⬜"} {pretty(idx)}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button className="btn btn-gold" style={{ padding: "8px" }} onClick={() => commitReprepare(reprepareSel)}>ยืนยันการเตรียมเวท</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Task #14: COMPANION recruit modal (out of combat) */}
+      {recruitOpen && c && !combat && (
+        <div className="sheet-overlay" onClick={() => setRecruitOpen(false)}>
+          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
+              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🐕 สหายร่วมทาง</span>
+              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setRecruitOpen(false)}>✕</button>
+            </div>
+            <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {c.sidekick ? (
+                <>
+                  <div style={{ fontSize: 13, color: "#C9BFE0" }}>
+                    สหายปัจจุบัน: <b>{SIDEKICK_BASES[c.sidekick.baseKey]?.name}</b> — {c.sidekick.klass} (Lv.{c.sidekick.level})
+                  </div>
+                  <button className="btn btn-red" onClick={() => recruitSidekick(null)}>ปลดสหาย</button>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกสหาย 1 คนที่จะช่วยโจมตีในสนามรบอัตโนมัติ</div>
+                  {([
+                    { key: "guard", klass: "warrior" as SidekickClass, label: "⚔️ องครักษ์ (Warrior) — โจมตีประชิด อึด" },
+                    { key: "scout", klass: "expert" as SidekickClass, label: "🏹 หน่วยสอดแนม (Expert) — ยิงระยะไกล" },
+                    { key: "acolyte", klass: "spellcaster" as SidekickClass, label: "✨ นักบวช (Spellcaster) — เวทสนับสนุน" },
+                  ]).map((o) => (
+                    <button key={o.key} className="btn" style={{ textAlign: "left", padding: "10px 12px" }}
+                      onClick={() => recruitSidekick({ baseKey: o.key, klass: o.klass })}>{o.label}</button>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MORE MENU — secondary actions (Shop, AI DM, Content) */}
       {moreMenuOpen && !combat && (
         <div className="sheet-overlay" onClick={() => setMoreMenuOpen(false)}>
@@ -4443,6 +4724,10 @@ export default function DnDSolo() {
               <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
                 onClick={() => { setContentManagerOpen(true); setMoreMenuOpen(false); }}>
                 📦 Content Manager — import/export homebrew
+              </button>
+              <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
+                onClick={() => { setRecruitOpen(true); setMoreMenuOpen(false); }}>
+                🐕 สหายร่วมทาง {c?.sidekick ? `— ${SIDEKICK_BASES[c.sidekick.baseKey]?.name}` : "— รับสหายช่วยรบ"}
               </button>
               <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
                 onClick={() => { setIoOpen(true); setMoreMenuOpen(false); }}>
@@ -5357,6 +5642,23 @@ export default function DnDSolo() {
             thinking={thinking}
             downed={downed}
           />
+          {/* Task #14: companion card — the sidekick auto-assists at end of your turn */}
+          {c.sidekick && SIDEKICK_BASES[c.sidekick.baseKey] && (() => {
+            const skBlock = buildSidekick(SIDEKICK_BASES[c.sidekick.baseKey], c.sidekick.klass, Math.max(1, Math.min(10, c.sidekick.level || c.level || 1)));
+            return (
+              <div className="companion-card" style={{ border: "1px solid #3A3054", borderRadius: 8, padding: "8px 10px", margin: "6px 0", background: "rgba(58,47,92,0.25)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 13, color: "#C9BFE0", fontWeight: 700 }}>🐕 {skBlock.name}</span>
+                  <span style={{ fontSize: 11, color: "#8A7F9E" }}>{c.sidekick.klass} · Lv.{skBlock.level}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 2 }}>
+                  AC {skBlock.ac} · to-hit +{skBlock.attack.toHit} · {skBlock.attack.damageDice}
+                  {skBlock.attack.damageBonus >= 0 ? `+${skBlock.attack.damageBonus}` : skBlock.attack.damageBonus}
+                  {skBlock.attacksPerAction > 1 ? ` ×${skBlock.attacksPerAction}` : ""} · โจมตีอัตโนมัติเมื่อจบเทิร์นคุณ
+                </div>
+              </div>
+            );
+          })()}
           {downed ? (
             <button className="btn btn-red" style={{ width: "100%", padding: 13 }} disabled={thinking} onClick={() => playerCombatAction("deathsave")}>
               💀 ทอย Death Saving Throw ({c.deathSaves.s}✓ / {c.deathSaves.f}✗)
@@ -5409,6 +5711,18 @@ export default function DnDSolo() {
                 {cls.caster && <button className="btn" disabled={thinking} onClick={() => setCombatMenu("spell")}>✨ ร่ายเวท</button>}
                 <button className="btn" disabled={thinking || combatItems.length === 0} onClick={() => setCombatMenu("item")}>🧪 ไอเทม ({combatItems.length})</button>
               </div>
+              {/* Task #14: GWM/Sharpshooter −5/+10 power-attack toggle (only shown if the feat is held) */}
+              {hasPowerAttackFeat(c.feats || []) && (
+                <button
+                  className={"btn" + (powerAttackOn ? " btn-gold" : "")}
+                  style={{ fontSize: 12, padding: "5px 10px" }}
+                  disabled={thinking}
+                  onClick={() => setPowerAttackOn((v) => !v)}
+                  title="−5 to-hit / +10 damage (อาวุธ Heavy melee สำหรับ GWM, อาวุธ ranged สำหรับ Sharpshooter)"
+                >
+                  🎯 Power Attack −5/+10: {powerAttackOn ? "เปิด" : "ปิด"}
+                </button>
+              )}
               {/* Secondary actions — class features + tactical */}
               <details style={{ marginTop: 2 }}>
                 <summary style={{ cursor: "pointer", fontSize: 12, color: "#8A7F9E", padding: "4px 0" }}>การกระทำเพิ่มเติม</summary>
@@ -5468,6 +5782,10 @@ export default function DnDSolo() {
             )}
             <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking || (c.hitDiceLeft || 0) <= 0} onClick={shortRest}>⛺ พักสั้น ({c.hitDiceLeft || 0})</button>
             <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking} onClick={longRest}>🌙 พักยาว</button>
+            {/* Task #14: re-prepare (prepared casters only — Cleric/Druid/Paladin/Wizard) */}
+            {cls?.caster && canReprepareOnLongRest(c.cls) && (
+              <button className="btn" style={{ fontSize: 12, padding: "6px 10px" }} disabled={thinking} onClick={openReprepare}>🔄 เตรียมเวทใหม่</button>
+            )}
           </div>
         )}
         <div style={{ display: "flex", gap: 8, maxWidth: 640, margin: "0 auto" }}>
