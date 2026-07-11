@@ -171,6 +171,74 @@ export function getSpellcastingRule(cls: string, level: number, abilityMod: numb
   };
 }
 
+/**
+ * May this class re-prepare (swap) its prepared spells on a long rest?
+ * True only for prepared casters (Cleric/Druid/Paladin/Wizard); known casters
+ * and non-casters cannot (they change spells only on level-up / never).
+ */
+export function canReprepareOnLongRest(cls: string): boolean {
+  return getSpellChangeWhen(cls) === "long_rest";
+}
+
+export interface ReprepareResult {
+  /** whether the requested change is allowed at all (prepared caster only). */
+  ok: boolean;
+  /** the new prepared list of LEVELED spells (capped at maxHeld). */
+  prepared: string[];
+  /** how many the class may hold (0 = not a prepared caster). */
+  maxHeld: number;
+  /** requested entries dropped because they exceeded the cap. */
+  dropped: string[];
+  reasonTh: string;
+}
+
+/**
+ * Re-prepare a prepared caster's LEVELED spells from its available pool
+ * (spellbook / class list) on a long rest. Cantrips are NOT managed here (they
+ * are always available and never counted against the cap).
+ *
+ * Rules owned here (D&D 2024):
+ *   - only prepared casters may re-prepare, and only on a long rest;
+ *   - the new list must be a subset of `available` (can't prepare a spell you
+ *     don't have access to);
+ *   - the list is capped at `getMaxSpellsHeld(cls, level, abilityMod)`.
+ *
+ * Deterministic: on over-cap the FIRST `maxHeld` valid selections are kept and
+ * the rest reported in `dropped`, so the UI can surface exactly what was cut.
+ */
+export function reprepareSpells(
+  cls: string,
+  level: number,
+  abilityMod: number,
+  available: string[],
+  desired: string[],
+): ReprepareResult {
+  const maxHeld = getMaxSpellsHeld(cls, level, abilityMod);
+  if (!canReprepareOnLongRest(cls)) {
+    return { ok: false, prepared: [], maxHeld, dropped: [], reasonTh: "คลาสนี้เปลี่ยนเวทที่เตรียมไม่ได้" };
+  }
+  const pool = new Set(available);
+  const prepared: string[] = [];
+  const dropped: string[] = [];
+  const seen = new Set<string>();
+  for (const idx of desired) {
+    if (seen.has(idx)) continue;        // de-dupe
+    if (!pool.has(idx)) { dropped.push(idx); continue; } // not accessible
+    seen.add(idx);
+    if (prepared.length < maxHeld) prepared.push(idx);
+    else dropped.push(idx);             // over the cap
+  }
+  return {
+    ok: true,
+    prepared,
+    maxHeld,
+    dropped,
+    reasonTh: dropped.length > 0
+      ? `เตรียมได้สูงสุด ${maxHeld} เวท — เกินโควตา ${dropped.length} เวทถูกตัดออก`
+      : `เตรียมเวทใหม่ ${prepared.length}/${maxHeld}`,
+  };
+}
+
 /* ======================================================================
  * 8.3 CAST SPELL
  * ====================================================================== */
