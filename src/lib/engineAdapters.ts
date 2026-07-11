@@ -12,7 +12,6 @@
 import { WorldClock } from "./time";
 import { EventBus, type GameEvent, type EventListener } from "./events";
 import type { Quest } from "./gameData";
-import { fetchMonster as srdFetchMonster, type NormalizedMonster } from "./srd";
 import { getCreature as open5eGetCreature, creatureToLegacyCombatant, type NormalizedCreature } from "./open5e";
 
 /* ============================================================
@@ -695,16 +694,17 @@ export function deleteSave() {
  * ============================================================ */
 
 /**
- * Convert a NormalizedMonster from srd.ts into the simple enemy shape that
- * DnDSolo.tsx's combat engine expects:
+ * Fetch a monster from Open5e v2 (the single content source) and convert its
+ * NormalizedCreature into the simple enemy shape that DnDSolo.tsx's combat
+ * engine expects:
  *   { uid, id, th, hp, hpNow, ac, atk, dmg, init, xp, sv, attacks, ... }
  *
- * Also pulls in AI behavior from monsters.ts via convertSRDMonsterToDefinition
- * so we can use tactical AI later.
+ * Returns null when Open5e has no match / is unreachable; callers then fall
+ * back to the bundled local bestiary.
  */
 
 export async function fetchMonsterForCombat(monsterId: string): Promise<any | null> {
-  // Try Open5e v2 first (2024 SRD support, richer schema, pre-computed XP)
+  // Open5e v2 (2024 SRD support, richer schema, pre-computed XP)
   const open5eCreature: NormalizedCreature | null = await open5eGetCreature(monsterId, "2024");
   if (open5eCreature) {
     const legacy = creatureToLegacyCombatant(open5eCreature);
@@ -754,47 +754,9 @@ export async function fetchMonsterForCombat(monsterId: string): Promise<any | nu
     };
   }
 
-  // Fallback to legacy dnd5eapi.co adapter (2014 SRD)
-  const m: NormalizedMonster | null = await srdFetchMonster(monsterId);
-  if (!m) return null;
-  return {
-    uid: `${monsterId}_0`,
-    id: monsterId,
-    th: m.name,
-    name: m.name,
-    hp: m.hp,
-    hpNow: m.hp,
-    ac: m.ac,
-    atk: m.atk,
-    dmg: m.dmg,
-    init: m.init,
-    xp: m.xp,
-    sv: m.sv,
-    cr: m.cr,
-    attacks: m.attacks || [],
-    specialAbilities: m.specialAbilities || [],
-    legendaryActions: m.legendaryActions || [],
-    actions: m.actions || [],
-    size: m.size,
-    type: m.type,
-    alignment: m.alignment,
-    speed: m.speed,
-    senses: m.senses,
-    languages: m.languages,
-    damageResistances: m.damageResistances,
-    damageImmunities: m.damageImmunities,
-    damageVulnerabilities: m.damageVulnerabilities,
-    conditionImmunities: m.conditionImmunities,
-    image: m.image,
-    hitDice: m.hitDice,
-    subtype: m.subtype,
-    reactions: m.reactions,
-    proficiencyBonus: m.proficiencyBonus,
-    skillProficiencies: m.skillProficiencies,
-    conditions: [],
-    srd: true,
-    source: "dnd5eapi-2014",
-  };
+  // Open5e (the single content source) had no match — degrade gracefully.
+  // Callers fall back to the bundled local bestiary when this returns null.
+  return null;
 }
 
 /* ============================================================
