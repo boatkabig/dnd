@@ -7,9 +7,9 @@
  * pacing, and the campaign-memory / session-zero briefs, it returns the full Thai
  * Dungeon-Master system prompt sent to /api/dm. Moved verbatim — no behavior change.
  */
-import { CLASSES, CONDITIONS_TH, BESTIARY, RACES, BACKGROUNDS, SKILLS } from "@/lib/gameData";
-import { maxSpellLevel } from "@/lib/spells";
-import { getDifficultyThresholds } from "@/lib/encounter";
+import { CLASSES, CONDITIONS_TH, BESTIARY, RACES, BACKGROUNDS, SKILLS } from "./gameData";
+import { maxSpellLevel } from "./spells";
+import { getDifficultyThresholds } from "./encounter";
 
 export function buildSystemPrompt(c: any, pacing?: { currentTension: string; recommendedNextTension: string; scenesSinceRest: number; scenesSinceCombat: number; scenesSinceRevelation: number; pacingNotes: string[]; arcPhase?: string } | null, memoryBrief?: string, sessionZeroBrief?: string) {
   // Phase 5: feed persisted campaign memory so the DM keeps continuity across sessions.

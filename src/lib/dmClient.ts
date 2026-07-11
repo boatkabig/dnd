@@ -9,8 +9,8 @@
  * output. Returns validated data plus __validationWarnings for the UI. Moved
  * verbatim — no behavior change.
  */
-import { sanitizeDmHistory } from "@/lib/dmContext";
-import { validateDMResponse } from "@/lib/dmSchema";
+import { sanitizeDmHistory } from "./dmContext";
+import { validateDMResponse } from "./dmSchema";
 
 export async function callDM(systemPrompt: string, history: any[]): Promise<{ narration: string; scene?: string | null; requires?: any; start_combat?: any; world_map?: any; map_update?: any; dungeon_enter?: any; dungeon_room_move?: any; dungeon_exit?: any; updates?: any; __validationWarnings?: string[] }> {
   // Send only the CURRENT turn's status snapshot; older frozen HP/gold/quest

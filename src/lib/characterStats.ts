@@ -12,13 +12,13 @@
 import {
   CLASSES, WEAPONS, mod, profByLevel, SKILLS, wornHas, MAGIC_ITEMS,
   DISADV_CONDS, CHECK_DISADV_CONDS, INCAPACITATING_CONDS,
-} from "@/lib/gameData";
-import { computeAC, getSlotTable } from "@/lib/spells";
-import { d } from "@/lib/dndSoloShared";
-import { hasClassFeature, featAttackBonus } from "@/lib/engine/progression";
-import { type SpellLegalityReason } from "@/lib/engine/magic";
-import { coverBetween, type Obstacle } from "@/lib/engine/vision";
-import { isConcentrationSpellName } from "@/lib/engine/effects";
+} from "./gameData";
+import { computeAC, getSlotTable } from "./spells";
+import { d } from "./dndSoloShared";
+import { hasClassFeature, featAttackBonus } from "./engine/progression";
+import { type SpellLegalityReason } from "./engine/magic";
+import { coverBetween, type Obstacle } from "./engine/vision";
+import { isConcentrationSpellName } from "./engine/effects";
 
 export function rollFormula(formula: string) {
   const m = String(formula).replace(/\s/g, "").match(/^(\d*)d(\d+)([+-]\d+)?$/i);
