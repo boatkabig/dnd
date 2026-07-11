@@ -385,6 +385,57 @@ assert(!rR11.success, "R11: top-level parse fails (buffs_add invalid type)");
 assert(rR11.data?.start_combat != null, "R11: start_combat survives");
 assert(rR11.data?.requires === null, "R11: requires dropped by semantic dedup even on the salvaged fallback");
 
+// R12: quest_add sent as an array of BARE STRINGS (quest titles) — coerced
+// into a minimal valid quest object per string, first one kept.
+console.log("\nR12: quest_add as an array of bare strings coerced to a quest object");
+const questAddStringArr = {
+  narration: "test",
+  updates: { quest_add: ["Find the tomb", "Warn the village"] },
+};
+const rR12 = validateDMResponse(questAddStringArr);
+assert(rR12.success === true, "R12: quest_add as array of bare strings succeeds");
+assert(!Array.isArray(rR12.data?.updates?.quest_add), "R12: normalized to a single object");
+assert(rR12.data?.updates?.quest_add?.title === "Find the tomb", "R12: title preserved from first string");
+assert(!!rR12.data?.updates?.quest_add?.id, "R12: id derived from title");
+assert(Array.isArray(rR12.data?.updates?.quest_add?.objectives) && rR12.data?.updates?.quest_add?.objectives.length === 1, "R12: objectives synthesized");
+assert(rR12.warnings.some((w) => w.includes("quest_add") && w.includes("array")), "R12: warning about the extra ignored quest");
+
+// R13: quest_add sent as a single bare string — coerced the same way
+console.log("\nR13: quest_add as a single bare string coerced to a quest object");
+const questAddSingleString = {
+  narration: "test",
+  updates: { quest_add: "Rescue the merchant" },
+};
+const rR13 = validateDMResponse(questAddSingleString);
+assert(rR13.success === true, "R13: quest_add as single bare string succeeds");
+assert(rR13.data?.updates?.quest_add?.title === "Rescue the merchant", "R13: title preserved");
+assert(rR13.data?.updates?.quest_add?.description === "Rescue the merchant", "R13: description defaulted from title");
+assert(!!rR13.data?.updates?.quest_add?.id, "R13: id derived from title");
+
+// R14: conditions_add with a mix of [valid, unknown] — valid kept, only the
+// unknown one dropped, field never rejected as a whole.
+console.log("\nR14: conditions_add mix of [valid, unknown] keeps valid, drops only unknown");
+const conditionsMixed = {
+  narration: "test",
+  updates: { conditions_add: ["poisoned", "not_a_real_condition"] },
+};
+const rR14 = validateDMResponse(conditionsMixed);
+assert(rR14.success === true, "R14: mix of valid+unknown condition still succeeds");
+assert(JSON.stringify(rR14.data?.updates?.conditions_add) === JSON.stringify(["poisoned"]), "R14: valid kept, unknown dropped");
+assert(rR14.warnings.some((w) => w.includes("not_a_real_condition")), "R14: warning names the dropped unknown condition");
+
+// R15: quest_add bare-string titles in Thai (the app's primary language) must
+// not collapse to the same id — the slug regex is Latin/digits-only, so two
+// distinct Thai titles must still resolve to two distinct ids via the hash
+// fallback in questFromTitle.
+console.log("\nR15: quest_add bare Thai titles get distinct ids, not a shared collapsed id");
+const rThai1 = validateDMResponse({ narration: "test", updates: { quest_add: "หาสร้อย" } });
+const rThai2 = validateDMResponse({ narration: "test", updates: { quest_add: "เตือนหมู่บ้าน" } });
+assert(rThai1.success === true, "R15: Thai quest_add title succeeds");
+assert(rThai1.data?.updates?.quest_add?.title === "หาสร้อย", "R15: Thai title preserved");
+assert(!!rThai1.data?.updates?.quest_add?.id && rThai1.data?.updates?.quest_add?.id !== "quest", "R15: id is not the bare fallback constant");
+assert(rThai1.data?.updates?.quest_add?.id !== rThai2.data?.updates?.quest_add?.id, "R15: two distinct Thai titles get distinct ids");
+
 console.log(`\n=== Robustness Hardening Results: ${pass} passed, ${fail} failed ===\n`);
 
 process.exit(fail > 0 ? 1 : 0);

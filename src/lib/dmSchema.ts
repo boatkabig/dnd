@@ -414,6 +414,38 @@ export interface ValidationResult {
   raw: unknown;
 }
 
+/** Cheap 32-bit string hash (base36) — only needs to spread distinct titles
+ *  across distinct ids, not to be cryptographically sound. */
+function hashSuffix(str: string): string {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+/**
+ * Build a minimal, schema-valid quest object from a bare title string — the
+ * DM sometimes sends `quest_add: "Find the tomb"` or
+ * `quest_add: ["Find the tomb", "Warn the village"]` instead of a proper
+ * quest object. Derives `id` from the title (slugified), uses the title as
+ * the description, and creates a single trivial objective so the required
+ * QuestAddSchema fields (id/title/description/objectives) are all satisfied.
+ * The app is Thai-first, so titles are commonly non-Latin — the slug regex
+ * (Latin/digits only) collapses those to "", which would make every Thai
+ * quest_add collide on the same id; fall back to a hash of the title so
+ * distinct non-Latin titles still get distinct ids.
+ */
+function questFromTitle(title: string): Record<string, unknown> {
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return {
+    id: (slug || `quest_${hashSuffix(title)}`).slice(0, 60),
+    title: title.slice(0, 120),
+    description: title.slice(0, 500),
+    objectives: [{ text: title.slice(0, 200) }],
+  };
+}
+
 /**
  * Normalize known LLM shape-variance inside `updates` BEFORE validation runs,
  * so normal variance doesn't invalidate an otherwise-valid field:
@@ -424,6 +456,13 @@ export interface ValidationResult {
  *  - quest_add / quest_update: the apply path takes exactly one quest per
  *    field, but the DM sometimes wraps it in an array — unwrap to the first
  *    element; extra elements are reported via `warnings`, not silently lost.
+ *    A bare string quest_add item (just a title) is coerced into a full
+ *    quest object via `questFromTitle` instead of being rejected as
+ *    "expected object, received string". quest_update is NOT given the same
+ *    string coercion — a bare string there would be a quest *title*, and
+ *    quest_update's only required field is `id`; this schema layer has no
+ *    access to existing quest state to resolve title → id, so a malformed
+ *    string quest_update is left to the normal invalid-field drop/warn path.
  * Returns a new object; does not mutate `rawUpdates`.
  */
 function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
@@ -447,12 +486,23 @@ function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: st
 
   for (const field of ["quest_add", "quest_update"] as const) {
     const val = out[field];
+    if (val === undefined || val === null) continue;
+
+    // Only quest_add has a sensible bare-string source (a plain title);
+    // see the doc comment above for why quest_update is excluded.
+    const coerceString = (item: unknown): unknown =>
+      field === "quest_add" && typeof item === "string" ? questFromTitle(item) : item;
+
     if (Array.isArray(val)) {
-      if (val.length > 1) {
-        warnings.push(`updates.${field}: DM sent an array of ${val.length} — using the first, extra items ignored`);
+      const mapped = val.map(coerceString);
+      if (mapped.length > 1) {
+        warnings.push(`updates.${field}: DM sent an array of ${mapped.length} — using the first, extra items ignored`);
       }
-      out[field] = val[0];
+      out[field] = mapped[0];
+    } else if (field === "quest_add" && typeof val === "string") {
+      out[field] = coerceString(val);
     }
+    // else: already a plain object (or an un-coercible string) — leave untouched
   }
 
   return out;
