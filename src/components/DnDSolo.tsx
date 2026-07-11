@@ -62,6 +62,7 @@ import {
 } from "@/lib/dungeonTables";
 // Phase 1: DM response schema validation
 import { validateDMResponse, deferConsequenceUpdates, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
+import { sanitizeDmHistory } from "@/lib/dmContext";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -643,10 +644,14 @@ DM สามารถทำได้ทุกอย่างที่ DM ตั�
 }
 
 async function callDM(systemPrompt: string, history: any[]): Promise<{ narration: string; scene?: string | null; requires?: any; start_combat?: any; world_map?: any; map_update?: any; dungeon_enter?: any; dungeon_room_move?: any; dungeon_exit?: any; updates?: any; __validationWarnings?: string[] }> {
+  // Send only the CURRENT turn's status snapshot; older frozen HP/gold/quest
+  // blobs in history are stripped to their durable "Player:" line so the DM
+  // isn't fed a stack of stale, contradictory "current state" snapshots.
+  const messages = sanitizeDmHistory(history);
   const response = await fetch("/api/dm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ system: systemPrompt, messages: history }),
+    body: JSON.stringify({ system: systemPrompt, messages }),
   });
   if (!response.ok) {
     let msg = `DM HTTP ${response.status}`;
@@ -3618,13 +3623,15 @@ export default function DnDSolo() {
       }
 
       const finalLog = [...baseLog, ...entries];
-      // Smart history trimming — keep first 2 (world map setup) + last 22 + summary of middle
+      // Smart history trimming — keep first 2 (world map setup) + summary of middle + last 21.
+      // Total is capped at 24 so persist()'s own hist.slice(-24) keeps the whole thing
+      // (a 25-item trim would let persist drop one of the first-2 setup messages on save).
       let trimmedHist = hist;
-      if (hist.length > 26) {
+      if (hist.length > 24) {
         const first2 = hist.slice(0, 2);
-        const last22 = hist.slice(-22);
+        const lastN = hist.slice(-21);
         // Build summary of skipped messages
-        const skipped = hist.slice(2, -22);
+        const skipped = hist.slice(2, -21);
         const skipSummary = skipped.map((h: any) => {
           if (h.role === "user") {
             const playerMatch = h.content.match(/Player:\s*(.+)/);
@@ -3638,7 +3645,7 @@ export default function DnDSolo() {
           return "";
         }).filter(Boolean).join(" → ");
         const summaryEntry = { role: "user" as const, content: `[SUMMARY OF PAST EVENTS: ${skipSummary}]` };
-        trimmedHist = [...first2, summaryEntry, ...last22];
+        trimmedHist = [...first2, summaryEntry, ...lastN];
       }
       mapRef.current = mp;
       setC(cc); setScene(sc); setCombat(cb); setLog(finalLog); setHistory(trimmedHist); setMap(mp);
