@@ -73,6 +73,7 @@ import CharacterSheet from "@/components/game/CharacterSheet";
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
 import { buildBridgeState, applyBridgeDamage, planMultiattackSequence } from "@/lib/engine/combatBridge";
 import { rollDeathSave, resolveContestedAction } from "@/lib/engine/combat";
+import { checkConcentration, concentrationCheckDC, isConcentrationSpellName } from "@/lib/engine/effects";
 
 /**
  * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
@@ -361,21 +362,15 @@ function attackerHasAdvVs(e: any): boolean {
 }
 export function sneakDice(level: number) { return Math.ceil(level / 2); }
 // critThreshold moved below hasFeature definition (which it depends on)
-// Check if character has any concentration buff active
+// Check if character has any concentration buff active.
+// Which buff names require concentration is owned by the engine
+// (engine/effects.isConcentrationSpellName / CONCENTRATION_SPELL_NAMES).
 function hasConcentration(cc: any): boolean {
-  return (cc.buffs || []).some((b: any) =>
-    ["Bless", "Haste", "Shield of Faith", "Hold Person", "Faerie Fire", "Slow", "Bane",
-     "Hunter's Mark", "Hex", "Spirit Guardians", "Spiritual Weapon", "Banishment",
-     "Concentration Spell"].includes(b.name)
-  );
+  return (cc.buffs || []).some((b: any) => isConcentrationSpellName(b.name));
 }
 // Get the highest-priority concentration buff (the one to break first)
 function getActiveConcentrationBuff(cc: any): any | null {
-  return (cc.buffs || []).find((b: any) =>
-    ["Bless", "Haste", "Shield of Faith", "Hold Person", "Faerie Fire", "Slow", "Bane",
-     "Hunter's Mark", "Hex", "Spirit Guardians", "Spiritual Weapon", "Banishment",
-     "Concentration Spell"].includes(b.name)
-  ) || null;
+  return (cc.buffs || []).find((b: any) => isConcentrationSpellName(b.name)) || null;
 }
 function critThreshold(c: any) { return hasFeature(c, "improved_critical") ? 19 : 20; }
 
@@ -1926,25 +1921,25 @@ export default function DnDSolo() {
           // Emit damage taken event (for features like relentless_endurance, uncanny_dodge already applied above)
           if (dmg > 0) emitDamageTaken("player", dmg, "slashing", e.uid);
 
-          // Concentration check: if player has any concentration buff and took damage, must make CON save
+          // Concentration check: if player has any concentration buff and took damage, must make CON save.
+          // DC + pass/fail owned by the engine (engine/effects.checkConcentration → D&D 2024 DC = max(10, dmg/2), cap 30).
           if (dmg > 0 && hasConcentration(nc)) {
             const concBuff = getActiveConcentrationBuff(nc);
-            // D&D 2024: DC = max(10, damage/2), capped at 30
-            const concDC = Math.min(30, Math.max(10, Math.floor(dmg / 2)));
             const concSave = rollD20(saveMod(nc, "con"));
-            if (concSave.total < concDC) {
+            const conc = checkConcentration(dmg, concSave.die, saveMod(nc, "con"));
+            if (!conc.success) {
               // Lose concentration — remove buff
               nc.buffs = nc.buffs.filter((b: any) => b.name !== concBuff.name);
               if (concBuff.name === "Mage Armor") nc.mageArmor = false;
               if (concBuff.name === "Spirit Guardians") cb.spiritGuardians = false;
-              entries.push(entrySystem(`💔 เสียสมาธิ! ${concBuff.name} สลายไป (CON save ${concSave.total} < DC ${concDC})`));
+              entries.push(entrySystem(`💔 เสียสมาธิ! ${concBuff.name} สลายไป (CON save ${conc.total} < DC ${conc.dc})`));
             } else {
-              entries.push(entrySystem(`🛡️ รักษาสมาธิ ${concBuff.name} ไว้ได้ (CON save ${concSave.total} ≥ DC ${concDC})`));
+              entries.push(entrySystem(`🛡️ รักษาสมาธิ ${concBuff.name} ไว้ได้ (CON save ${conc.total} ≥ DC ${conc.dc})`));
             }
           }
 
           if (cb.spiritGuardians && dmg > 0 && nc.hp > 0) {
-            const dc = Math.min(30, Math.max(10, Math.floor(dmg / 2)));
+            const dc = concentrationCheckDC(dmg);
             const sv = rollD20(saveMod(nc, "con"));
             if (sv.total < dc) {
               cb.spiritGuardians = false;
@@ -1954,6 +1949,14 @@ export default function DnDSolo() {
         }
         entries.push({ id: nextId(), type: "roll", title: `${e.th} ${atkData.name}`, roll: atk, vsAc: nc.ac, success: hit, extra: hit ? extra + ` → your HP ${nc.hp}` : null });
         if (nc.hp <= 0) {
+          // D&D 2024: dropping to 0 HP / falling unconscious ends all concentration.
+          // (Which buffs are concentration is owned by engine/effects.isConcentrationSpellName.)
+          const droppedConc = (nc.buffs || []).filter((b: any) => isConcentrationSpellName(b.name));
+          if (droppedConc.length > 0) {
+            nc.buffs = (nc.buffs || []).filter((b: any) => !isConcentrationSpellName(b.name));
+            if (droppedConc.some((b: any) => b.name === "Spirit Guardians")) cb.spiritGuardians = false;
+            entries.push(entrySystem(`💔 หมดสติ — เสียสมาธิ: ${droppedConc.map((b: any) => b.name).join(", ")} สลายไป`));
+          }
           entries.push(entrySystem(`💀 ${nc.name} ล้มลงหมดสติ! ต้องทอย Death Saving Throw`));
           break;
         }
@@ -2261,6 +2264,19 @@ export default function DnDSolo() {
       };
       const buffMeta = buffMap[sp.index] || { duration: 10, effectDesc: sp.desc.slice(0, 80) };
       const buffName = sp.name.replace(/\b\w/g, (c: string) => c.toUpperCase());
+      // D&D 2024 single-concentration: casting a new concentration spell ends the
+      // previous one. Which buffs are concentration is owned by the engine
+      // (engine/effects.isConcentrationSpellName).
+      if (buffMeta.concentration) {
+        const superseded = (nc.buffs || []).filter(
+          (b: any) => isConcentrationSpellName(b.name) && b.name !== buffName,
+        );
+        if (superseded.length > 0) {
+          nc = { ...nc, buffs: (nc.buffs || []).filter((b: any) => !(isConcentrationSpellName(b.name) && b.name !== buffName)) };
+          if (superseded.some((b: any) => b.name === "Spirit Guardians")) ncb.spiritGuardians = false;
+          entries.push(entrySystem(`🌀 เลิกสมาธิจาก ${superseded.map((b: any) => b.name).join(", ")} (ร่ายสมาธิใหม่: ${buffName})`));
+        }
+      }
       // Apply buff via applyBuffToCharacter
       nc = applyBuffToCharacter({ name: buffName, type: "buff", duration: buffMeta.duration, source: "spell", effect_desc: buffMeta.effectDesc }, nc);
       // Special flags

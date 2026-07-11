@@ -15,7 +15,7 @@ import {
   canRest,
   checkInterruption,
 } from "../src/lib/engine/rest";
-import { concentrationCheckDC } from "../src/lib/engine/effects";
+import { concentrationCheckDC, checkConcentration, isConcentrationSpellName } from "../src/lib/engine/effects";
 import { concentrationCheckDC as magicConcDC } from "../src/lib/engine/magic";
 import { resolveContestedAction } from "../src/lib/engine/combat";
 import { influenceDC, resolveInfluence } from "../src/lib/social";
@@ -69,6 +69,14 @@ check("Conc DC for 30 dmg = 15", concentrationCheckDC(30) === 15);
 check("Conc DC for 60 dmg = 30", concentrationCheckDC(60) === 30);
 check("Conc DC for 100 dmg = 30 (capped)", concentrationCheckDC(100) === 30);
 check("Magic module also caps at 30", magicConcDC(100) === 30);
+// checkConcentration pass/fail vs DC (roll + mod compared to DC)
+check("checkConcentration fails when total < DC", checkConcentration(20, 3, 2).success === false); // 5 < 10
+check("checkConcentration succeeds when total ≥ DC", checkConcentration(20, 15, 2).success === true); // 17 ≥ 10
+check("checkConcentration reports DC = max(10, dmg/2)", checkConcentration(40, 10, 0).dc === 20);
+// isConcentrationSpellName owns the concentration buff-name set (single source of truth)
+check("Bless is a concentration spell", isConcentrationSpellName("Bless") === true);
+check("Hunter's Mark is a concentration spell", isConcentrationSpellName("Hunter's Mark") === true);
+check("Mage Armor is NOT concentration", isConcentrationSpellName("Mage Armor") === false);
 
 // 6. Grapple/Shove uses STR/DEX save DC = 8 + STR + PB (not contested)
 console.log("\n6. Grapple/Shove — STR/DEX save DC 8+STR+PB (D&D 2024)");

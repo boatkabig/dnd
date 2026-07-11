@@ -627,6 +627,33 @@ export function checkConcentration(
 }
 
 /**
+ * Canonical set of concentration-requiring buff/spell display names used by the
+ * app's inline buff model (character.buffs[] carry these display names).
+ *
+ * This is the single source of truth for "which buffs require concentration" so
+ * the UI layer never hard-codes the list. It mirrors the D&D 2024 concentration
+ * rule: a caster maintains at most ONE of these at a time, and any of them ends
+ * on a failed CON save, at 0 HP / unconscious, or on incapacitation.
+ *
+ * NOTE: the app tracks concentration by buff *display name* (not the ActiveEffect
+ * model used elsewhere in this module), so this list is intentionally name-keyed.
+ */
+export const CONCENTRATION_SPELL_NAMES: readonly string[] = [
+  "Bless", "Haste", "Shield of Faith", "Hold Person", "Faerie Fire", "Slow",
+  "Bane", "Hunter's Mark", "Hex", "Spirit Guardians", "Spiritual Weapon",
+  "Banishment", "Concentration Spell",
+];
+
+/**
+ * True if a buff/spell display name requires concentration (D&D 2024).
+ * Used by the UI's inline buff model to decide when to enforce
+ * single-concentration and when a buff must drop on a broken concentration.
+ */
+export function isConcentrationSpellName(name: string): boolean {
+  return CONCENTRATION_SPELL_NAMES.includes(name);
+}
+
+/**
  * Check if a character can begin concentrating on a new spell.
  * (Only one concentration spell allowed at a time in D&D 5e.)
  */
