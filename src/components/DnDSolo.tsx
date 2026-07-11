@@ -72,6 +72,7 @@ import {
 } from "@/lib/characterStats";
 import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
 import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
+import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -744,21 +745,6 @@ export default function DnDSolo() {
     return nc;
   }
 
-  // Tick down buff durations by one round (called at end of each combat round)
-  function tickBuffs(cc: any, entries: any[]) {
-    const nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    const expired: string[] = [];
-    nc.buffs = nc.buffs.map((b: any) => ({ ...b })).filter((b: any) => {
-      if (b.duration > 0) {
-        b.duration -= 1;
-        if (b.duration <= 0) { expired.push(b.name); return false; }
-      }
-      return true; // keep duration === 0 (instant, already applied) and duration === -1 (until long rest)
-    });
-    expired.forEach((name) => entries.push(entrySystem(`⏳ Buff หมดอายุ: ${name}`)));
-    return nc;
-  }
-
   // Get total AC bonus from active buffs
   function buffACBonus(cc: any): number {
     return (cc.buffs || []).reduce((sum: number, b: any) => {
@@ -772,18 +758,6 @@ export default function DnDSolo() {
       return sum;
     }, 0);
   }
-
-  // Apply a buff's effect via castSRDSpell — add to character state
-  function applyBuffToCharacter(buff: any, cc: any): any {
-    const nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    // Remove existing buff with same name
-    nc.buffs = nc.buffs.filter((b: any) => b.name !== buff.name);
-    nc.buffs.push(buff);
-    // Mage Armor — set flag for AC computation
-    if (buff.name === "Mage Armor") nc.mageArmor = true;
-    return nc;
-  }
-
 
   /* -------- Domain 36: Dungeon Blueprint application -------- */
   function applyDungeonBlueprint(blueprint: any, pushEntry?: (t: string) => void): DungeonBlueprint | null {
@@ -2671,7 +2645,7 @@ export default function DnDSolo() {
         return;
       }
       // Tick buff durations BEFORE enemies attack (= end of player's turn)
-      cc = tickBuffs(cc, entries);
+      cc = tickBuffs(cc, (t) => entries.push(entrySystem(t)));
       cc = runEnemyPhase(cb, cc, entries, true);
       cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
       if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
