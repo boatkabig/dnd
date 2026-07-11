@@ -71,6 +71,44 @@ import AdventureLog from "@/components/game/AdventureLog";
 import CharacterSheet from "@/components/game/CharacterSheet";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
+import { buildBridgeState, applyBridgeDamage } from "@/lib/engine/combatBridge";
+
+/**
+ * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
+ * `cb.bridge` (a CombatBridgeState) is the SINGLE owner of enemy HP; every
+ * enemy-damage site routes its already-final damage amount through the engine
+ * via these helpers and reads the result back as the enemy blob's projected
+ * `hpNow`. HP is never computed inline anymore — even the no-bridge fallback
+ * (legacy saves that predate this field) derives newHP through a throwaway
+ * one-combatant bridge, so there is exactly ONE source of truth.
+ */
+function applyEnemyDamage(
+  bridge: any,
+  uid: string,
+  amount: number,
+  fallbackHp: number,
+  fallbackAc: number = 10,
+  fallbackName: string = "",
+): { bridge: any; hp: number } {
+  if (bridge) {
+    const r = applyBridgeDamage(bridge, uid, amount);
+    if (r.found) return { bridge: r.state, hp: r.newHP };
+  }
+  // Degraded path (no persistent bridge / enemy absent): derive via a throwaway
+  // engine bridge so the value is still bridge-computed, never inline arithmetic.
+  const tmp = buildBridgeState([{ id: uid, name: fallbackName, ac: fallbackAc, hp: fallbackHp, maxHp: fallbackHp, isPlayer: false }]);
+  const rr = applyBridgeDamage(tmp, uid, amount);
+  return { bridge, hp: rr.newHP };
+}
+
+/** Mutating convenience: apply damage to `target` via `cbLike.bridge`, sync the
+ *  projected `hpNow`, and return the new HP. The ONLY place `hpNow` is assigned. */
+function hitEnemy(cbLike: any, target: any, amount: number): number {
+  const dd = applyEnemyDamage(cbLike?.bridge, target.uid, amount, target.hpNow, target.ac, target.th);
+  if (cbLike) cbLike.bridge = dd.bridge;
+  target.hpNow = dd.hp;
+  return dd.hp;
+}
 
 /* ============================================================
    D&D 5e SOLO — Full SRD Edition
@@ -910,14 +948,17 @@ export default function DnDSolo() {
         case "deal_damage": {
           const dmg = change.payload.damageFormula ? rollFormula(change.payload.damageFormula).total : 0;
           if (dmg > 0) {
-            ncb = { ...ncb, enemies: ncb.enemies.map((e: any) => {
+            let newBridge = ncb.bridge;
+            const newEnemies = ncb.enemies.map((e: any) => {
               if (e.uid === change.targetId) {
-                const newHp = Math.max(0, e.hpNow - dmg);
-                entries.push(entrySystem(`   → ${e.th} โดน ${dmg} ${change.payload.damageType || ""} (${change.sourceFeature}) → ${newHp} HP`));
-                return { ...e, hpNow: newHp };
+                const dd = applyEnemyDamage(newBridge, e.uid, dmg, e.hpNow, e.ac, e.th);
+                newBridge = dd.bridge;
+                entries.push(entrySystem(`   → ${e.th} โดน ${dmg} ${change.payload.damageType || ""} (${change.sourceFeature}) → ${dd.hp} HP`));
+                return { ...e, hpNow: dd.hp };
               }
               return e;
-            })};
+            });
+            ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
             emitDamageDealt("player", change.targetId, dmg, change.payload.damageType);
           }
           break;
@@ -948,14 +989,17 @@ export default function DnDSolo() {
             // Keep higher of original vs reroll
             if (rerollTotal > lastRoll.total) {
               const bonusDmg = rerollTotal - lastRoll.total;
-              ncb = { ...ncb, enemies: ncb.enemies.map((e: any) => {
+              let newBridge = ncb.bridge;
+              const newEnemies = ncb.enemies.map((e: any) => {
                 if (e.uid === change.targetId) {
-                  const newHp = Math.max(0, e.hpNow - bonusDmg);
-                  entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} > ${lastRoll.total} → +${bonusDmg} → ${newHp} HP`));
-                  return { ...e, hpNow: newHp };
+                  const dd = applyEnemyDamage(newBridge, e.uid, bonusDmg, e.hpNow, e.ac, e.th);
+                  newBridge = dd.bridge;
+                  entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} > ${lastRoll.total} → +${bonusDmg} → ${dd.hp} HP`));
+                  return { ...e, hpNow: dd.hp };
                 }
                 return e;
-              })};
+              });
+              ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
               emitDamageDealt("player", change.targetId, bonusDmg, lastRoll.damageType || "slashing");
             } else {
               entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} ≤ ${lastRoll.total} → keep original`));
@@ -1525,6 +1569,21 @@ export default function DnDSolo() {
       movementLeft: cc.speed || 30, // D&D 5e: use character's speed (dwarf=25, monk=30+10, etc.)
       hasMoved: false,
     };
+    // Stage A (combat-state migration): the persistent bridge state OWNS enemy HP.
+    // Enemy blobs are bestiary/SRD shapes (not NormalizedCreature), so adapt them
+    // to RawCombatantInput here. `hpNow` on each blob is now a projection of this.
+    cb.bridge = buildBridgeState([
+      { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30, isPlayer: true },
+      ...enemies.map((e: any) => ({
+        id: e.uid,
+        name: e.th,
+        ac: e.ac,
+        hp: e.hp,
+        maxHp: e.hp,
+        speed: typeof e.speed === "number" ? e.speed : 30,
+        isPlayer: false,
+      })),
+    ]);
     return cb;
   }
 
@@ -1676,7 +1735,7 @@ export default function DnDSolo() {
                   if (hit2) {
                     const dr = rollFormula(meleeW.dmg);
                     const dmg = dr.total + mod(cc.abilities[meleeW.abil]) + (meleeW.plus || 0);
-                    e.hpNow = Math.max(0, e.hpNow - dmg);
+                    hitEnemy(cb, e, dmg);
                     entries.push({ id: nextId(), type: "roll", title: `⏰ Ready → ${e.th}`, roll: atk, vsAc: e.ac, success: true, extra: `${dmg} ${meleeW.dmg} → ${e.th} ${e.hpNow <= 0 ? "dead!" : `${e.hpNow} HP`}` });
                   } else {
                     entries.push({ id: nextId(), type: "roll", title: `⏰ Ready → ${e.th}`, roll: atk, vsAc: e.ac, success: false, extra: "miss" });
@@ -2073,7 +2132,7 @@ export default function DnDSolo() {
             : resistedDmg > dmg ? ` 💥vuln +${resistedDmg - dmg}`
             : "";
           dmg = resistedDmg;
-          t.hpNow = Math.max(0, t.hpNow - dmg);
+          hitEnemy(ncb, t, dmg);
           extra = `${sp.damageType || "force"} ${dmg}${resistTag} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}`;
           if (sp.conditionsAdd && sp.conditionsAdd.length > 0) {
             for (const cond of sp.conditionsAdd) {
@@ -2123,7 +2182,7 @@ export default function DnDSolo() {
             immunities: t.damageImmunities,
           });
         }
-        t.hpNow = Math.max(0, t.hpNow - dmg);
+        hitEnemy(ncb, t, dmg);
         let extra = `${dmg} ${sp.damageType || ""} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}`;
         if (sp.conditionsAdd && sp.conditionsAdd.length > 0 && failed) {
           for (const cond of sp.conditionsAdd) {
@@ -2156,7 +2215,7 @@ export default function DnDSolo() {
             vulnerabilities: tgt.damageVulnerabilities,
             immunities: tgt.damageImmunities,
           });
-          tgt.hpNow = Math.max(0, tgt.hpNow - dartDmg);
+          hitEnemy(ncb, tgt, dartDmg);
           parts.push(`dart ${dart + 1}: ${dartDmg}${dartDmg < dr.total ? " (resist)" : dartDmg === 0 && dr.total > 0 ? " (immune)" : dartDmg > dr.total ? " (vuln)" : ""} → ${tgt.th}${tgt.hpNow <= 0 ? " dead!" : ""}`);
         }
         entries.push(entrySystem(`✨ ${sp.name}: โดนอัตโนมัติ · ${parts.join(" · ")}`));
@@ -2172,7 +2231,7 @@ export default function DnDSolo() {
             vulnerabilities: tgt.damageVulnerabilities,
             immunities: tgt.damageImmunities,
           });
-          tgt.hpNow = Math.max(0, tgt.hpNow - dmg);
+          hitEnemy(ncb, tgt, dmg);
           entries.push({ id: nextId(), type: "roll", title: `${sp.name} → ${tgt.th}`, roll: { die: 0, other: null, mod: 0, total: 0, adv: "none" }, success: true, extra: `Auto-hit: ${dmg} ${sp.damageType || "force"} → ${tgt.th} ${tgt.hpNow <= 0 ? "dead!" : `${tgt.hpNow} HP left`}` });
         }
       }
@@ -2527,7 +2586,7 @@ export default function DnDSolo() {
                 const adjacent = cb.enemies.find((e: any) => e.hpNow > 0 && e.uid !== target.uid && cb.enemyPositions[e.uid] && gridDistance(cb.playerPos, cb.enemyPositions[e.uid]) <= 1);
                 if (adjacent) {
                   const cleaveDmg = rollFormula(dmgDie).total;
-                  adjacent.hpNow = Math.max(0, adjacent.hpNow - cleaveDmg);
+                  hitEnemy(cb, adjacent, cleaveDmg);
                   parts.push(`⚔️ Cleave → ${adjacent.th} +${cleaveDmg}`);
                 }
                 break;
@@ -2650,7 +2709,7 @@ export default function DnDSolo() {
         else if (resistedDmg > dmg) parts.push(`💥 VULNERABLE (${wDmgType}) +${resistedDmg - dmg}`);
         dmg = resistedDmg;
         // Bless die (+1d4 to attack rolls, not damage — already applied to atk in real 5e but we simplified)
-        target.hpNow = Math.max(0, target.hpNow - dmg);
+        hitEnemy(cb, target, dmg);
         extra = `${parts.join(" · ")} = ${dmg} damage → ${target.th} ${target.hpNow <= 0 ? "dead!" : `${target.hpNow} HP left`}`;
         // Emit events for feature triggers (data-driven)
         emitAttack("player", target.uid, w.th);
@@ -2679,7 +2738,7 @@ export default function DnDSolo() {
         const hasMastery = ["fighter", "paladin", "ranger", "barbarian", "monk"].includes(cc.cls);
         if (hasMastery) {
           const grazeDmg = Math.max(1, mod(cc.abilities[w.abil]));
-          target.hpNow = Math.max(0, target.hpNow - grazeDmg);
+          hitEnemy(cb, target, grazeDmg);
           extra = `Graze: +${grazeDmg} ${w.abil.toUpperCase()} mod damage → ${target.th} ${target.hpNow <= 0 ? "dead!" : `${target.hpNow} HP left`}`;
           emitDamageDealt("player", target.uid, grazeDmg, "slashing");
           if (target.hpNow <= 0) {
@@ -2745,7 +2804,7 @@ export default function DnDSolo() {
           const target = cb.enemies.find((e:any)=>e.hpNow>0);
           if (target) {
             const dr = rollFormula(item.dmg);
-            target.hpNow = Math.max(0, target.hpNow - dr.total);
+            hitEnemy(cb, target, dr.total);
             entries.push({ id: nextId(), type: "roll", title: `${payload} → ${target.th}`, roll: { die:0, other:null, mod:0, total:0, adv:"none" }, success: true, extra: `${item.dmgType||""} ${dr.total} → ${target.th} ${target.hpNow<=0?"dead!":`${target.hpNow} HP left`}` });
           }
         }
@@ -2812,7 +2871,7 @@ export default function DnDSolo() {
                 const dr = rollFormula("1d8");
                 let dmg = dr.total + mod(cc.abilities[CLASSES[cc.cls].castAbil]);
                 if (atk.die === 20) dmg += rollFormula("1d8").total;
-                t.hpNow = Math.max(0, t.hpNow - dmg);
+                hitEnemy(cb, t, dmg);
                 extra = `${dmg} damage → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}`;
               }
               entries.push({ id: nextId(), type: "roll", title: `⚔️ Spiritual Weapon → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
@@ -2828,7 +2887,7 @@ export default function DnDSolo() {
               const sv = rollD20(monSave(t, "wis"));
               const failed = sv.total < dc;
               const dmg = failed ? dr.total : Math.floor(dr.total / 2);
-              t.hpNow = Math.max(0, t.hpNow - dmg);
+              hitEnemy(cb, t, dmg);
               entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
             }
           }
@@ -3150,7 +3209,7 @@ export default function DnDSolo() {
               dmg += mod(cc.abilities[mainW.abil]);
             }
             if (atk.die === 20) dmg += rollFormula(mainW.dmg).total;
-            target.hpNow = Math.max(0, target.hpNow - dmg);
+            hitEnemy(cb, target, dmg);
             extra = `${mainW.dmg}(${dmgR.rolls.join("+")})${hasFeature(cc, "two_weapon_fighting") ? `+${mod(cc.abilities[mainW.abil])}` : ""} = ${dmg} → ${target.th} ${target.hpNow <= 0 ? "ตาย!" : `เหลือ ${target.hpNow} HP`}`;
           }
           entries.push({ id: nextId(), type: "roll", title: `⚔️⚔️ มือนอก → ${target.th}`, roll: atk, vsAc: target.ac, success: hit, extra });
@@ -3215,7 +3274,7 @@ export default function DnDSolo() {
             const dr = rollFormula("1d8");
             let dmg = dr.total + mod(cc.abilities[CLASSES[cc.cls].castAbil]);
             if (atk.die === 20) dmg += rollFormula("1d8").total;
-            t.hpNow = Math.max(0, t.hpNow - dmg);
+            hitEnemy(cb, t, dmg);
             extra = `${dmg} damage → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}`;
           }
           entries.push({ id: nextId(), type: "roll", title: `⚔️ Spiritual Weapon → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
@@ -3231,7 +3290,7 @@ export default function DnDSolo() {
           const sv = rollD20(monSave(t, "wis"));
           const failed = sv.total < dc;
           const dmg = failed ? dr.total : Math.floor(dr.total / 2);
-          t.hpNow = Math.max(0, t.hpNow - dmg);
+          hitEnemy(cb, t, dmg);
           entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
         }
       }
