@@ -196,8 +196,12 @@ assert(JSON.stringify(rH1.data?.updates?.loot_drop) === JSON.stringify(["50gp", 
 assert(rH1.data?.updates?.quest_update === undefined, "H1: malformed quest_update dropped");
 assert(rH1.warnings.some((w) => w.includes("quest_update")), "H1: warning names quest_update");
 
-// H2: malformed quest_add (missing required 'objectives') dropped without dropping sibling hp_delta
-console.log("\nH2: malformed quest_add dropped without dropping hp_delta");
+// H2: quest_add missing 'objectives' entirely is now salvaged by total
+// coercion (see fix/dm-quest-add-coercion) — a title-derived objective is
+// synthesized instead of dropping the whole quest_add, and since the object
+// is repaired BEFORE the strict parse, the sibling hp_delta survives via a
+// clean strict success (not the lenient salvage path).
+console.log("\nH2: quest_add missing objectives is salvaged via title-derived objective; hp_delta unaffected");
 const questAddBad = {
   narration: "test",
   updates: {
@@ -206,9 +210,11 @@ const questAddBad = {
   },
 };
 const rH2 = validateDMResponse(questAddBad);
-assert(!rH2.success, "H2: top-level parse fails (quest_add missing objectives)");
-assert(rH2.data?.updates?.hp_delta === -10, "H2: hp_delta salvaged");
-assert(rH2.data?.updates?.quest_add === undefined, "H2: malformed quest_add dropped");
+assert(rH2.success === true, "H2: top-level parse now succeeds (quest_add total coercion)");
+assert(rH2.data?.updates?.hp_delta === -10, "H2: hp_delta preserved");
+assert(rH2.data?.updates?.quest_add?.id === "q1", "H2: quest_add preserved");
+assert(rH2.data?.updates?.quest_add?.objectives.length === 1, "H2: objective synthesized");
+assert(rH2.data?.updates?.quest_add?.objectives[0].text === "Find the amulet", "H2: synthesized objective derived from title");
 
 // H3: valid quest_add / quest_update pass the strict schema end-to-end
 console.log("\nH3: valid quest payloads pass strict schema");
@@ -495,6 +501,68 @@ const rR18 = validateDMResponse(questObjectivesMixed);
 assert(rR18.success === true, "R18: mixed objectives array succeeds");
 assert(rR18.data?.updates?.quest_add?.objectives[0].text === "Find the amulet", "R18: bare string objective coerced");
 assert(rR18.data?.updates?.quest_add?.objectives[1].done === true, "R18: proper object objective preserved untouched");
+
+// === Total coercion: quest_add sent as an object MISSING required fields —
+// live-play bug (task #22). Observed validation errors were "expected string,
+// received undefined" (missing id/title/description) AND "expected string,
+// received object" (title sent as a nested object). Reproduces the exact
+// reported shapes; see normalizeQuestAddObject's doc comment. ===
+console.log("\n=== Total Coercion: quest_add object missing required fields (task #22) ===\n");
+
+// T1: only {title, objectives:[{description:"..."}]} — id and description
+// missing entirely ("expected string, received undefined"), and the sole
+// objective uses the alternate key `description` instead of `text`.
+console.log("\nT1: quest_add with only {title, objectives:[{description}]} salvaged in full");
+const rT1 = validateDMResponse({
+  narration: "test",
+  updates: {
+    quest_add: {
+      title: "Find the amulet",
+      objectives: [{ description: "Search the old tower" }],
+    },
+  },
+});
+assert(rT1.success === true, "T1: quest_add missing id/description succeeds");
+assert(rT1.data?.updates?.quest_add?.title === "Find the amulet", "T1: title preserved");
+assert(!!rT1.data?.updates?.quest_add?.id, "T1: id derived from title");
+assert(rT1.data?.updates?.quest_add?.description === "Find the amulet", "T1: description defaulted from title");
+assert(rT1.data?.updates?.quest_add?.objectives.length === 1, "T1: one objective kept");
+assert(rT1.data?.updates?.quest_add?.objectives[0].text === "Search the old tower", "T1: objective text derived from alternate key 'description'");
+
+// T2: title sent as a nested object instead of a string ("expected string,
+// received object") — extracted via coerceToTitleString's sub-key lookup.
+console.log("\nT2: quest_add with a non-string (object) title salvaged");
+const rT2 = validateDMResponse({
+  narration: "test",
+  updates: {
+    quest_add: {
+      title: { text: "Warn the village" },
+      objectives: [{ objective: "Reach the village before dusk" }],
+    },
+  },
+});
+assert(rT2.success === true, "T2: quest_add with object-shaped title succeeds");
+assert(rT2.data?.updates?.quest_add?.title === "Warn the village", "T2: title extracted from nested object");
+assert(!!rT2.data?.updates?.quest_add?.id, "T2: id derived from extracted title");
+assert(rT2.data?.updates?.quest_add?.objectives[0].text === "Reach the village before dusk", "T2: objective text derived from alternate key 'objective'");
+
+// T3: quest_add is the SOLE field in `updates` — asserts the WHOLE payload
+// (not just quest_add) survives total coercion, i.e. the object is repaired
+// before the strict DMResponseSchema parse runs, so `updates` is never
+// nulled by the lenient salvage path.
+console.log("\nT3: quest_add as the sole updates field — whole payload survives strict parse");
+const rT3 = validateDMResponse({
+  narration: "test",
+  updates: {
+    quest_add: { name: "Rescue the merchant" }, // no title/id/description/objectives at all
+  },
+});
+assert(rT3.success === true, "T3: whole response passes strict validation (not just salvaged)");
+assert(rT3.data?.updates?.quest_add?.title === "Rescue the merchant", "T3: title sourced from alternate key 'name'");
+assert(!!rT3.data?.updates?.quest_add?.id, "T3: id derived");
+assert(rT3.data?.updates?.quest_add?.description === "Rescue the merchant", "T3: description defaulted from title");
+assert(rT3.data?.updates?.quest_add?.objectives.length === 1, "T3: objective synthesized from title");
+assert(rT3.warnings.length === 0 || !rT3.warnings.some((w) => w.includes("dropped")), "T3: no field was dropped, only derived");
 
 // === requires hardening: tolerate reasonable LLM shape variance instead of
 // hard-dropping the whole field on a partial mismatch ===

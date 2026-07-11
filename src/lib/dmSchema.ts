@@ -556,21 +556,29 @@ function hashSuffix(str: string): string {
 }
 
 /**
+ * Derive a schema-valid quest `id` from a title (slugified). The app is
+ * Thai-first, so titles are commonly non-Latin — the slug regex (Latin/digits
+ * only) collapses those to "", which would make every Thai quest_add collide
+ * on the same id; fall back to a hash of the title so distinct non-Latin
+ * titles still get distinct ids. Shared by `questFromTitle` (bare-string
+ * quest_add) and `normalizeQuestAddObject` (object quest_add missing `id`).
+ */
+function deriveQuestId(title: string): string {
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return (slug || `quest_${hashSuffix(title)}`).slice(0, 60);
+}
+
+/**
  * Build a minimal, schema-valid quest object from a bare title string — the
  * DM sometimes sends `quest_add: "Find the tomb"` or
  * `quest_add: ["Find the tomb", "Warn the village"]` instead of a proper
  * quest object. Derives `id` from the title (slugified), uses the title as
  * the description, and creates a single trivial objective so the required
  * QuestAddSchema fields (id/title/description/objectives) are all satisfied.
- * The app is Thai-first, so titles are commonly non-Latin — the slug regex
- * (Latin/digits only) collapses those to "", which would make every Thai
- * quest_add collide on the same id; fall back to a hash of the title so
- * distinct non-Latin titles still get distinct ids.
  */
 function questFromTitle(title: string): Record<string, unknown> {
-  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return {
-    id: (slug || `quest_${hashSuffix(title)}`).slice(0, 60),
+    id: deriveQuestId(title),
     title: title.slice(0, 120),
     description: title.slice(0, 500),
     objectives: [{ text: title.slice(0, 200) }],
@@ -578,21 +586,124 @@ function questFromTitle(title: string): Record<string, unknown> {
 }
 
 /**
- * Coerce `quest_add.objectives` bare strings into the required {text, done?}
- * shape — the DM commonly emits a plain list of objective strings (or a
- * single bare string) instead of wrapping each one in an object, which
- * otherwise fails per-item as "expected object, received string" (each array
- * element is validated against QuestObjectiveSchema, an object schema).
- * A single bare string is wrapped into a one-element array; an array's
- * string items are converted individually (object items pass through
- * untouched, so a mix of strings and proper objects is tolerated too).
+ * Extract a usable non-empty string from a candidate quest field that may be
+ * missing, the wrong type, or itself an object (the observed "expected
+ * string, received object" shape — e.g. a title sent as `{ text: "..." }`
+ * instead of a bare string). Returns undefined when nothing usable is found;
+ * callers chain several candidates and fall back to a generic default.
  */
-function normalizeQuestObjectives(raw: unknown): unknown {
-  if (typeof raw === "string") return [{ text: raw }];
-  if (Array.isArray(raw)) {
-    return raw.map((item) => (typeof item === "string" ? { text: item } : item));
+function coerceToTitleString(val: unknown): string | undefined {
+  if (typeof val === "string") {
+    return val.trim().length > 0 ? val : undefined;
   }
-  return raw;
+  if (val && typeof val === "object" && !Array.isArray(val)) {
+    const obj = val as Record<string, unknown>;
+    for (const key of ["text", "title", "name", "description"]) {
+      const v = obj[key];
+      if (typeof v === "string" && v.trim().length > 0) return v;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Coerce a single quest_add `objectives` element into the required
+ * `{text, done?}` shape, or return null if nothing usable can be derived
+ * (the element is then skipped, not fabricated):
+ *  - a bare string becomes `{text: <string>}`.
+ *  - an object's `text` is used if present and a non-empty string; otherwise
+ *    common alternate keys (description/objective/name/goal/desc) are tried
+ *    in order — the DM frequently uses one of these instead of `text`.
+ *  - a non-string/empty `text` (and no usable alternate) means the element
+ *    is dropped rather than invented; `done` is carried through only when
+ *    it's already a boolean.
+ */
+function normalizeObjectiveItem(item: unknown): { text: string; done?: boolean } | null {
+  if (typeof item === "string") {
+    const text = item.trim();
+    return text.length > 0 ? { text: item.slice(0, 200) } : null;
+  }
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    const obj = item as Record<string, unknown>;
+    let text: unknown = obj.text;
+    if (typeof text !== "string" || text.trim().length === 0) {
+      text = ["description", "objective", "name", "goal", "desc"]
+        .map((key) => obj[key])
+        .find((v) => typeof v === "string" && (v as string).trim().length > 0);
+    }
+    if (typeof text !== "string" || text.trim().length === 0) return null;
+    const result: { text: string; done?: boolean } = { text: text.slice(0, 200) };
+    if (typeof obj.done === "boolean") result.done = obj.done;
+    return result;
+  }
+  return null;
+}
+
+/**
+ * Coerce `quest_add.objectives` into a non-empty array of valid
+ * `{text, done?}` objects — the DM commonly emits a plain list of objective
+ * strings (or a single bare string), objects keyed by an alternate name
+ * (description/objective/name/goal/desc instead of `text`), or omits
+ * `objectives` entirely. Any element normalizeObjectiveItem can't salvage is
+ * skipped (never fabricated); if every element is skipped — or the field was
+ * missing/empty to begin with — a single objective is derived from
+ * `titleFallback` so QuestAddSchema's `.min(1)` is always satisfiable.
+ */
+function normalizeQuestObjectives(raw: unknown, titleFallback: string): unknown {
+  const arr = raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw];
+  const normalized = arr
+    .map(normalizeObjectiveItem)
+    .filter((v): v is { text: string; done?: boolean } => v !== null);
+
+  if (normalized.length === 0) {
+    normalized.push({ text: titleFallback.slice(0, 200) });
+  }
+  return normalized;
+}
+
+/**
+ * Make quest_add coercion TOTAL for objects: fill in whatever QuestAddSchema
+ * requires (id/title/description/objectives) is missing or the wrong type,
+ * instead of only patching `objectives` shape variance. This is what lets a
+ * quest_add object missing several required fields (the reported live-play
+ * bug — "expected string, received undefined" / "expected string, received
+ * object") survive instead of dropping the whole `updates` payload.
+ *  - `title`: first usable string among `title`, `name`, `quest`,
+ *    `description` (via `coerceToTitleString`, which also handles a title
+ *    sent as an object); if none, defaults to a generic placeholder.
+ *  - `id`: derived from the resolved title (same slug/hash logic as
+ *    `questFromTitle`) when missing or not a non-empty string.
+ *  - `description`: defaults to the resolved title when missing or not a
+ *    non-empty string.
+ *  - `objectives`: normalized via `normalizeQuestObjectives` (alternate keys,
+ *    non-string text skipped, title-derived fallback if empty).
+ * Already-valid fields pass through unchanged, so this is a no-op on the
+ * shapes that already worked (e.g. the object `questFromTitle` builds).
+ */
+function normalizeQuestAddObject(raw: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
+  const out = { ...raw };
+
+  let title = coerceToTitleString(out.title)
+    ?? coerceToTitleString(out.name)
+    ?? coerceToTitleString(out.quest)
+    ?? coerceToTitleString(out.description);
+  if (title === undefined) {
+    warnings.push("updates.quest_add: title missing/invalid with no usable alternate — defaulted to a placeholder title");
+    title = "Unnamed Quest";
+  }
+  out.title = title.slice(0, 120);
+
+  if (typeof out.id !== "string" || out.id.trim().length === 0) {
+    out.id = deriveQuestId(title);
+  }
+
+  if (typeof out.description !== "string" || out.description.trim().length === 0) {
+    out.description = title.slice(0, 500);
+  }
+
+  out.objectives = normalizeQuestObjectives(out.objectives, title);
+
+  return out;
 }
 
 /**
@@ -612,9 +723,11 @@ function normalizeQuestObjectives(raw: unknown): unknown {
  *    quest_update's only required field is `id`; this schema layer has no
  *    access to existing quest state to resolve title → id, so a malformed
  *    string quest_update is left to the normal invalid-field drop/warn path.
- *    quest_add's `objectives` sub-field is separately normalized (bare
- *    string / array of bare strings → {text} objects) via
- *    `normalizeQuestObjectives` — see its doc comment.
+ *    Once quest_add is a plain object (whether it started that way or was
+ *    just unwrapped/coerced above), `normalizeQuestAddObject` is applied to
+ *    make the coercion TOTAL: any of id/title/description/objectives that
+ *    are missing or the wrong type get derived instead of only patching
+ *    `objectives` shape variance — see its doc comment.
  * Returns a new object; does not mutate `rawUpdates`.
  */
 function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
@@ -657,13 +770,13 @@ function normalizeUpdatesShape(rawUpdates: Record<string, unknown>, warnings: st
     // else: already a plain object (or an un-coercible string) — leave untouched
 
     // quest_add objects — whether passed through untouched above or just
-    // unwrapped from an array — may still carry a malformed `objectives`
-    // (bare string, or an array of bare strings); normalize before validation.
+    // unwrapped from an array/string — may still be missing or have the
+    // wrong type for id/title/description/objectives; fill total coercion
+    // before validation (see normalizeQuestAddObject's doc comment).
     if (field === "quest_add") {
       const q = out[field];
-      if (q && typeof q === "object" && !Array.isArray(q) && "objectives" in (q as Record<string, unknown>)) {
-        const qObj = q as Record<string, unknown>;
-        out[field] = { ...qObj, objectives: normalizeQuestObjectives(qObj.objectives) };
+      if (q && typeof q === "object" && !Array.isArray(q)) {
+        out[field] = normalizeQuestAddObject(q as Record<string, unknown>, warnings);
       }
     }
   }
