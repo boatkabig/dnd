@@ -35,10 +35,11 @@ describe("resolveDeathSave", () => {
     expect(entries.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("stabilizes on the 3rd success", () => {
+  it("stabilizes on the 3rd success and stays at 0 HP (D&D 2024: Stable != revived)", () => {
     setDie(15);
     const out = resolveDeathSave(downed({ s: 2, f: 0 }), [], true, deps());
     expect(out.state).toBe("stable");
+    expect(out.cc.hp).toBe(0);
   });
 
   it("dies on the 3rd failure and calls onDeath", () => {

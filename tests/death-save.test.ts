@@ -27,10 +27,10 @@ describe("applyDeathSaveRoll — in-combat outcomes unchanged", () => {
     expect(result.deathSaves).toEqual({ successes: 0, failures: 0 });
   });
 
-  it("3rd success stabilizes and snaps hp to 1", () => {
+  it("3rd success stabilizes and stays at 0 HP (D&D 2024: Stable != revived)", () => {
     const result = applyDeathSaveRoll({ successes: 2, failures: 0, hp: 0 }, 15);
     expect(result.state).toBe("stable");
-    expect(result.hp).toBe(1);
+    expect(result.hp).toBe(0);
     expect(result.dead).toBe(false);
     expect(result.deathSaves).toEqual({ successes: 0, failures: 0 });
   });

@@ -657,9 +657,10 @@ export interface DeathSaveTransition {
 
 /**
  * Pure state transition for a downed character taking a death save — same rules as
- * rollDeathSave() plus the HP/dead bookkeeping around it (nat-20 revive to 1 HP,
- * stabilize-at-0-HP snaps to 1 HP, 3 failures marks dead). Does not touch HP on a
- * plain unconscious result — callers must NOT clamp HP themselves.
+ * rollDeathSave() plus the HP/dead bookkeeping around it (nat-20 revive to 1 HP;
+ * 3rd success stabilizes but HP RAW-correctly stays at 0 — D&D 2024: Stable means
+ * unconscious-but-no-longer-dying, not "back on your feet"; 3 failures marks dead).
+ * Does not touch HP on a plain unconscious result — callers must NOT clamp HP themselves.
  * Used by both the in-combat and out-of-combat callers so hp<=0 always routes through
  * the same dying/death logic instead of being silently clamped back to 1 HP.
  */
@@ -681,7 +682,6 @@ export function applyDeathSaveRoll(
     };
   }
   if (rollResult.state === "stable" || hp > 0) {
-    if (hp <= 0) hp = 1;
     return {
       deathSaves: { successes: 0, failures: 0 },
       hp,
