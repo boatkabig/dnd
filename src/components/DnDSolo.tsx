@@ -109,7 +109,7 @@ import CharacterSheet from "@/components/game/CharacterSheet";
 import DungeonView from "@/components/game/DungeonView";
 import DMChat from "@/components/game/DMChat";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
-import { resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
+import { resolveBridgeAttack, toDamageType } from "@/lib/bridgeAttack";
 import { buildBridgeState, planMultiattackSequence, getCombatView, moveBy, setMovement } from "@/lib/engine/combatBridge";
 import { resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName, toSpellDisplayName } from "@/lib/engine/effects";
