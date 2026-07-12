@@ -10,10 +10,10 @@
  * character, returns the new one, and emits player-facing lines through the
  * pushEntry callback (was entries.push(entrySystem(...)) inline — no behavior change).
  */
-import { XP_THRESHOLDS, CLASSES, mod, profByLevel } from "./gameData";
+import { XP_THRESHOLDS, CLASSES, ABIL_TH, mod, profByLevel } from "./gameData";
 import { computeAC, getSlotTable } from "./spells";
 import { getExtendedFeatures } from "./featuresExtended";
-import { needsSubclassChoice, getSubclassById } from "./engine/progression";
+import { needsSubclassChoice, getSubclassById, applyFeatGrants } from "./engine/progression";
 
 export function gainXP(cc: any, amount: number, pushEntry: (t: string) => void) {
   let nc = { ...cc, xp: cc.xp + amount };
@@ -71,5 +71,40 @@ export function gainXP(cc: any, amount: number, pushEntry: (t: string) => void) 
     }
   }
   return nc;
+}
+
+/**
+ * Apply ASI-granting feats (Keen Mind / Actor / Resilient …) to a character.
+ * IDEMPOTENT: the featGrantsApplied ledger means a re-applied update never doubles
+ * the +1 ability (or the Resilient save proficiency). Recomputes CON-derived max HP
+ * and AC at the same seam. Extracted from DnDSolo.tsx; logs via pushEntry so it no
+ * longer depends on the component. Moved verbatim — no behavior change.
+ */
+export function applyFeatGrantsToChar(nc: any, pushEntry?: (t: string) => void): any {
+  const res = applyFeatGrants({
+    feats: nc.feats || [],
+    abilities: nc.abilities,
+    featGrantsApplied: nc.featGrantsApplied || [],
+    saveProficiencies: nc.saveProficiencies || [],
+  });
+  if (res.applied.length === 0) return nc; // nothing new → no-op (idempotent)
+  const oldConMod = mod(nc.abilities.con);
+  const out: any = {
+    ...nc,
+    abilities: res.abilities,
+    featGrantsApplied: res.featGrantsApplied,
+    saveProficiencies: res.saveProficiencies,
+  };
+  for (const g of res.applied) {
+    pushEntry?.(`💪 Feat: +1 ${ABIL_TH[g.ability] || g.ability.toUpperCase()}${g.saveProficiency ? ` + ความชำนาญ Saving Throw (${ABIL_TH[g.saveProficiency] || g.saveProficiency.toUpperCase()})` : ""}`);
+  }
+  const newConMod = mod(out.abilities.con);
+  if (newConMod > oldConMod) {
+    const diff = (newConMod - oldConMod) * (out.level || 1);
+    out.maxHp += diff; out.hp += diff;
+    pushEntry?.(`❤️ CON เพิ่มขึ้น → Max HP +${diff}`);
+  }
+  out.ac = computeAC(out);
+  return out;
 }
 

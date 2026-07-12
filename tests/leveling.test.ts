@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { gainXP } from "../src/lib/leveling";
+import { gainXP, applyFeatGrantsToChar } from "../src/lib/leveling";
 
 /**
  * XP + leveling engine. Fighter: hitDie 10, non-caster, CON 14 (+2) →
@@ -53,5 +53,51 @@ describe("gainXP", () => {
     const before = JSON.parse(JSON.stringify(cc));
     gainXP(cc, 900, () => {});
     expect(cc).toEqual(before);
+  });
+});
+
+/**
+ * applyFeatGrantsToChar — folds ASI-granting feats onto a character idempotently.
+ * Actor → +1 CHA; Resilient (Constitution) → +1 CON + CON save proficiency (and,
+ * when the CON modifier ticks up, retro max-HP). The featGrantsApplied ledger
+ * guards against double-applying.
+ */
+function charForFeats(overrides: Record<string, unknown> = {}) {
+  return {
+    cls: "fighter", level: 3, maxHp: 28, hp: 28,
+    abilities: { str: 15, dex: 14, con: 13, int: 8, wis: 12, cha: 10 },
+    feats: [] as string[], featGrantsApplied: [] as string[], saveProficiencies: [] as string[],
+    worn: [], ...overrides,
+  };
+}
+
+describe("applyFeatGrantsToChar", () => {
+  it("is a no-op (same reference) when there are no grant feats", () => {
+    const c = charForFeats();
+    expect(applyFeatGrantsToChar(c)).toBe(c);
+  });
+
+  it("applies Actor → +1 CHA and records the ledger + logs it", () => {
+    const logs: string[] = [];
+    const out = applyFeatGrantsToChar(charForFeats({ feats: ["Actor"] }), (t) => logs.push(t));
+    expect(out.abilities.cha).toBe(11);
+    expect(out.featGrantsApplied).toContain("Actor");
+    expect(logs.some((l) => l.includes("CHA") || l.includes("จ"))).toBe(true);
+  });
+
+  it("applies Resilient (Constitution) → +1 CON, save proficiency, and retro max HP when the CON mod ticks up", () => {
+    // CON 13 (+1) → 14 (+2): modifier rises by 1 → +1 HP per level (level 3 = +3).
+    const out = applyFeatGrantsToChar(charForFeats({ feats: ["Resilient (Constitution)"] }));
+    expect(out.abilities.con).toBe(14);
+    expect(out.saveProficiencies).toContain("con");
+    expect(out.maxHp).toBe(31); // 28 + 3
+    expect(out.hp).toBe(31);
+  });
+
+  it("is idempotent — a second application does nothing", () => {
+    const once = applyFeatGrantsToChar(charForFeats({ feats: ["Actor"] }));
+    const twice = applyFeatGrantsToChar(once);
+    expect(twice).toBe(once);         // no new grants → same reference
+    expect(twice.abilities.cha).toBe(11);
   });
 });

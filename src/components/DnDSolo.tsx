@@ -73,7 +73,7 @@ import {
 import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
 import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
 import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
-import { gainXP } from "@/lib/leveling";
+import { gainXP, applyFeatGrantsToChar } from "@/lib/leveling";
 import SessionZeroModal from "@/components/game/SessionZeroModal";
 import OracleModal from "@/components/game/OracleModal";
 import QuestJournalModal from "@/components/game/QuestJournalModal";
@@ -499,40 +499,6 @@ export default function DnDSolo() {
    * are stripped out and layered around the reducer below. All React setters are
    * deferred to the very end, after every computation has succeeded.
    */
-  /**
-   * Task #14: apply ASI-granting feats idempotently at the feat-grant seam.
-   * The engine (progression.applyFeatGrants) owns the rule + the idempotency
-   * ledger; this wrapper just folds the result onto the character, logs the new
-   * grants, and recomputes derived stats (max HP on CON, AC on DEX/armor).
-   */
-  function applyFeatGrantsToChar(nc: any, entries: any[]): any {
-    const res = applyFeatGrants({
-      feats: nc.feats || [],
-      abilities: nc.abilities,
-      featGrantsApplied: nc.featGrantsApplied || [],
-      saveProficiencies: nc.saveProficiencies || [],
-    });
-    if (res.applied.length === 0) return nc; // nothing new → no-op (idempotent)
-    const oldConMod = mod(nc.abilities.con);
-    const out: any = {
-      ...nc,
-      abilities: res.abilities,
-      featGrantsApplied: res.featGrantsApplied,
-      saveProficiencies: res.saveProficiencies,
-    };
-    for (const g of res.applied) {
-      entries.push(entrySystem(`💪 Feat: +1 ${ABIL_TH[g.ability] || g.ability.toUpperCase()}${g.saveProficiency ? ` + ความชำนาญ Saving Throw (${ABIL_TH[g.saveProficiency] || g.saveProficiency.toUpperCase()})` : ""}`));
-    }
-    const newConMod = mod(out.abilities.con);
-    if (newConMod > oldConMod) {
-      const diff = (newConMod - oldConMod) * (out.level || 1);
-      out.maxHp += diff; out.hp += diff;
-      entries.push(entrySystem(`❤️ CON เพิ่มขึ้น → Max HP +${diff}`));
-    }
-    out.ac = computeAC(out);
-    return out;
-  }
-
   function applyUpdates(u: any, cc: any, entries: any[]) {
     if (!u) return cc;
 
@@ -579,7 +545,7 @@ export default function DnDSolo() {
     // (and save proficiency for Resilient) IDEMPOTENTLY — the featGrantsApplied
     // ledger means a re-applied update never doubles the bonus. Derived stats
     // (max HP on CON, AC on DEX/armor) are recomputed at this same seam.
-    nc = applyFeatGrantsToChar(nc, entries);
+    nc = applyFeatGrantsToChar(nc, (t) => entries.push(entrySystem(t)));
 
     const newQuests = after.quests;
     let newGameTime = gameTime;
