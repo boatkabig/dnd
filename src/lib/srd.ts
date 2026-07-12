@@ -78,6 +78,20 @@ const BUFF_SPELL_INDICES = new Set([
   "shield-of-faith",
 ]);
 
+// Open5e's normalized spell payload exposes the save but not the applied
+// condition/effect. Keep the missing combat metadata in one conversion map so
+// save spells reach castSRDSpell's existing failed-save condition branch.
+const DEBUFF_CONDITIONS: Record<string, string[]> = {
+  "faerie-fire": ["glowing"],
+  "bane": ["bane"],
+  "slow": ["slow"],
+};
+
+function conditionsForSpell(index: string): string[] | undefined {
+  const conditions = DEBUFF_CONDITIONS[index];
+  return conditions ? [...conditions] : undefined;
+}
+
 function deriveSpellKind({
   index,
   attackRoll,
@@ -186,6 +200,7 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         damageType: cached.damageType,
         saveAbility: (cached as any).saveAbility,
         saveSuccess: (cached as any).saveSuccess,
+        conditionsAdd: conditionsForSpell(cached.index),
         aoeType: cached.aoeType,
         aoeSize: cached.aoeSize,
         bonusAction: cached.bonusAction,
@@ -256,6 +271,7 @@ export async function fetchSpell(index: string, slotLevel?: number, charLevel = 
         saveSuccess: open5eSpell.saveAbility
           ? (open5eSpell.damage ? "half" : "none")
           : undefined,
+        conditionsAdd: conditionsForSpell(open5eSpell.index),
         aoeType: open5eSpell.aoeType,
         aoeSize: open5eSpell.aoeSize,
         bonusAction: open5eSpell.bonusAction,

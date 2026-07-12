@@ -1,4 +1,5 @@
 "use client";
+import { computeAC } from "./spells";
 
 /**
  * Buff lifecycle helpers — extracted from DnDSolo.tsx (de-monolith refactor).
@@ -22,6 +23,9 @@ export function tickBuffs(cc: any, pushEntry?: (t: string) => void): any {
     return true; // keep duration === 0 (instant, already applied) and duration === -1 (until long rest)
   });
   expired.forEach((name) => pushEntry?.(`⏳ Buff หมดอายุ: ${name}`));
+  if (expired.some((name) => ["Shield", "Haste", "Shield Of Faith", "Shield of Faith"].includes(name)) && nc.cls && nc.abilities) {
+    nc.ac = computeAC(nc);
+  }
   return nc;
 }
 

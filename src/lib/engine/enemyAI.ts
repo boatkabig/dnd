@@ -272,6 +272,8 @@ export function runEnemyTurn(
 
         // === D&D 2024: Exhaustion penalty applies to enemy attack rolls too ===
         let enemyAtkMod = atkData.atk;
+        const banePenalty = e.conditions?.includes("bane") ? rollFormula("1d4").total : 0;
+        enemyAtkMod -= banePenalty;
         const enemyExhaustPenalty = exhaustionPenalty(e);
         if (enemyExhaustPenalty > 0) enemyAtkMod -= enemyExhaustPenalty;
 
@@ -286,7 +288,7 @@ export function runEnemyTurn(
         // D&D 5e RAW: nat 20 = critical hit, nat 1 = automatic miss
         const isEnemyCrit = atk.die === 20;
         const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= nc.ac);
-        let extra = "";
+        let extra = banePenalty ? `Bane -${banePenalty}` : "";
         if (hit) {
           let dmgR = rollFormula(atkData.dmg);
           let dmg = dmgR.total;

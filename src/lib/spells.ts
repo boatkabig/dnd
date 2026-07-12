@@ -48,11 +48,13 @@ export function computeAC(c: any): number {
   (c.worn || []).forEach((n: string) => { const m = MAGIC_ITEMS[n]; if (m && m.acPlus) ac += m.acPlus; });
   // Shield equipped (+2 AC)
   if ((c.worn || []).includes("Shield")) ac += 2;
-  // Reaction shield spell (+5 AC until next turn)
-  if ((c as any).shieldAC) ac += (c as any).shieldAC;
-  // Buff AC modifiers (Haste +2, Shield of Faith +2, Slow -2)
+  // Buff AC modifiers (Shield +5, Haste +2, Shield of Faith +2, Slow -2).
+  // Shield is represented by its timed character buff, so the bonus naturally
+  // expires with tickBuffs instead of being split between character/combat state.
+  // Its +5 bonus therefore exists in only this character-side computation.
   const buffs = c.buffs || [];
   for (const b of buffs) {
+    if (b.name === "Shield") ac += 5;
     if (b.name === "Haste") ac += 2;
     if (b.name === "Shield Of Faith" || b.name === "Shield of Faith") ac += 2;
     if (b.name === "Slow") ac -= 2;
