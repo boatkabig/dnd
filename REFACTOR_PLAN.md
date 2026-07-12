@@ -1,11 +1,38 @@
 # DnDSolo.tsx De-Monolith — Refactor Plan
 
-> Status snapshot: `src/components/DnDSolo.tsx` is **3,974 lines** (down from 5,462, **−27.2%**).
-> Branch: `refactor/split-dndsolo`. Every commit so far is verified with
-> `tsc --noEmit` + `vitest run` + `next build` + `eslint`, and each moves code **verbatim**.
+> Status snapshot: `src/components/DnDSolo.tsx` is **2,826 lines** (down from 5,462, **−48.3%**).
+> Branch: `refactor/split-dndsolo`. Every commit is verified with
+> `tsc --noEmit` + `vitest run` + `next build` + `eslint` + **Playwright e2e**, and each moves code **verbatim**.
 
-This plan covers the remaining work, ordered by risk, with a verification strategy
-for the parts that unit tests cannot reach.
+## Progress against this plan
+
+- **Phase 0 — Safety net: DONE.** The existing Playwright suite (combat attack, target
+  selection, surprise-turn, Magic Missile damage/slot/target, Mage Armor buff, shop) was
+  wired to run in-sandbox via `PW_CHROME`. 12 e2e are the regression oracle; run on every
+  combat/spell commit.
+- **Phase 1 — Pure combat resolvers: DONE.** `applyFeatGrantsToChar`→leveling.ts;
+  `runSidekickAssist`/`resolveDeathSave`/`checkCombatEnd`/`runEnemyPhase`/`applyPendingChanges`
+  →combatResolve.ts (CombatDeps injection). Unit-tested.
+- **Phase 2 — Render panels: PARTIAL.** `CombatOverlay` extracted (~225 lines). The
+  remaining panels (MenuScreen/PlayHeader/MoreMenu) were judged low-value / high app-level
+  prop coupling and deliberately left in place.
+- **Phase 3 — Weapon-attack resolver: DONE (the big one).** `resolveBridgeAttack`/`toDamageType`
+  moved out of the CombatView component into `lib/bridgeAttack.ts`, unblocking the extraction
+  of the ~360-line `doWeaponAttack` closure into `lib/weaponAttack.ts` (ctx injection). The
+  remaining `playerCombatAction` (~660 lines of 26 mid-committing, partly-async kind branches)
+  is left as an in-component dispatcher — a full pure-reducer conversion is high-risk for low
+  marginal gain and is the one item deferred.
+- **Phase 4 — Spell resolver: DONE.** `castSRDSpell`→`lib/castSpell.ts` (CombatDeps + targetId).
+- **Phase 5 — useState grouping: not started (optional).**
+
+New lib modules: dmPrompt, dmClient, characterStats, mapState, combatMath, buffs, leveling,
+dmContext, combatResolve, castSpell, bridgeAttack, weaponAttack. New UI components: 12 modals
++ CombatOverlay. ~300 unit tests total.
+
+---
+
+The original plan (below) covers the remaining work, ordered by risk, with a verification
+strategy for the parts that unit tests cannot reach.
 
 ---
 
