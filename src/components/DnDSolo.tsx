@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
-  ABILS, ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
+  ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
   DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
   BACKGROUNDS, RACES, CLASSES, FEATURES, WEAPONS, weaponByName, ARMOR,
   MAGIC_ITEMS, CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
@@ -77,12 +77,16 @@ import { gainXP } from "@/lib/leveling";
 import SessionZeroModal from "@/components/game/SessionZeroModal";
 import OracleModal from "@/components/game/OracleModal";
 import QuestJournalModal from "@/components/game/QuestJournalModal";
+import AsiModal from "@/components/game/AsiModal";
+import SubclassModal from "@/components/game/SubclassModal";
+import ReprepareModal from "@/components/game/ReprepareModal";
+import CompanionModal from "@/components/game/CompanionModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
 import {
   hasClassFeature, featAttackBonus, featDamageBonus,
-  getAvailableSubclasses, needsSubclassChoice, getSubclassById,
+  needsSubclassChoice, getSubclassById,
   powerAttackModifiers, hasPowerAttackFeat, applyFeatGrants,
 } from "@/lib/engine/progression";
 import { getSpellcastingRule, canReprepareOnLongRest, reprepareSpells } from "@/lib/magic";
@@ -3578,129 +3582,13 @@ export default function DnDSolo() {
       {/* LOG */}
       <AdventureLog log={log} thinking={thinking} logRef={logRef} onScroll={handleLogScroll} />
 
-      {/* ASI MODAL */}
-      {c?.pendingAsi > 0 && (
-        <div className="sheet-overlay">
-          <div className="sheet-modal" style={{ maxWidth: 440 }}>
-            <div style={{ padding: "14px 16px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>💪 Ability Score Improvement</span>
-              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>Pick +1 twice (same score twice = +2) · max 20</div>
-              {ABILS.map((a) => {
-                const picks = asiPicks.filter((p) => p === a).length;
-                const atMax = c.abilities[a] + picks >= 20;
-                return (
-                  <div key={a} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 4px", borderBottom: "1px dashed #2E2748", fontSize: 14 }}>
-                    <span><b style={{ color: "#E0A83E" }}>{ABIL_TH[a]}</b> {c.abilities[a]}{picks > 0 ? ` → ${c.abilities[a] + picks}` : ""}</span>
-                    <button className="btn" style={{ padding: "3px 14px" }} disabled={asiPicks.length >= 2 || atMax} onClick={() => setAsiPicks([...asiPicks, a])}>+1</button>
-                  </div>
-                );
-              })}
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <button className="btn" disabled={asiPicks.length === 0} onClick={() => setAsiPicks([])}>Clear</button>
-                <button className="btn btn-gold" style={{ flex: 1 }} disabled={asiPicks.length !== 2} onClick={applyAsi}>Confirm ({asiPicks.length}/2)</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ASI + SUBCLASS level-up modals */}
+      <AsiModal open={(c?.pendingAsi ?? 0) > 0} abilities={c?.abilities ?? {}} picks={asiPicks} setPicks={setAsiPicks} onConfirm={applyAsi} />
+      <SubclassModal open={!!(c && !combat && !c.pendingAsi && needsSubclassChoice(c.cls, c.level, c.subclass))} cls={c?.cls ?? ""} level={c?.level ?? 1} onChoose={chooseSubclass} />
 
-      {/* SUBCLASS MODAL — appears once the class reaches its subclass level (not in combat) */}
-      {c && !combat && !c.pendingAsi && needsSubclassChoice(c.cls, c.level, c.subclass) && (
-        <div className="sheet-overlay">
-          <div className="sheet-modal" style={{ maxWidth: 480 }}>
-            <div style={{ padding: "14px 16px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🎓 เลือก Subclass</span>
-              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>สาย{CLASSES[c.cls].th} — เลือก 1 (กำหนดความสามารถพิเศษ)</div>
-              {getAvailableSubclasses(c.cls, c.level).map((sub) => (
-                <div key={sub.id} style={{ padding: "8px 4px", borderBottom: "1px dashed #2E2748" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <b style={{ color: "#E0A83E", fontSize: 14 }}>{sub.th}</b>
-                    <button className="btn btn-gold" style={{ padding: "3px 14px" }} onClick={() => chooseSubclass(sub.id)}>เลือก</button>
-                  </div>
-                  <div style={{ fontSize: 12, color: "#9C92B8", marginTop: 3 }}>{sub.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Task #14: RE-PREPARE modal (prepared casters, at/after long rest) */}
-      {reprepareOpen && c && (() => {
-        const castAbil = CLASSES[c.cls]?.castAbil;
-        const abilMod = castAbil ? mod(c.abilities[castAbil]) : 0;
-        const maxHeld = getSpellcastingRule(c.cls, c.level, abilMod).maxHeld;
-        const book: string[] = c.spellbook || c.knownSpells || [];
-        // Only LEVELED spells are managed here (cantrips are always prepared).
-        const leveledBook = book.filter((idx) => {
-          const info = availableSpells.find((s) => s.index === idx);
-          return info ? info.level > 0 : true;
-        });
-        const pretty = (idx: string) => idx.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-        const toggle = (idx: string) => setReprepareSel((sel) =>
-          sel.includes(idx) ? sel.filter((x) => x !== idx) : (sel.length < maxHeld ? [...sel, idx] : sel));
-        return (
-          <div className="sheet-overlay" onClick={() => setReprepareOpen(false)}>
-            <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-                <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🔄 เตรียมเวทใหม่ ({reprepareSel.length}/{maxHeld})</span>
-                <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setReprepareOpen(false)}>✕</button>
-              </div>
-              <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกเวทที่จะเตรียม (สูงสุด {maxHeld} เวท) — cantrip เตรียมอัตโนมัติเสมอ</div>
-                {leveledBook.length === 0 && <div style={{ fontSize: 12, color: "#8A7F9E" }}>ยังไม่มีเวทในสมุด — เรียนเวทก่อน (📜 → เวทมนตร์)</div>}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4, maxHeight: 320, overflowY: "auto" }}>
-                  {leveledBook.map((idx) => {
-                    const on = reprepareSel.includes(idx);
-                    const full = !on && reprepareSel.length >= maxHeld;
-                    return (
-                      <button key={idx} className={"btn" + (on ? " btn-gold" : "")} style={{ textAlign: "left", padding: "6px 10px", opacity: full ? 0.5 : 1 }}
-                        disabled={full} onClick={() => toggle(idx)}>
-                        {on ? "✅" : "⬜"} {pretty(idx)}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button className="btn btn-gold" style={{ padding: "8px" }} onClick={() => commitReprepare(reprepareSel)}>ยืนยันการเตรียมเวท</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Task #14: COMPANION recruit modal (out of combat) */}
-      {recruitOpen && c && !combat && (
-        <div className="sheet-overlay" onClick={() => setRecruitOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🐕 สหายร่วมทาง</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setRecruitOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {c.sidekick ? (
-                <>
-                  <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                    สหายปัจจุบัน: <b>{SIDEKICK_BASES[c.sidekick.baseKey]?.name}</b> — {c.sidekick.klass} (Lv.{c.sidekick.level})
-                  </div>
-                  <button className="btn btn-red" onClick={() => recruitSidekick(null)}>ปลดสหาย</button>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกสหาย 1 คนที่จะช่วยโจมตีในสนามรบอัตโนมัติ</div>
-                  {([
-                    { key: "guard", klass: "warrior" as SidekickClass, label: "⚔️ องครักษ์ (Warrior) — โจมตีประชิด อึด" },
-                    { key: "scout", klass: "expert" as SidekickClass, label: "🏹 หน่วยสอดแนม (Expert) — ยิงระยะไกล" },
-                    { key: "acolyte", klass: "spellcaster" as SidekickClass, label: "✨ นักบวช (Spellcaster) — เวทสนับสนุน" },
-                  ]).map((o) => (
-                    <button key={o.key} className="btn" style={{ textAlign: "left", padding: "10px 12px" }}
-                      onClick={() => recruitSidekick({ baseKey: o.key, klass: o.klass })}>{o.label}</button>
-                  ))}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* RE-PREPARE + COMPANION modals */}
+      <ReprepareModal open={reprepareOpen} c={c} availableSpells={availableSpells} sel={reprepareSel} setSel={setReprepareSel} onCommit={commitReprepare} onClose={() => setReprepareOpen(false)} />
+      <CompanionModal open={recruitOpen && !!c && !combat} sidekick={c?.sidekick} onClose={() => setRecruitOpen(false)} onRecruit={recruitSidekick} />
 
       {/* MORE MENU — secondary actions (Shop, AI DM, Content) */}
       {moreMenuOpen && !combat && (
