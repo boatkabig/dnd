@@ -75,6 +75,8 @@ import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/comb
 import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
 import { gainXP } from "@/lib/leveling";
 import SessionZeroModal from "@/components/game/SessionZeroModal";
+import OracleModal from "@/components/game/OracleModal";
+import QuestJournalModal from "@/components/game/QuestJournalModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -106,7 +108,7 @@ import { runEnemyTurn, type EnemyAIDeps } from "@/lib/engine/enemyAI";
 import { canCast2024, type SpellLegalityReason } from "@/lib/engine/magic";
 import { coverBetween, attackVisibilityModifier, type Obstacle } from "@/lib/engine/vision";
 import {
-  askOracle, rollRandomEvent, LIKELIHOOD_ORDER,
+  askOracle, rollRandomEvent,
   type Likelihood, type OracleResult, type RandomEvent,
 } from "@/lib/engine/oracle";
 import {
@@ -3767,88 +3769,11 @@ export default function DnDSolo() {
       {/* SESSION ZERO MODAL — Task #16 campaign charter (deterministic engine: src/lib/engine/sessionZero.ts) */}
       {<SessionZeroModal open={sessionZeroOpen} config={sessionZeroConfig} onClose={() => setSessionZeroOpen(false)} editSz={editSz} lineInput={szLineInput} setLineInput={setSzLineInput} veilInput={szVeilInput} setVeilInput={setSzVeilInput} />}
 
-      {/* ORACLE MODAL — Phase 5 solo GM emulator (deterministic engine: src/lib/engine/oracle.ts) */}
-      {oracleOpen && (
-        <div className="sheet-overlay" onClick={() => setOracleOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🔮 ออราเคิล</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setOracleOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ fontSize: 12, color: "#8A7F9E" }}>ถามคำถามใช่/ไม่ใช่ แล้วให้โชคชะตาตอบ — สำหรับเล่นคนเดียวโดยไม่ต้องรอ DM</div>
-              <input className="input-main" placeholder="เช่น มีใครซ่อนอยู่ในห้องนี้ไหม?" value={oracleQuestion}
-                onChange={(e) => setOracleQuestion(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") askOracleAction(); }}
-                style={{ fontSize: 13, padding: "8px 12px" }} />
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {LIKELIHOOD_ORDER.map((lk) => (
-                  <button key={lk} className={"btn" + (oracleLikelihood === lk ? " btn-gold" : "")}
-                    style={{ flex: "1 0 30%", fontSize: 11, padding: "6px" }}
-                    onClick={() => setOracleLikelihood(lk)}>
-                    {lk === "certain" ? "แน่นอนมาก" : lk === "likely" ? "น่าจะใช่" : lk === "50-50" ? "50-50" : lk === "unlikely" ? "ไม่น่าใช่" : "แทบเป็นไปไม่ได้"}
-                  </button>
-                ))}
-              </div>
-              <button className="btn btn-gold" style={{ padding: "10px", fontSize: 14 }} onClick={askOracleAction}>
-                🎲 ถามออราเคิล
-              </button>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "40vh", overflowY: "auto" }}>
-                {oracleLog.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "#6B6284", textAlign: "center", padding: 16 }}>ยังไม่มีคำถาม</div>
-                ) : oracleLog.map((entry, i) => (
-                  <div key={i} className="item-row" style={{ borderLeft: `3px solid ${entry.res.affirmative ? "#7FA85C" : "#C74B44"}`, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 12, color: "#C9BFE0" }}>{entry.q}</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: entry.res.affirmative ? "#7FA85C" : "#C74B44" }}>
-                      {entry.res.label} <span style={{ fontSize: 11, color: "#6B6284", fontWeight: 400 }}>(d100={entry.res.roll})</span>
-                    </div>
-                    {entry.event && (
-                      <div style={{ fontSize: 12, color: "#E0A83E", marginTop: 4 }}>
-                        ⚡ เหตุการณ์สุ่ม: {entry.event.focusLabel} — <span style={{ color: "#C9BFE0" }}>{entry.event.meaning.prompt}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ORACLE MODAL — Phase 5 solo GM emulator (src/lib/engine/oracle.ts) */}
+      <OracleModal open={oracleOpen} onClose={() => setOracleOpen(false)} question={oracleQuestion} setQuestion={setOracleQuestion} likelihood={oracleLikelihood} setLikelihood={setOracleLikelihood} log={oracleLog} onAsk={askOracleAction} />
 
       {/* QUEST JOURNAL MODAL */}
-      {questJournalOpen && (
-        <div className="sheet-overlay" onClick={() => setQuestJournalOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>📜 บันทึกเควสต์</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setQuestJournalOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body">
-              {quests.length === 0 ? (
-                <div style={{ fontSize: 13, color: "#8A7F9E", textAlign: "center", padding: 30 }}>ยังไม่มีเควสต์ — DM จะมอบเควสต์เมื่อคุณพบ NPC ที่เกี่ยวข้อง</div>
-              ) : (
-                quests.map((q) => (
-                  <div key={q.id} className="item-row" style={{ marginBottom: 8, borderLeft: q.status === "active" ? "3px solid #E0A83E" : q.status === "completed" ? "3px solid #7FA85C" : "3px solid #C74B44" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: q.status === "active" ? "#E0A83E" : q.status === "completed" ? "#7FA85C" : "#C74B44" }}>
-                      {q.status === "active" ? "▶" : q.status === "completed" ? "✅" : "❌"} {q.title}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#9C92B8", marginTop: 4 }}>{q.description}</div>
-                    {q.objectives && q.objectives.length > 0 && (
-                      <div style={{ fontSize: 11, color: "#C9BFE0", marginTop: 4 }}>
-                        {q.objectives.map((o, i) => (
-                          <div key={i}>{o.done ? "✓" : "○"} {o.text}</div>
-                        ))}
-                      </div>
-                    )}
-                    {q.reward && <div style={{ fontSize: 11, color: "#B9A96A", marginTop: 4 }}>🎁 รางวัล: {q.reward}</div>}
-                    {q.giver && <div style={{ fontSize: 10, color: "#6B6284", marginTop: 2 }}>ผู้มอบ: {q.giver}</div>}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <QuestJournalModal open={questJournalOpen} onClose={() => setQuestJournalOpen(false)} quests={quests} />
 
       {/* SHOP MODAL — D&D 5e economy: buy/sell weapons, armor, magic items, consumables */}
       {shopOpen && c && !combat && (
