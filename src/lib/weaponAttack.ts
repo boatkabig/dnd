@@ -92,16 +92,16 @@ export function resolveWeaponAttack(
       const targetCoverAC = coverRes.bonus;
       const targetCoverLabel = coverRes.label;
       // Apply cover bonus to target's effective AC for this attack
-      const effectiveTargetAC = target.ac + targetCoverAC;
+      const effectiveTargetAC = target.ac - (target.conditions?.includes("slow") ? 2 : 0) + targetCoverAC;
       // === D&D 2024 unseen-attacker / unseen-target (engine/vision) ===
-      // targetSeesAttacker=false when the player is hidden/surprising/invisible
+      // targetSeesAttacker=false when the player is hidden/invisible
       // → attacker advantage; attackerSeesTarget=false when the target is
       // Invisible (and player has no special sense) → attacker disadvantage.
       const attackerSeesTarget = !(target.conditions && target.conditions.includes("invisible"));
-      const targetSeesAttacker = !(cc.hiddenAdv || cb.surprise || cb.invisible);
+      const targetSeesAttacker = !(cc.hiddenAdv || cb.invisible);
       const visMod = attackVisibilityModifier(attackerSeesTarget, targetSeesAttacker);
       // Advantages: unseen attacker, target glowing (Faerie Fire), target has advantage-conditions, Help action, Vex mastery
-      let adv: "none" | "advantage" | "disadvantage" = (visMod === "advantage" || target.glow || target.helpBuff || cc.vexTarget === target.uid || attackerHasAdvVs(target)) ? "advantage" : "none";
+      let adv: "none" | "advantage" | "disadvantage" = (visMod === "advantage" || target.glow || target.conditions?.includes("glowing") || target.helpBuff || cc.vexTarget === target.uid || attackerHasAdvVs(target)) ? "advantage" : "none";
       // Consume helpBuff + vexTarget on attack (D&D 5e: advantage lasts until first attack)
       if (target.helpBuff) {
         target.helpBuff = false;
@@ -146,7 +146,7 @@ export function resolveWeaponAttack(
         // Pass the target's BASE ac + cover separately so the engine forms the
         // effective AC itself; empty resistances (see CombatView) → engine base
         // damage is unresisted and the final resist below applies exactly once.
-        target: { id: target.uid, name: target.th, ac: target.ac, hp: Math.max(1, target.hpNow), maxHp: target.hp },
+        target: { id: target.uid, name: target.th, ac: target.ac - (target.conditions?.includes("slow") ? 2 : 0), hp: Math.max(1, target.hpNow), maxHp: target.hp },
         attackBonus: atkModTotal,
         damageExpr: baseDamageExpr,
         damageType: engineDmgType,

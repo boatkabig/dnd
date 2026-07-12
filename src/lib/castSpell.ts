@@ -105,9 +105,9 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
     for (const t of targets) {
       // 2024 unseen-attacker/target via engine/vision (spell attack rolls).
       const sAttackerSeesTarget = !(t.conditions && t.conditions.includes("invisible"));
-      const sTargetSeesAttacker = !(nc.hiddenAdv || ncb.surprise || ncb.invisible);
+      const sTargetSeesAttacker = !(nc.hiddenAdv || ncb.invisible);
       const sVisMod = attackVisibilityModifier(sAttackerSeesTarget, sTargetSeesAttacker);
-      let adv: "none" | "advantage" | "disadvantage" = (sVisMod === "advantage" || t.glow || attackerHasAdvVs(t)) ? "advantage" : "none";
+      let adv: "none" | "advantage" | "disadvantage" = (sVisMod === "advantage" || t.glow || t.conditions?.includes("glowing") || attackerHasAdvVs(t)) ? "advantage" : "none";
       if (sVisMod === "disadvantage" || hasDisadv(nc)) adv = adv === "advantage" ? "none" : "disadvantage";
       let atkModTotal = spellAtkMod(nc);
       // Bless applies to spell attacks too
@@ -116,7 +116,7 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
       }
       // D&D 2024 cover (engine/vision.coverBetween) raises the target's effective AC.
       const sCover = coverForTarget(ncb, t.uid);
-      const sEffectiveAC = t.ac + sCover.bonus;
+      const sEffectiveAC = t.ac - (t.conditions?.includes("slow") ? 2 : 0) + sCover.bonus;
       const atk = rollD20(atkModTotal, adv);
       if (t.glow) t.glow = false;
       const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= sEffectiveAC);
@@ -183,7 +183,11 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
       // D&D 2024 cover (engine/vision.coverBetween): half/three-quarter cover
       // adds its bonus to the defender's DEX saving throws (Fireball etc.).
       const saveCover = saveAbil === "dex" ? coverForTarget(ncb, t.uid) : { bonus: 0, label: "" };
-      const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus, saveAdv);
+      const banePenalty = t.conditions?.includes("bane") ? d(4) : 0;
+      // D&D 2024 Slow: -2 penalty to DEX saving throws (the -2 to AC is applied
+      // separately, see the "attack" branch above and weaponAttack.ts).
+      const slowSavePenalty = saveAbil === "dex" && t.conditions?.includes("slow") ? 2 : 0;
+      const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus - banePenalty - slowSavePenalty, saveAdv);
       const failed = sv.total < dc;
       let dmg = failed ? (aoeRoll?.total || 0) : sp.saveSuccess === "half" ? Math.floor((aoeRoll?.total || 0) / 2) : 0;
       // === NEW: apply spell damage type resistance/immunity/vulnerability ===
@@ -197,7 +201,7 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
         });
       }
       hitEnemy(ncb, t, dmg);
-      let extra = `${dmg} ${sp.damageType || ""} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}`;
+      let extra = `${dmg} ${sp.damageType || ""} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}${banePenalty ? ` · Bane -${banePenalty}` : ""}`;
       if (sp.conditionsAdd && sp.conditionsAdd.length > 0 && failed) {
         for (const cond of sp.conditionsAdd) {
           if (!t.conditions) t.conditions = [];
@@ -289,7 +293,7 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
     if (sp.index === "mage-armor") { nc.mageArmor = true; nc.ac = computeAC(nc); }
     if (sp.index === "spirit-guardians") ncb.spiritGuardians = true;
     if (sp.index === "spiritual-weapon") { ncb.spiritualWeapon = true; ncb.swRounds = 10; if (!ncb.bonusUsed) { ncb.bonusUsed = true; endsTurn = false; } }
-    if (sp.index === "shield") { ncb.shieldAC = 5; endsTurn = false; }
+    if (sp.index === "shield") { nc.ac = computeAC(nc); endsTurn = false; }
     if (sp.index === "faerie-fire") {
       // Mark all visible enemies as glowing
       ncb.enemies.forEach((e: any) => { if (e.hpNow > 0) e.glow = true; });
