@@ -44,7 +44,7 @@ import {
   assessRisk, type PlanningContext, type Goal, type SelectedAction,
 } from "@/lib/planning";
 import {
-  createContentRegistry, importContentJSON, exportByType, listContentByType,
+  createContentRegistry,
   type ContentRegistry, type ContentType,
 } from "@/lib/content";
 // Domain 36: Dungeon Blueprint System
@@ -84,6 +84,7 @@ import CompanionModal from "@/components/game/CompanionModal";
 import ShopModal from "@/components/game/ShopModal";
 import AiDmHelperModal from "@/components/game/AiDmHelperModal";
 import MapModal from "@/components/game/MapModal";
+import ContentManagerModal from "@/components/game/ContentManagerModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -3692,166 +3693,13 @@ export default function DnDSolo() {
       {/* SHOP MODAL — D&D 5e economy (component: game/ShopModal) */}
       <ShopModal open={shopOpen && !!c && !combat} c={c} tab={shopTab} setTab={setShopTab} search={shopSearch} setSearch={setShopSearch} bargainedPrices={bargainedPrices} onBuy={shopBuy} onBargain={shopBargain} onSell={shopSell} onClose={() => setShopOpen(false)} />
 
-      {/* CONTENT MANAGER MODAL — Domain 35: import/export homebrew content */}
-      {contentManagerOpen && c && (
-        <div className="sheet-overlay" onClick={() => setContentManagerOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>📦 Content Manager (Domain 35)</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setContentManagerOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "75vh", overflowY: "auto" }}>
-              {/* Stats */}
-              <div style={{ marginBottom: 14, padding: 10, background: "#1B1530", borderRadius: 8 }}>
-                <div className="sec-label">📊 Registry Stats</div>
-                <div style={{ fontSize: 12, color: "#C9BFE0", marginTop: 4 }}>
-                  Total entries: <b style={{ color: "#E0A83E" }}>{Object.keys(contentRegistry.entries).length}</b>
-                  {" · "}Homebrew content: <b style={{ color: "#7FA85C" }}>{Object.values(contentRegistry.entries).filter(e => e.source === "homebrew" || e.source === "custom").length}</b>
-                </div>
-              </div>
-
-              {/* Import section */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📥 Import Homebrew (JSON)</div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 6 }}>
-                  Paste JSON content below — supports spells, monsters, items, NPCs, locations, etc.
-                  Each entry needs: id, type, name, and type-specific required fields.
-                </div>
-                <textarea
-                  className="input-main"
-                  style={{ width: "100%", minHeight: 120, fontFamily: "monospace", fontSize: 11, resize: "vertical" }}
-                  placeholder={`{\n  "id": "fireball_custom",\n  "type": "spell",\n  "name": "Fireball Plus",\n  "level": 3,\n  "school": "evocation",\n  "data": { "damage": "10d6", "save": "dex" }\n}`}
-                  value={contentImportText}
-                  onChange={(e) => setContentImportText(e.target.value)}
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  <button
-                    className="btn btn-gold"
-                    onClick={() => {
-                      try {
-                        const { registry, result } = importContentJSON(contentRegistry, contentImportText, "homebrew");
-                        setContentRegistry(registry);
-                        setContentImportMsg(`✅ Imported ${result.imported} entries${result.errors.length > 0 ? `, ${result.skipped} skipped` : ""}`);
-                      } catch (e: any) {
-                        setContentImportMsg(`❌ Import failed: ${e.message}`);
-                      }
-                    }}
-                  >
-                    📥 Import
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      // Load sample homebrew spell as example
-                      const sample = {
-                        id: "thunderclap_enhanced",
-                        type: "spell",
-                        name: "Thunderclap Enhanced",
-                        level: 0,
-                        school: "evocation",
-                        data: { damage: "1d6+con_mod", damage_type: "thunder", save: "con", aoe: { type: "sphere", size: 5 } },
-                        description: "Homebrew cantrip — thunder damage in 5ft radius",
-                      };
-                      setContentImportText(JSON.stringify(sample, null, 2));
-                      setContentImportMsg("Loaded sample homebrew — click Import to register");
-                    }}
-                  >
-                    📋 Load Sample
-                  </button>
-                  <button className="btn" onClick={() => { setContentImportText(""); setContentImportMsg(""); }}>Clear</button>
-                </div>
-                {contentImportMsg && (
-                  <div style={{ fontSize: 12, color: contentImportMsg.startsWith("✅") ? "#7FA85C" : "#C74B44", marginTop: 6 }}>
-                    {contentImportMsg}
-                  </div>
-                )}
-              </div>
-
-              {/* Export section */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📤 Export Content</div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                  <select
-                    className="input-main"
-                    style={{ width: "auto", padding: "4px 8px", fontSize: 12 }}
-                    value={contentFilterType}
-                    onChange={(e) => setContentFilterType(e.target.value as ContentType | "all")}
-                  >
-                    <option value="all">All types</option>
-                    <option value="spell">Spells</option>
-                    <option value="monster">Monsters</option>
-                    <option value="item">Items</option>
-                    <option value="magic_item">Magic Items</option>
-                    <option value="npc">NPCs</option>
-                    <option value="location">Locations</option>
-                    <option value="quest">Quests</option>
-                  </select>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      if (contentFilterType === "all") {
-                        const all = Object.values(contentRegistry.entries);
-                        setContentExportText(JSON.stringify(all, null, 2));
-                      } else {
-                        setContentExportText(exportByType(contentRegistry, contentFilterType));
-                      }
-                    }}
-                  >
-                    📤 Export
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(contentExportText);
-                      setContentImportMsg("📋 Copied to clipboard");
-                    }}
-                    disabled={!contentExportText}
-                  >
-                    📋 Copy
-                  </button>
-                </div>
-                {contentExportText && (
-                  <textarea
-                    className="input-main"
-                    style={{ width: "100%", minHeight: 120, fontFamily: "monospace", fontSize: 11, resize: "vertical" }}
-                    value={contentExportText}
-                    readOnly
-                  />
-                )}
-              </div>
-
-              {/* Browse registry */}
-              <div>
-                <div className="sec-label">🗂️ Registry Browser</div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 4 }}>
-                  Showing {contentFilterType === "all" ? "all types" : contentFilterType}:
-                </div>
-                <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #3A3054", borderRadius: 6, padding: 6 }}>
-                  {Object.values(contentRegistry.entries)
-                    .filter(e => contentFilterType === "all" || e.type === contentFilterType)
-                    .map((entry) => (
-                      <div key={`${entry.type}:${entry.id}`} style={{ padding: "4px 6px", borderBottom: "1px solid #2A2340", fontSize: 11 }}>
-                        <span style={{ color: "#E0A83E" }}>{entry.name}</span>
-                        <span style={{ color: "#6B6284", marginLeft: 6 }}>[{entry.type}]</span>
-                        <span style={{ color: "#7FA85C", marginLeft: 6, fontSize: 10 }}>({entry.source})</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 6, fontSize: 10 }}>v{entry.version}</span>
-                      </div>
-                    ))}
-                  {Object.values(contentRegistry.entries).length === 0 && (
-                    <div style={{ fontSize: 12, color: "#8A7F9E", textAlign: "center", padding: 20 }}>
-                      No content yet — import homebrew above to populate the registry.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ marginTop: 12, fontSize: 10, color: "#6B6284", textAlign: "center" }}>
-                Domain 35 — Content Management · 8 sub-systems: Registry, Importer, Homebrew, Validator, Version Tracker, Diff, Exporter, Content Pack
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* CONTENT MANAGER MODAL (component: game/ContentManagerModal) */}
+      <ContentManagerModal open={contentManagerOpen && !!c} onClose={() => setContentManagerOpen(false)}
+        registry={contentRegistry} setRegistry={setContentRegistry}
+        importText={contentImportText} setImportText={setContentImportText}
+        importMsg={contentImportMsg} setImportMsg={setContentImportMsg}
+        filterType={contentFilterType} setFilterType={setContentFilterType}
+        exportText={contentExportText} setExportText={setContentExportText} />
 
       {/* AI DM HELPER MODAL (component: game/AiDmHelperModal) */}
       <AiDmHelperModal open={dmHelperOpen && !!c} onClose={() => setDmHelperOpen(false)} level={c?.level ?? 1} lastIntent={lastIntent} narrativeEngine={narrativeEngine} />
