@@ -667,32 +667,6 @@ export function getResourcesByRecovery(
 }
 
 // ============================================================================
-// 9. EXHAUSTION SYSTEM
-// ============================================================================
-
-export interface ExhaustionLevel {
-  level: number;                    // 0-6 (6 = death)
-  effects: string[];
-  speedMultiplier: number;          // 1 at L0, 0.5 at L1, 0 at L5
-  /** HP max multiplier (1.0 normal, 0.5 at L4). */
-  hpMaxMultiplier: number;
-}
-
-export const EXHAUSTION_LEVELS: ExhaustionLevel[] = [
-  { level: 0, effects: [], speedMultiplier: 1, hpMaxMultiplier: 1 },
-  { level: 1, effects: ["Ability checks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
-  { level: 2, effects: ["Speed halved", "Ability checks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
-  { level: 3, effects: ["Speed halved", "Ability checks + attacks disadvantage"], speedMultiplier: 0.5, hpMaxMultiplier: 1 },
-  { level: 4, effects: ["Speed halved", "Disadvantage on attacks/saves/checks", "HP max halved"], speedMultiplier: 0.5, hpMaxMultiplier: 0.5 },
-  { level: 5, effects: ["Speed 0", "Disadvantage on attacks/saves/checks", "HP max halved"], speedMultiplier: 0, hpMaxMultiplier: 0.5 },
-  { level: 6, effects: ["Death"], speedMultiplier: 0, hpMaxMultiplier: 0 },
-];
-
-export function getExhaustionLevel(level: number): ExhaustionLevel {
-  return EXHAUSTION_LEVELS[Math.max(0, Math.min(6, level))];
-}
-
-// ============================================================================
 // 10. SUMMARY — For AI DM / UI
 // ============================================================================
 

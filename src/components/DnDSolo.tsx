@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
-  DISADV_CONDS, CHECK_DISADV_CONDS, INCAPACITATING_CONDS,
+  DISADV_CONDS, CHECK_DISADV_CONDS, INCAPACITATING_CONDS, exhaustionSpeedPenalty,
   BACKGROUNDS, RACES, CLASSES, FEATURES,
   CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
   wornHas,
@@ -164,6 +164,11 @@ async function loadGame(): Promise<LegacySave | null> {
 }
 async function deleteSave() {
   engineDeleteSave();
+}
+// D&D 2024 Exhaustion: Speed reduced by 5 ft × Exhaustion level, floored at 0
+// (replaces the 2014-style "speed halved" — see src/lib/gameData.ts exhaustionSpeedPenalty).
+function effectiveSpeed(cc: any): number {
+  return Math.max(0, (cc.speed || 30) - exhaustionSpeedPenalty(cc.exhaustionLevel || 0));
 }
 
 /* ---------------- UI SUBCOMPONENTS ---------------- */
@@ -894,7 +899,7 @@ export default function DnDSolo() {
       grid: { w: GRID_W, h: GRID_H },
       playerPos,
       enemyPositions,
-      movementLeft: cc.speed || 30, // D&D 5e: use character's speed (dwarf=25, monk=30+10, etc.)
+      movementLeft: effectiveSpeed(cc), // D&D 5e: use character's speed (dwarf=25, monk=30+10, etc.); D&D 2024 exhaustion -5ft/lvl applied
       hasMoved: false,
     };
     // Stage A+C (combat-state migration): the persistent bridge state OWNS enemy
@@ -905,7 +910,7 @@ export default function DnDSolo() {
     // turn order — createCombat's sort reproduces the app's prior stable
     // descending order exactly (see tests/combat-bridge.test.ts).
     cb.bridge = buildBridgeState([
-      { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30, isPlayer: true, initiative: pInit.total },
+      { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: effectiveSpeed(cc), isPlayer: true, initiative: pInit.total },
       ...enemies.map((e: any) => ({
         id: e.uid,
         name: e.th,
@@ -1218,7 +1223,7 @@ export default function DnDSolo() {
           cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
           // Emit turn-end for player + turn-start for new round
           emitTurnEnd("player", cb.round);
-          cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
+          cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = effectiveSpeed(cc); cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
           if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
           emitTurnStart("player", cb.round);
           const finalLog = [...log0, ...entries];
@@ -1319,9 +1324,9 @@ export default function DnDSolo() {
       }
     } else if (kind === "dash") {
       // D&D 5e RAW: Dash = Action → gain extra movement equal to speed
-      cb.movementLeft += (cc.speed || 30);
+      cb.movementLeft += effectiveSpeed(cc);
       if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
-      entries.push(entrySystem(`🏃 Dash: ใช้ Action — เพิ่ม movement ${cc.speed || 30} ฟุต (รวม ${cb.movementLeft} ฟุต)`));
+      entries.push(entrySystem(`🏃 Dash: ใช้ Action — เพิ่ม movement ${effectiveSpeed(cc)} ฟุต (รวม ${cb.movementLeft} ฟุต)`));
     } else if (kind === "help") {
       // D&D 5e RAW: Help = Action → ally gains advantage on next attack vs target
       const target = cb.enemies.find((e: any) => e.hpNow > 0);
@@ -1657,7 +1662,7 @@ export default function DnDSolo() {
       // Tick buff durations BEFORE enemies attack (= end of player's turn)
       cc = tickBuffs(cc, (t) => entries.push(entrySystem(t)));
       cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
-      cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
+      cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = effectiveSpeed(cc); cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
       if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
       // End of round: rage expires if no attack happened this round
       if (cc.raging && !cc.attackedThisRound) {
