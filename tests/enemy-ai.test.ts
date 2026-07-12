@@ -233,3 +233,59 @@ describe("runEnemyTurn — characterization", () => {
     expect(nc.buffs.find((b: any) => b.name === "Bless")).toBeUndefined(); // buff dropped on failed save
   });
 });
+
+describe("runEnemyTurn — HP-0 state machine wiring (hpState)", () => {
+  it("an enemy hit that downs a healthy player adds Unconscious + fresh death saves", () => {
+    const rollD20 = scriptedRollD20([{ die: 15, total: 15 }]); // hits low AC, not a crit
+    const rollFormula = mappedRollFormula({ "1d6": 10 });
+    const deps = makeDeps({ rollD20, rollFormula });
+    const e = makeEnemy();
+    const cb = makeCb();
+    place(cb, e);
+    // 10 dmg vs 5 HP → drops to 0 (overflow 5 < maxHp 20, so no instant death).
+    const nc: any = makeNc({ hp: 5, maxHp: 20, deathSaves: { s: 1, f: 1 }, conditions: [] });
+    const entries: any[] = [];
+
+    const res = runEnemyTurn(deps, e, cb, makeCc(), nc, entries, [e], false, false);
+
+    expect(nc.hp).toBe(0);
+    expect(nc.dead).toBe(false);
+    expect(nc.conditions).toContain("unconscious"); // makes ENEMY_ADV_CONDS reachable
+    expect(nc.deathSaves).toEqual({ s: 0, f: 0 }); // fresh dying, NOT carried over
+    expect(res.stop).toBe(true);
+  });
+
+  it("temp HP absorbs the enemy hit first (fixes the enemyAI tempHp bypass)", () => {
+    const rollD20 = scriptedRollD20([{ die: 15, total: 15 }]);
+    const rollFormula = mappedRollFormula({ "1d6": 10 });
+    const deps = makeDeps({ rollD20, rollFormula });
+    const e = makeEnemy();
+    const cb = makeCb();
+    place(cb, e);
+    const nc: any = makeNc({ hp: 20, maxHp: 20, tempHp: 6 });
+    const entries: any[] = [];
+
+    runEnemyTurn(deps, e, cb, makeCc(), nc, entries, [e], false, false);
+
+    expect(nc.tempHp).toBe(0); // 6 absorbed
+    expect(nc.hp).toBe(16); // only the 4 overflow reaches real HP
+  });
+
+  it("massive damage (overflow >= max HP) is instant death at the enemyAI seam", () => {
+    const rollD20 = scriptedRollD20([{ die: 15, total: 15 }]);
+    const rollFormula = mappedRollFormula({ "1d6": 20 });
+    const deps = makeDeps({ rollD20, rollFormula });
+    const e = makeEnemy();
+    const cb = makeCb();
+    place(cb, e);
+    const nc: any = makeNc({ hp: 5, maxHp: 10 }); // overflow 15 >= 10 → instant death
+    const entries: any[] = [];
+
+    const res = runEnemyTurn(deps, e, cb, makeCc(), nc, entries, [e], false, false);
+
+    expect(nc.dead).toBe(true);
+    expect(nc.hp).toBe(0);
+    expect(res.stop).toBe(true);
+    expect(entries.some((x) => typeof x.text === "string" && x.text.includes("เสียชีวิตทันที"))).toBe(true);
+  });
+});

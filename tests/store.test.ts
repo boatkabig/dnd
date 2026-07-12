@@ -36,6 +36,40 @@ describe("reducer: APPLY_DM_UPDATES — per-field application", () => {
     expect(apply(s, { temp_hp: 8 }).player.tempHp).toBe(8);
   });
 
+  it("damage that drops the player to 0 adds Unconscious + fresh death saves (HP-0 state machine)", () => {
+    const s = createInitialState({ player: createPlayerState({ hp: 8, maxHp: 10, deathSaves: { s: 1, f: 0 } }) });
+    const r = apply(s, { hp_delta: -8 });
+    expect(r.player.hp).toBe(0);
+    expect(r.player.dead).toBe(false);
+    expect(r.player.conditions).toContain("unconscious");
+    expect(r.player.deathSaves).toEqual({ s: 0, f: 0 });
+  });
+
+  it("damage taken while already at 0 HP adds a death-save failure (not more HP loss)", () => {
+    const s = createInitialState({ player: createPlayerState({ hp: 0, maxHp: 10, conditions: ["unconscious"], deathSaves: { s: 0, f: 1 } }) });
+    const r = apply(s, { hp_delta: -3 });
+    expect(r.player.hp).toBe(0);
+    expect(r.player.deathSaves).toEqual({ s: 0, f: 2 });
+    expect(r.player.dead).toBe(false);
+    expect(r.player.conditions).toContain("unconscious");
+  });
+
+  it("massive damage (overflow >= max HP) is instant death and flips phase to 'dead'", () => {
+    const s = createInitialState({ player: createPlayerState({ hp: 5, maxHp: 10 }) });
+    const r = apply(s, { hp_delta: -20 }); // overflow 15 >= 10
+    expect(r.player.dead).toBe(true);
+    expect(r.phase).toBe("dead");
+  });
+
+  it("a DM-narrated heal from 0 HP clears the dying state (deathSaves + Unconscious)", () => {
+    const s = createInitialState({ player: createPlayerState({ hp: 0, maxHp: 10, conditions: ["unconscious", "prone"], deathSaves: { s: 1, f: 2 } }) });
+    const r = apply(s, { hp_delta: 4 });
+    expect(r.player.hp).toBe(4);
+    expect(r.player.deathSaves).toEqual({ s: 0, f: 0 });
+    expect(r.player.conditions).not.toContain("unconscious");
+    expect(r.player.conditions).toContain("prone"); // unrelated conditions untouched
+  });
+
   it("gold_delta floors at 0", () => {
     const s = createInitialState({ player: createPlayerState({ gold: 30 }) });
     expect(apply(s, { gold_delta: 20 }).player.gold).toBe(50);

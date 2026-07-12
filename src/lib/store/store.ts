@@ -50,6 +50,7 @@ export function createPlayerState(overrides: Partial<PlayerState> = {}): PlayerS
     hp: 10,
     maxHp: 10,
     tempHp: 0,
+    deathSaves: { s: 0, f: 0 },
     gold: 0,
     xp: 0,
     level: 1,

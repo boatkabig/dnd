@@ -13,6 +13,7 @@ import {
   rollFormula, hasFeature, skillMod, saveMod, attackMod, sneakDice,
 } from "@/lib/characterStats";
 import { SRD_OK } from "@/lib/dndSoloShared";
+import { applyHealTo } from "@/lib/engine/hpState";
 
 export interface CharacterSheetProps {
   c: any;
@@ -242,7 +243,7 @@ export default function CharacterSheet({
                                 const entries: any[] = [];
                                 if (consum.heal) {
                                   const h = rollFormula(consum.heal);
-                                  cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+                                  applyHealTo(cc, h.total);
                                   entries.push(entrySystem(`🧪 Used ${it}: healed ${h.total} HP → ${cc.hp}/${cc.maxHp}`));
                                 }
                                 if (consum.cure) {

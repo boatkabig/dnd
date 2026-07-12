@@ -6,6 +6,7 @@ import { weaponByName, mod, applyDamageModifiers, INCAPACITATING_CONDS } from ".
 import { planMultiattackSequence } from "./combatBridge";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName } from "./effects";
 import { emitDamageTaken } from "../engineAdapters";
+import { applyDamageTo } from "./hpState";
 
 export interface EnemyAIDeps {
   attackMod: (c: any, w: any) => number;
@@ -289,6 +290,7 @@ export function runEnemyTurn(
         const isEnemyCrit = atk.die === 20;
         const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= nc.ac);
         let extra = banePenalty ? `Bane -${banePenalty}` : "";
+        let instantDeath = false;
         if (hit) {
           let dmgR = rollFormula(atkData.dmg);
           let dmg = dmgR.total;
@@ -350,7 +352,11 @@ export function runEnemyTurn(
             uncannyUsed = true;
             extra += ` · 🌀 Uncanny Dodge halved → ${dmg}`;
           }
-          nc.hp = Math.max(0, nc.hp - dmg);
+          // Route through the HP-0 state machine: tempHp absorbs first, dropping to
+          // 0 adds Unconscious + fresh death saves, and a massive hit (overflow >= max
+          // HP) is instant death. (Damage-at-0 → death-save failure only applies if a
+          // downed player is ever attacked; the turn guards above normally prevent it.)
+          instantDeath = applyDamageTo(nc, dmg, { critical: isEnemyCrit }).instantDeath;
 
           // Emit damage taken event (for features like relentless_endurance, uncanny_dodge already applied above)
           if (dmg > 0) emitDamageTaken("player", dmg, "slashing", e.uid);
@@ -391,7 +397,9 @@ export function runEnemyTurn(
             if (droppedConc.some((b: any) => b.name === "Spirit Guardians")) cb.spiritGuardians = false;
             entries.push(entrySystem(`💔 หมดสติ — เสียสมาธิ: ${droppedConc.map((b: any) => b.name).join(", ")} สลายไป`));
           }
-          entries.push(entrySystem(`💀 ${nc.name} ล้มลงหมดสติ! ต้องทอย Death Saving Throw`));
+          entries.push(entrySystem(instantDeath
+            ? `☠️ ${nc.name} เสียชีวิตทันทีจากความเสียหายมหาศาล!`
+            : `💀 ${nc.name} ล้มลงหมดสติ! ต้องทอย Death Saving Throw`));
           break;
         }
       }
