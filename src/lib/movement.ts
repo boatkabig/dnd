@@ -9,7 +9,7 @@
  * more effectively than a single monolithic module.
  */
 
-import { mod } from "./gameData";
+import { mod, exhaustionSpeedPenalty } from "./gameData";
 
 /* ======================================================================
  * LAYER 1: MOVEMENT CAPABILITY
@@ -26,7 +26,7 @@ export interface MovementSpeeds {
 }
 
 export interface MovementRestriction {
-  type: "grappled" | "restrained" | "stunned" | "paralyzed" | "petrified" | "exhausted" | "encumbrance" | "magical";
+  type: "grappled" | "restrained" | "stunned" | "paralyzed" | "petrified" | "encumbrance" | "magical";
   speedMultiplier: number;  // 0 = can't move, 0.5 = half speed, 1 = normal
   description: string;
   descriptionTh: string;
@@ -40,7 +40,6 @@ export const CONDITION_MOVEMENT: Record<string, MovementRestriction> = {
   paralyzed: { type: "paralyzed", speedMultiplier: 0, description: "Cannot move", descriptionTh: "เคลื่อนที่ไม่ได้" },
   petrified: { type: "petrified", speedMultiplier: 0, description: "Cannot move", descriptionTh: "เคลื่อนที่ไม่ได้" },
   prone: { type: "magical", speedMultiplier: 0.5, description: "Crawling costs double; standing costs half speed", descriptionTh: "คลานใช้ movement x2; ลุกขึ้นใช้ movement ครึ่งหนึ่ง" },
-  exhausted: { type: "exhausted", speedMultiplier: 0.5, description: "Speed halved (Exhaustion Lv2+)", descriptionTh: "ความเร็วลดครึ่ง (Exhaustion Lv2+)" },
 };
 
 /**
@@ -51,6 +50,7 @@ export function getEffectiveSpeed(
   conditions: string[],
   buffs: any[],
   encumbranceLevel: number = 0,  // 0=none, 1=encumbered (speed -10), 2=heavily encumbered (speed -20)
+  exhaustionLevel: number = 0,   // D&D 2024: Speed reduced by 5 ft × Exhaustion level (flat, not a multiplier)
 ): { speed: number; restrictions: MovementRestriction[]; canMove: boolean } {
   const restrictions: MovementRestriction[] = [];
 
@@ -73,6 +73,9 @@ export function getEffectiveSpeed(
       speed = Math.min(speed, Math.floor(baseSpeed * r.speedMultiplier));
     }
   }
+
+  // D&D 2024 Exhaustion: flat -5 ft per level (not a multiplier), floored at 0.
+  speed = Math.max(0, speed - exhaustionSpeedPenalty(exhaustionLevel));
 
   // Encumbrance
   if (encumbranceLevel === 1) speed = Math.max(0, speed - 10);
