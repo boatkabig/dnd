@@ -21,6 +21,7 @@ import { hitEnemy, gridDistance } from "./combatMath";
 import { d } from "./dndSoloShared";
 import { attackVisibilityModifier } from "./engine/vision";
 import { isConcentrationSpellName, toSpellDisplayName } from "./engine/effects";
+import { applyHealTo } from "./engine/hpState";
 import { emitCastSpell, emitHeal } from "./engineAdapters";
 import { type CombatDeps } from "./combatResolve";
 
@@ -74,12 +75,12 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
     const h = rollFormula(sp.heal || "1d8");
     const healAmount = h.total + mod(nc.abilities[CLASSES[nc.cls].castAbil]);
     const oldHp = nc.hp;
-    nc.hp = Math.min(nc.maxHp, nc.hp + healAmount);
+    // Wave 2: route through the shared heal adapter so recovering to >=1 HP
+    // also strips "unconscious" (previously only deathSaves were reset here).
+    applyHealTo(nc, healAmount);
     // Emit heal event
     emitHeal("player", "player", healAmount);
-    // Reset death saves on any healing (D&D 5e rule)
     if (oldHp <= 0 && nc.hp > 0) {
-      nc.deathSaves = { s: 0, f: 0 };
       entries.push(deps.entrySystem(`✨ ${sp.name}: ฟื้น ${healAmount} HP → ${nc.hp}/${nc.maxHp} · Death saves reset`));
     } else {
       entries.push(deps.entrySystem(`✨ ${sp.name}: ฟื้น ${healAmount} HP → ${nc.hp}/${nc.maxHp}`));

@@ -14,6 +14,7 @@
  */
 
 import { XP_THRESHOLDS, CONDITIONS_TH } from "../gameData";
+import { applyDamage, applyHeal, readHpState } from "../engine/hpState";
 import type {
   Action,
   Buff,
@@ -47,6 +48,7 @@ function toDraft(state: GameState): Draft {
   return {
     player: {
       ...state.player,
+      deathSaves: { ...state.player.deathSaves },
       inventory: [...state.player.inventory],
       conditions: [...state.player.conditions],
       buffs: state.player.buffs.map((b) => ({ ...b })),
@@ -101,17 +103,31 @@ function clamp(n: number, lo: number, hi: number): number {
 function applyDmUpdates(d: Draft, u: ValidUpdates): void {
   const p = d.player;
 
-  // --- HP (temp HP absorbs incoming damage first) ---
+  // --- HP (routed through the engine HP-0 state machine: tempHp absorbs first,
+  //     drop-to-0 adds Unconscious + fresh death saves + massive-death, heal-from-0
+  //     clears the dying state) ---
   if (u.hp_delta) {
-    if (u.hp_delta < 0 && p.tempHp > 0) {
-      const absorbed = Math.min(p.tempHp, -u.hp_delta);
-      p.tempHp -= absorbed;
-      const remaining = -u.hp_delta - absorbed;
-      if (remaining > 0) p.hp = Math.max(0, p.hp - remaining);
-      pushLog(d, "system", `HP ${u.hp_delta} (Temp HP ดูด ${absorbed}) → ${p.hp}/${p.maxHp}${p.tempHp > 0 ? ` +${p.tempHp} temp` : ""}`);
+    if (u.hp_delta < 0) {
+      const tempBefore = p.tempHp;
+      const dr = applyDamage(readHpState(p), -u.hp_delta);
+      const absorbed = tempBefore - dr.tempHp;
+      p.tempHp = dr.tempHp;
+      p.hp = dr.hp;
+      p.deathSaves = dr.deathSaves;
+      p.conditions = dr.conditions;
+      p.dead = dr.dead;
+      const tail = `${p.hp}/${p.maxHp}${p.tempHp > 0 ? ` +${p.tempHp} temp` : ""}`;
+      if (dr.instantDeath) pushLog(d, "system", `HP ${u.hp_delta} → ${tail} · ☠️ ความเสียหายมหาศาล — เสียชีวิตทันที`);
+      else if (dr.justDowned) pushLog(d, "system", `HP ${u.hp_delta} → ${tail} · 💀 หมดสติที่ 0 HP — ต้องทอย Death Save`);
+      else if (absorbed > 0) pushLog(d, "system", `HP ${u.hp_delta} (Temp HP ดูด ${absorbed}) → ${tail}`);
+      else pushLog(d, "system", `HP ${u.hp_delta} → ${tail}`);
+      if (p.dead) d.phase = "dead";
     } else {
-      p.hp = clamp(p.hp + u.hp_delta, 0, p.maxHp);
-      pushLog(d, "system", `HP ${u.hp_delta > 0 ? "+" : ""}${u.hp_delta} → ${p.hp}/${p.maxHp}${p.tempHp > 0 ? ` +${p.tempHp} temp` : ""}`);
+      const hr = applyHeal(readHpState(p), u.hp_delta);
+      p.hp = hr.hp;
+      p.deathSaves = hr.deathSaves;
+      p.conditions = hr.conditions;
+      pushLog(d, "system", `HP +${u.hp_delta} → ${p.hp}/${p.maxHp}${p.tempHp > 0 ? ` +${p.tempHp} temp` : ""}${hr.revived ? " · 🩹 ฟื้นจากภาวะใกล้ตาย (ล้าง Death Save)" : ""}`);
     }
   }
 

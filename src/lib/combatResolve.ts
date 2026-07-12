@@ -23,6 +23,7 @@ import { runEnemyTurn, type EnemyAIDeps } from "./engine/enemyAI";
 import { gainXP } from "./leveling";
 import { calculateDifficulty, calculateReward, rollRewardItems } from "./encounter";
 import { emitConditionApplied, emitDamageDealt, emitHeal, type PendingStateChange } from "./engineAdapters";
+import { applyHeal, readHpState } from "./engine/hpState";
 
 /**
  * Component functions the combat resolvers need but cannot import (they close over
@@ -174,8 +175,9 @@ export function applyPendingChanges(
       case "heal": {
         const heal = change.payload.healFormula ? rollFormula(change.payload.healFormula).total : 0;
         if (heal > 0 && (change.targetId === "player" || change.targetId === nc.id)) {
-          nc = { ...nc, hp: Math.min(nc.maxHp, nc.hp + heal) };
-          pushEntry(`   → ฟื้น ${heal} HP (${change.sourceFeature})`);
+          const hr = applyHeal(readHpState(nc), heal);
+          nc = { ...nc, hp: hr.hp, deathSaves: hr.deathSaves, conditions: hr.conditions };
+          pushEntry(`   → ฟื้น ${heal} HP (${change.sourceFeature})${hr.revived ? " · 🩹 ฟื้นจากภาวะใกล้ตาย" : ""}`);
           emitHeal("player", change.targetId, heal);
         }
         break;
@@ -233,6 +235,9 @@ export function resolveDeathSave(
   const result = applyDeathSaveRoll(prev, r.die);
   const dsr = result.rollResult;
   const nc = { ...cc, hp: result.hp, deathSaves: { s: result.deathSaves.successes, f: result.deathSaves.failures }, dead: result.dead };
+  // Nat-20 revive (0 HP → 1 HP, conscious) clears the Unconscious condition. A
+  // "stable" result stays Unconscious at 0 HP (D&D 2024), so we only strip it on revive.
+  if (result.state === "revived") nc.conditions = (cc.conditions || []).filter((c: string) => c !== "unconscious");
 
   if (dsr.state === "revived") { entries.push({ id: deps.nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
   else if (dsr.successes > prev.successes) { entries.push({ id: deps.nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${dsr.successes}/3` }); }
@@ -244,7 +249,11 @@ export function resolveDeathSave(
     return { cc: nc, state: "dead" };
   }
   if (result.state === "stable") {
-    entries.push(deps.entrySystem(inCombat ? "อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป" : "อาการคงที่ — รอดชีวิตอย่างหวุดหวิด"));
+    // D&D 2024: 3rd success = Stable, but the character stays at 0 HP and Unconscious
+    // (no longer dying / rolling saves) — NOT "back on your feet at 1 HP".
+    entries.push(deps.entrySystem(inCombat
+      ? "อาการคงที่ — ยังหมดสติที่ 0 HP (ศัตรูทิ้งคุณไว้และจากไป)"
+      : "อาการคงที่ — ยังหมดสติที่ 0 HP รอดชีวิตอย่างหวุดหวิด"));
   }
   return { cc: nc, state: result.state };
 }

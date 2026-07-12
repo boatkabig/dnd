@@ -54,6 +54,8 @@ export interface PlayerState {
   hp: number;
   maxHp: number;
   tempHp: number;
+  /** Death saving throws while at 0 HP. Reset to {0,0} on downing/heal-from-0. */
+  deathSaves: { s: number; f: number };
   gold: number;
   xp: number;
   level: number;

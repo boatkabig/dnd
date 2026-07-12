@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyDamage, applyHeal, type HpCharacterState } from "../src/lib/engine/hpState";
+import { applyDamage, applyHeal, applyHealTo, type HpCharacterState } from "../src/lib/engine/hpState";
 
 function alive(overrides: Partial<HpCharacterState> = {}): HpCharacterState {
   return {
@@ -181,6 +181,28 @@ describe("applyHeal — no-ops", () => {
     const result = applyHeal(alive({ hp: 10 }), 0);
     expect(result.hp).toBe(10);
     expect(result.revived).toBe(false);
+  });
+});
+
+describe("applyHealTo — the adapter DnDSolo's shortRest() Hit-Die heal now routes through", () => {
+  // NOTE: this exercises the applyHealTo adapter with the same object shape
+  // shortRest() builds (hp/maxHp/deathSaves/conditions), not shortRest() itself
+  // — DnDSolo.tsx's shortRest is an in-component closure with no exported,
+  // directly-callable entry point, so it has no direct regression test here.
+  // This only guards the adapter's downed->revived behavior in isolation.
+  it("Hit-Die heal on a stabilized-at-0 character clears deathSaves and removes Unconscious", () => {
+    const cc: any = {
+      hp: 0,
+      maxHp: 20,
+      deathSaves: { s: 3, f: 0 }, // stabilized (3 successes), still Unconscious at 0 HP
+      conditions: ["unconscious"],
+      dead: false,
+    };
+    const result = applyHealTo(cc, 5); // e.g. Hit Die roll + CON mod
+    expect(cc.hp).toBe(5);
+    expect(cc.deathSaves).toEqual({ s: 0, f: 0 });
+    expect(cc.conditions).not.toContain("unconscious");
+    expect(result.revived).toBe(true);
   });
 });
 

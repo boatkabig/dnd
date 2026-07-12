@@ -208,3 +208,53 @@ export function applyHeal(character: HpCharacterState, amount: number): HealResu
     revived: false,
   };
 }
+
+/* ============================================================================
+ * Live-character adapters
+ * ----------------------------------------------------------------------------
+ * The live game uses a loose, ad-hoc `cc`/`nc` object (and the store's typed
+ * PlayerState). These helpers read the HP-relevant slice out of such an object
+ * and (for the *To variants) write the result back onto it, so every seam can
+ * route through applyDamage/applyHeal without re-deriving the field mapping.
+ * ========================================================================== */
+
+interface LiveHpFields {
+  hp: number;
+  maxHp: number;
+  tempHp?: number;
+  deathSaves?: { s: number; f: number };
+  conditions?: string[];
+  dead?: boolean;
+}
+
+/** Read the HP-relevant slice out of a loose live character object. */
+export function readHpState(c: LiveHpFields): HpCharacterState {
+  return {
+    hp: c.hp,
+    maxHp: c.maxHp,
+    tempHp: c.tempHp || 0,
+    deathSaves: c.deathSaves ? { ...c.deathSaves } : { s: 0, f: 0 },
+    conditions: Array.isArray(c.conditions) ? c.conditions : [],
+    dead: c.dead || false,
+  };
+}
+
+/** Apply damage and fold the result back onto a mutable live character object. */
+export function applyDamageTo(c: LiveHpFields, amount: number, opts: { critical?: boolean } = {}): DamageResult {
+  const r = applyDamage(readHpState(c), amount, opts);
+  c.hp = r.hp;
+  c.tempHp = r.tempHp;
+  c.deathSaves = r.deathSaves;
+  c.conditions = r.conditions;
+  c.dead = r.dead;
+  return r;
+}
+
+/** Apply healing and fold the result back onto a mutable live character object. */
+export function applyHealTo(c: LiveHpFields, amount: number): HealResult {
+  const r = applyHeal(readHpState(c), amount);
+  c.hp = r.hp;
+  c.deathSaves = r.deathSaves;
+  c.conditions = r.conditions;
+  return r;
+}

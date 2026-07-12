@@ -87,6 +87,7 @@ import AiDmHelperModal from "@/components/game/AiDmHelperModal";
 import MapModal from "@/components/game/MapModal";
 import CombatOverlay from "@/components/game/CombatOverlay";
 import { castSRDSpell } from "@/lib/castSpell";
+import { applyDamage, applyDamageTo, applyHealTo, readHpState } from "@/lib/engine/hpState";
 import { resolveWeaponAttack } from "@/lib/weaponAttack";
 import ContentManagerModal from "@/components/game/ContentManagerModal";
 // Phase 2: Extended class features Lv.1-20
@@ -435,7 +436,7 @@ export default function DnDSolo() {
     // === 1. ATOMIC store application (the headline fix) ===================
     const store = createStore(createInitialState({
       player: createPlayerState({
-        hp: cc.hp, maxHp: cc.maxHp, tempHp: cc.tempHp || 0, gold: cc.gold,
+        hp: cc.hp, maxHp: cc.maxHp, tempHp: cc.tempHp || 0, deathSaves: cc.deathSaves || { s: 0, f: 0 }, gold: cc.gold,
         xp: cc.xp, level: cc.level,
         inventory: [...cc.inventory], conditions: [...cc.conditions], buffs: [...(cc.buffs || [])],
         feats: [...(cc.feats || [])],
@@ -457,7 +458,7 @@ export default function DnDSolo() {
     // Fold the store-owned slices back onto the rich character object.
     let nc: any = {
       ...cc,
-      hp: after.player.hp, maxHp: after.player.maxHp, tempHp: after.player.tempHp,
+      hp: after.player.hp, maxHp: after.player.maxHp, tempHp: after.player.tempHp, deathSaves: after.player.deathSaves,
       gold: after.player.gold, xp: after.player.xp, level: after.player.level,
       inventory: [...after.player.inventory], conditions: [...after.player.conditions], buffs: after.player.buffs,
       feats: after.player.feats,
@@ -486,7 +487,7 @@ export default function DnDSolo() {
       nc.inventory.splice(idx, 1);
       if (consum && consum.heal) {
         const h = rollFormula(consum.heal);
-        nc.hp = Math.min(nc.maxHp, nc.hp + h.total);
+        applyHealTo(nc, h.total);
         entries.push(entrySystem(`🧪 ใช้ ${it}: ฟื้น ${h.total} HP → ${nc.hp}/${nc.maxHp}`));
       } else if (consum && consum.cure) {
         const ci = nc.conditions.indexOf(consum.cure);
@@ -972,11 +973,18 @@ export default function DnDSolo() {
         return;
       }
       if (dsResult.state === "stable" || dsResult.state === "revived" || cc.hp > 0) {
-        // Clear combat state completely — player is revived, combat ends
+        // Combat ends: either revived (nat-20, back to 1 HP + conscious) or stabilized
+        // (D&D 2024: still Unconscious at 0 HP, just no longer dying). Enemies leave.
         cb = null as any;
         const finalLog = [...log0, ...entries];
         commitCombat(cc, null, finalLog); persist(cc, scene, finalLog, null, history);
-        narrateCombatEvent(`[จบ combat] ${cc.name} หมดสติแต่รอดชีวิต (stable, 1 HP). ศัตรูจากไปแล้ว. บรรยายฉากที่ฟื้นขึ้นมา`, cc, scene, finalLog, history);
+        const revived = cc.hp > 0;
+        narrateCombatEvent(
+          revived
+            ? `[จบ combat] ${cc.name} ฟื้นขึ้นมาด้วย ${cc.hp} HP (รอดหวุดหวิด). ศัตรูจากไปแล้ว. บรรยายฉากที่ฟื้นขึ้นมา`
+            : `[จบ combat] ${cc.name} อาการคงที่แต่ยังหมดสติที่ 0 HP. ศัตรูจากไปแล้ว. บรรยายฉากที่ยังนอนหมดสติอยู่แต่รอดชีวิต`,
+          cc, scene, finalLog, history,
+        );
         return;
       }
       // Still unconscious — enemies attack, then advance round
@@ -1005,6 +1013,7 @@ export default function DnDSolo() {
       const finalLog = [...log0, ...entries];
       commitCombat(cc, cb, finalLog);
       persist(cc, scene, finalLog, cb, history);
+      if (cc.dead) setPhase("dead"); // instant-death (massive damage) during the enemy phase
       return;
     }
 
@@ -1060,7 +1069,7 @@ export default function DnDSolo() {
         cc.inventory.splice(idx, 1);
         if (item.heal) {
           const h = rollFormula(item.heal);
-          cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+          applyHealTo(cc, h.total);
           entries.push(entrySystem(`🧪 Used ${payload}: healed ${h.total} HP → ${cc.hp}/${cc.maxHp}`));
         }
         if (item.cure) {
@@ -1174,6 +1183,7 @@ export default function DnDSolo() {
           const finalLog = [...log0, ...entries];
           commitCombat(cc, cb, finalLog);
           persist(cc, scene, finalLog, cb, history);
+          if (cc.dead) setPhase("dead"); // instant-death (massive damage) during the enemy phase
         } catch (e: any) {
           entries.push(entrySystem("⚠️ Spell cast failed: " + e.message));
           const finalLog = [...log0, ...entries];
@@ -1186,7 +1196,7 @@ export default function DnDSolo() {
     } else if (kind === "second_wind") {
       if (hasFeature(cc, "second_wind") && !cc.secondWindUsed) {
         const h = rollFormula(`1d10+${cc.level}`);
-        cc.hp = Math.min(cc.maxHp, cc.hp + h.total);
+        applyHealTo(cc, h.total);
         cc.secondWindUsed = true;
         entries.push(entrySystem(`🛡️ Second Wind: healed ${h.total} HP → ${cc.hp}/${cc.maxHp}`));
         if (!cb.bonusUsed) { cb.bonusUsed = true; endsTurn = false; entries.push(entrySystem("💨 Bonus action — can still take main action")); }
@@ -1248,8 +1258,12 @@ export default function DnDSolo() {
                 const oaHit = oaAtk.die !== 1 && (oaAtk.die === 20 || oaAtk.total >= cc.ac);
                 if (oaHit) {
                   const oaDmg = rollFormula(e.dmg || "1d6+2");
-                  cc.hp = Math.max(0, cc.hp - oaDmg.total);
+                  const oaRes = applyDamageTo(cc, oaDmg.total, { critical: oaAtk.die === 20 });
                   entries.push({ id: nextId(), type: "roll", title: `${e.th} Opportunity Attack`, roll: oaAtk, vsAc: cc.ac, success: true, extra: `${e.dmg}=${oaDmg.total} → HP ${cc.hp}` });
+                  if (oaRes.instantDeath) {
+                    entries.push(entrySystem(`☠️ ${cc.name} ตายทันทีจากความเสียหายมหาศาล (Opportunity Attack)!`));
+                    break;
+                  }
                   if (cc.hp <= 0) {
                     entries.push(entrySystem(`💀 ${cc.name} ล้มลงหมดสติจาก Opportunity Attack!`));
                     break;
@@ -1295,7 +1309,7 @@ export default function DnDSolo() {
     } else if (kind === "lay_on_hands") {
       if (hasFeature(cc, "lay_on_hands") && cc.layOnHandsPool > 0) {
         const heal = Math.min(cc.layOnHandsPool, cc.maxHp - cc.hp);
-        cc.hp += heal;
+        applyHealTo(cc, heal);
         cc.layOnHandsPool -= heal;
         entries.push(entrySystem(`🤲 Lay on Hands: healed ${heal} HP → ${cc.hp}/${cc.maxHp} (pool: ${cc.layOnHandsPool} left)`));
       }
@@ -1332,7 +1346,7 @@ export default function DnDSolo() {
         } else {
           const heal = Math.min(5 * cc.level, cap - cc.hp);
           cc.preserveLifeUsed = true;
-          cc.hp += heal;
+          applyHealTo(cc, heal);
           entries.push(entrySystem(`🕊️ Channel Divinity — Preserve Life: healed ${heal} HP → ${cc.hp}/${cc.maxHp}`));
         }
       }
@@ -1615,6 +1629,7 @@ export default function DnDSolo() {
     const finalLog = [...log0, ...entries];
     commitCombat(cc, cb, finalLog);
     persist(cc, scene, finalLog, cb, history);
+    if (cc.dead) setPhase("dead"); // instant-death (massive damage) via OA / the enemy phase
   }
 
   async function submitCombatTalk(text: string) {
@@ -1830,7 +1845,11 @@ export default function DnDSolo() {
             // Sanity-cap LLM-authored dice-formula damage by the same bound as hp_delta —
             // a bad/huge formula (e.g. "50d6") must not exceed the engine's HP delta cap.
             const dmg = Math.min(rawDmg, HP_DELTA_CAP);
-            if (dmg > 0) { cc = { ...cc, hp: Math.max(0, cc.hp - dmg) }; extra = `ดาเมจ ${dmg}${rawDmg > dmg ? ` (ตัดจาก ${rawDmg} ตาม cap)` : ""} → HP ${cc.hp}/${cc.maxHp}`; }
+            if (dmg > 0) {
+              const dr = applyDamage(readHpState(cc), dmg);
+              cc = { ...cc, hp: dr.hp, tempHp: dr.tempHp, deathSaves: dr.deathSaves, conditions: dr.conditions, dead: dr.dead };
+              extra = `ดาเมจ ${dmg}${rawDmg > dmg ? ` (ตัดจาก ${rawDmg} ตาม cap)` : ""} → HP ${cc.hp}/${cc.maxHp}${dr.instantDeath ? " · ☠️ เสียชีวิตทันที" : dr.justDowned ? " · 💀 หมดสติ" : ""}`;
+            }
           }
           rollEntry = { id: nextId(), type: "roll", title: `${ABIL_TH[rq.ability]} saving throw`, roll: r, dc: rq.dc, success: ok, extra };
           resultText = `[ผลทอย] ${rq.ability} save: ${r.total} vs DC ${rq.dc} → ${ok ? "สำเร็จ" : "ล้มเหลว"}${extra ? " " + extra : ""}. บรรยายผลต่อ`;
@@ -1943,6 +1962,7 @@ export default function DnDSolo() {
       mapRef.current = mp;
       setC(cc); setScene(sc); setCombat(cb); setLog(finalLog); setHistory(trimmedHist); setMap(mp);
       persist(cc, sc, finalLog, cb, trimmedHist);
+      if (cc.dead) setPhase("dead"); // instant-death (massive damage) via enemy phase / save damage
     } catch (e: any) {
       setLog((prev) => [...prev, entrySystem("⚠️ DM ขัดข้อง: " + e.message + " — ลองส่งใหม่อีกครั้ง")]);
     } finally {
@@ -2098,7 +2118,6 @@ export default function DnDSolo() {
     const heal = computeShortRestHeal(r.total, mod(c.abilities.con));
     const cc: any = {
       ...c,
-      hp: Math.min(c.maxHp, c.hp + heal),
       hitDiceLeft: c.hitDiceLeft - 1,
       secondWindUsed: false,
       actionSurgeUsed: false,
@@ -2106,6 +2125,14 @@ export default function DnDSolo() {
       raging: false,
       lastShortRestHoursAgo: 0, // reset short rest timer
     };
+    // Wave 2: route the Hit-Die heal through the shared adapter so recovering
+    // to >=1 HP also clears deathSaves and strips "unconscious" (previously
+    // healed directly + only reset deathSaves, leaving a stabilized-at-0
+    // player stuck Unconscious forever after a short rest).
+    applyHealTo(cc, heal);
+    // Defensive: at rest and conscious, death saves should be clean regardless
+    // (applyHealTo above already handles the down->revived case).
+    if (cc.hp > 0) cc.deathSaves = { s: 0, f: 0 };
     const entries = [entrySystem(`⛺ พักสั้น (1 ชม.): ทอย Hit Die d${cls.hitDie}=${r.total} → ฟื้น ${heal} HP → ${cc.hp}/${cc.maxHp} · Hit Dice เหลือ ${cc.hitDiceLeft}/${c.level}`)];
     // Advance time by 1 hour via WorldClock adapter
     const newTime = engineAdvanceHours(1);
@@ -2126,8 +2153,6 @@ export default function DnDSolo() {
         entries.push(entrySystem(`📖 Arcane Recovery: คืน spell slot ${recovered.join(", ")}`));
       }
     }
-    // Reset death saves (player is at rest, stable)
-    if (cc.hp > 0) cc.deathSaves = { s: 0, f: 0 };
     // Phase 2: Warlock Pact Magic refreshes on short rest (D&D 2024)
     if (refreshesOnShortRest(cc.cls) && cc.slotsMax && cc.slotsMax.length > 0) {
       cc.slots = restoreSlotsToMax(cc.slotsMax);
@@ -2329,6 +2354,7 @@ export default function DnDSolo() {
       if (ncb && !ncb.playerFirst) { nc = runEnemyPhase(ncb, nc, finalLog, false, combatDeps()); ncb.round += 1; }
       setC(nc); setScene(sc); setLog(finalLog); setCombat(ncb); setHistory(finalHist); setMap(mp);
       persist(nc, sc, finalLog, ncb, finalHist);
+      if (nc.dead) setPhase("dead"); // instant-death (massive damage) on the opening enemy phase
     } catch (e: any) {
       setLog([entrySystem("⚠️ DM ขัดข้อง: " + e.message + " — ลองส่งใหม่อีกครั้ง")]);
     } finally { setThinking(false); }

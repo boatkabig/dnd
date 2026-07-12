@@ -77,6 +77,15 @@ describe("castSRDSpell", () => {
     expect(expired.ac).toBe(12);
   });
 
+  it("healing spell that revives from 0 HP clears deathSaves and removes Unconscious (Wave 2 heal adapter)", async () => {
+    (fetchSpell as any).mockResolvedValue({ index: "cure-wounds", name: "Cure Wounds", level: 1, school: "abjuration", kind: "heal", heal: "1d8", desc: "", concentration: false });
+    const c = { ...cc(), slots: [1, 0], knownSpells: ["cure-wounds"], hp: 0, deathSaves: { s: 2, f: 1 }, conditions: ["unconscious"] };
+    const out = await castSRDSpell("cure-wounds", 1, c, cb(), [], deps);
+    expect(out.cc.hp).toBeGreaterThan(0);
+    expect(out.cc.deathSaves).toEqual({ s: 0, f: 0 });
+    expect(out.cc.conditions).not.toContain("unconscious");
+  });
+
   it.each([
     ["faerie-fire", "Faerie Fire", "dex", "glowing"],
     ["bane", "Bane", "cha", "bane"],

@@ -115,4 +115,15 @@ describe("applyPendingChanges", () => {
     const out = applyPendingChanges([change as any], { id: "player", hp: 5, maxHp: 20 }, { enemies: [] }, () => {});
     expect(out.cc.hp).toBe(8); // 5 + 3
   });
+
+  it("a feature heal from 0 HP clears the dying state (deathSaves + Unconscious) via hpState", () => {
+    const change = { type: "heal", targetId: "player", sourceFeature: "Healing Word",
+      payload: { healFormula: "3d1" } };
+    const downed = { id: "player", hp: 0, maxHp: 20, deathSaves: { s: 1, f: 2 }, conditions: ["unconscious", "prone"] };
+    const out = applyPendingChanges([change as any], downed, { enemies: [] }, () => {});
+    expect(out.cc.hp).toBe(3); // 0 + 3
+    expect(out.cc.deathSaves).toEqual({ s: 0, f: 0 });
+    expect(out.cc.conditions).not.toContain("unconscious");
+    expect(out.cc.conditions).toContain("prone");
+  });
 });
