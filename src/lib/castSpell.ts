@@ -179,12 +179,15 @@ export async function castSRDSpell(spellIndex: string, slotLevel: number, cc: an
       const saveAbil = sp.saveAbility || "dex";
       // Restrained enemies have disadvantage on DEX saves
       let saveAdv: "none" | "disadvantage" = "none";
-      if (saveAbil === "dex" && t.conditions && (t.conditions.includes("restrained") || t.conditions.includes("slow"))) saveAdv = "disadvantage";
+      if (saveAbil === "dex" && t.conditions && t.conditions.includes("restrained")) saveAdv = "disadvantage";
       // D&D 2024 cover (engine/vision.coverBetween): half/three-quarter cover
       // adds its bonus to the defender's DEX saving throws (Fireball etc.).
       const saveCover = saveAbil === "dex" ? coverForTarget(ncb, t.uid) : { bonus: 0, label: "" };
       const banePenalty = t.conditions?.includes("bane") ? d(4) : 0;
-      const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus - banePenalty, saveAdv);
+      // D&D 2024 Slow: -2 penalty to DEX saving throws (the -2 to AC is applied
+      // separately, see the "attack" branch above and weaponAttack.ts).
+      const slowSavePenalty = saveAbil === "dex" && t.conditions?.includes("slow") ? 2 : 0;
+      const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus - banePenalty - slowSavePenalty, saveAdv);
       const failed = sv.total < dc;
       let dmg = failed ? (aoeRoll?.total || 0) : sp.saveSuccess === "half" ? Math.floor((aoeRoll?.total || 0) / 2) : 0;
       // === NEW: apply spell damage type resistance/immunity/vulnerability ===

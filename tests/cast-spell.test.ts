@@ -8,10 +8,19 @@ vi.mock("../src/lib/srd", async (importOriginal) => {
   return { ...actual, fetchSpell: vi.fn() };
 });
 
+// Debuff test below runs the REAL srd.ts fetchSpell (deriveSpellKind +
+// conditionsForSpell/DEBUFF_CONDITIONS), so only the network-facing Open5e
+// fetch is mocked here — that's the raw, un-derived spell shape.
+vi.mock("../src/lib/open5e", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/open5e")>();
+  return { ...actual, getSpell: vi.fn() };
+});
+
 import { castSRDSpell } from "../src/lib/castSpell";
 import { tickBuffs } from "../src/lib/buffs";
 import { computeAC } from "../src/lib/spells";
 import { fetchSpell } from "../src/lib/srd";
+import { getSpell as open5eGetSpell } from "../src/lib/open5e";
 import { runEnemyPhase, type CombatDeps } from "../src/lib/combatResolve";
 import { buildBridgeState } from "../src/lib/engine/combatBridge";
 
@@ -20,7 +29,10 @@ const cc = () => ({ name: "Mage", level: 3, cls: "wizard", slots: [0, 0], knownS
 const cb = () => ({ enemies: [] as any[], enemyPositions: {}, playerPos: { x: 0, y: 0 } });
 
 describe("castSRDSpell", () => {
-  beforeEach(() => (fetchSpell as any).mockReset());
+  beforeEach(() => {
+    (fetchSpell as any).mockReset();
+    (open5eGetSpell as any).mockReset();
+  });
 
   it("fails gracefully when the spell cannot be loaded (ends the turn, no crash)", async () => {
     (fetchSpell as any).mockResolvedValue(null);
@@ -69,8 +81,22 @@ describe("castSRDSpell", () => {
     ["faerie-fire", "Faerie Fire", "dex", "glowing"],
     ["bane", "Bane", "cha", "bane"],
     ["slow", "Slow", "wis", "slow"],
-  ])("applies %s's enemy debuff on a failed save", async (index, name, saveAbility, condition) => {
-    (fetchSpell as any).mockResolvedValue({ index, name, level: 1, school: "enchantment", kind: "save", desc: "", saveAbility, saveSuccess: "none", conditionsAdd: [condition] });
+  ])("classifies %s as a save spell and applies its debuff condition via srd.ts's real classification", async (index, name, saveAbility, condition) => {
+    // Unlike the other tests in this file, run the REAL srd.ts fetchSpell (not a
+    // stub of its output) so this exercises deriveSpellKind + conditionsForSpell/
+    // DEBUFF_CONDITIONS end-to-end. Only the network-facing Open5e fetch is
+    // mocked, with a raw spell shape that has no `kind`/`conditionsAdd` set —
+    // a regression in either derivation would fail this test.
+    const actualSrd = await vi.importActual<typeof import("../src/lib/srd")>("../src/lib/srd");
+    (fetchSpell as any).mockImplementation(actualSrd.fetchSpell);
+    (open5eGetSpell as any).mockResolvedValue({
+      index, name, level: 1, school: "Enchantment", schoolKey: "enchantment",
+      castingTime: "1 action", range: "90 feet",
+      components: { verbal: true, somatic: true, material: false },
+      duration: "1 minute", concentration: true, ritual: false,
+      desc: "", higherLevel: "", classes: [],
+      saveAbility, bonusAction: false, isCantrip: false, edition: "2024",
+    });
     const c = { ...cc(), slots: [1, 0], knownSpells: [index] };
     const combat = {
       ...cb(),
