@@ -183,6 +183,29 @@ describe("migrateLegacySave: v1 → v6", () => {
     expect(migrateLegacySave(null as any)).toBeNull();
     expect(migrateLegacySave(undefined as any)).toBeUndefined();
   });
+
+  it("Wave 2 review finding 1: a native v6 save missing storyNotes is NOT rescued by migration — the `if (v<6)` guard never fires when the save already carries version:6", () => {
+    const nativeV6: any = {
+      version: 6,
+      c: { name: "Vex", buffs: [] },
+      scene: "keep",
+      log: [],
+      combat: null,
+      map: { nodes: {}, edges: [], current: null },
+      history: [],
+      gameTime: { day: 1, hour: 8 },
+      quests: [],
+      campaignMemory: { facts: [], sessionNumber: 1, version: 1 },
+      sessionZeroConfig: DEFAULT_SESSION_ZERO,
+      // NOTE: no storyNotes — this is exactly what saveGame() persists when the
+      // app hasn't been taught to write storyNotes yet, since it stamps version:6
+      // onto every payload regardless of which fields are present.
+    };
+    const out = migrateLegacySave(nativeV6);
+    expect(out.version).toBe(6);
+    // The migration guard cannot rescue this: it only backfills when v<6.
+    expect(out.storyNotes).toBeUndefined();
+  });
 });
 
 describe("saveGame / loadGame round-trip", () => {
