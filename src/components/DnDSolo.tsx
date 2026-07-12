@@ -2,13 +2,13 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
-  ABILS, ABIL_TH, mod, profByLevel, XP_THRESHOLDS, SKILLS, CONDITIONS_TH,
-  DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
-  BACKGROUNDS, RACES, CLASSES, FEATURES, WEAPONS, weaponByName, ARMOR,
-  MAGIC_ITEMS, CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
-  DIRV, MAP_ICON, wornHas,
+  ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
+  DISADV_CONDS, CHECK_DISADV_CONDS, INCAPACITATING_CONDS,
+  BACKGROUNDS, RACES, CLASSES, FEATURES,
+  CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
+  wornHas,
   applyDamageModifiers, passivePerception, rateEncounterDifficulty,
-  gameTimeToString, getLightLevelForHour, grappleCheck, canDualWield,
+  gameTimeToString, getLightLevelForHour, grappleCheck,
   ALIGNMENTS, LANGUAGES, ORIGIN_FEATS, WEAPON_MASTERIES,
   type Quest,
 } from "@/lib/gameData";
@@ -23,8 +23,8 @@ import {
   initWorldClockFromLegacy, worldClockToLegacy, getWorldClock, advanceHours as engineAdvanceHours,
   fetchMonsterForCombat, type LegacySave,
   emitAttack, emitHit, emitDamageDealt, emitDamageTaken, emitHeal, emitKill, emitDeath,
-  emitTurnStart, emitTurnEnd, emitCastSpell, emitConditionApplied,
-  queryFeatureTriggers, getTriggeredFeatures, type PendingStateChange,
+  emitTurnStart, emitTurnEnd, emitCastSpell,
+  queryFeatureTriggers, getTriggeredFeatures,
 } from "@/lib/engineAdapters";
 // AI DM Layer (Domain 31-35)
 import {
@@ -33,7 +33,7 @@ import {
 } from "@/lib/dialogue";
 import {
   calculateDifficulty, getDifficultyThresholds, suggestedCR,
-  crToXP, calculateReward, rollRewardItems, type DifficultyLevel,
+  crToXP, type DifficultyLevel,
 } from "@/lib/encounter";
 import {
   createStoryArc, createScene, enterScene, completeScene, updatePacingAfterScene,
@@ -44,7 +44,7 @@ import {
   assessRisk, type PlanningContext, type Goal, type SelectedAction,
 } from "@/lib/planning";
 import {
-  createContentRegistry, importContentJSON, exportByType, listContentByType,
+  createContentRegistry,
   type ContentRegistry, type ContentType,
 } from "@/lib/content";
 // Domain 36: Dungeon Blueprint System
@@ -61,19 +61,45 @@ import {
   generateProceduralDungeon, type ProceduralDungeonParams,
 } from "@/lib/dungeonTables";
 // Phase 1: DM response schema validation
-import { validateDMResponse, HP_DELTA_CAP, type DMResponse } from "@/lib/dmSchema";
+import { deferConsequenceUpdates, HP_DELTA_CAP } from "@/lib/dmSchema";
+import { buildSystemPrompt } from "@/lib/dmPrompt";
+import { callDM } from "@/lib/dmClient";
+import {
+  rollFormula, rollD20, migrateChar, getMelee, getRanged, hasFeature,
+  skillMod, saveMod, attackMod, hasDisadv, hasCheckDisadv, isIncapacitated,
+  attackerHasAdvVs, spellLegalityMessageTh,
+  coverForTarget, sneakDice, critThreshold,
+} from "@/lib/characterStats";
+import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
+import { hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
+import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
+import { gainXP, applyFeatGrantsToChar } from "@/lib/leveling";
+import { runSidekickAssist, resolveDeathSave, checkCombatEnd, runEnemyPhase, applyPendingChanges } from "@/lib/combatResolve";
+import SessionZeroModal from "@/components/game/SessionZeroModal";
+import OracleModal from "@/components/game/OracleModal";
+import QuestJournalModal from "@/components/game/QuestJournalModal";
+import AsiModal from "@/components/game/AsiModal";
+import SubclassModal from "@/components/game/SubclassModal";
+import ReprepareModal from "@/components/game/ReprepareModal";
+import CompanionModal from "@/components/game/CompanionModal";
+import ShopModal from "@/components/game/ShopModal";
+import AiDmHelperModal from "@/components/game/AiDmHelperModal";
+import MapModal from "@/components/game/MapModal";
+import CombatOverlay from "@/components/game/CombatOverlay";
+import { castSRDSpell } from "@/lib/castSpell";
+import { resolveWeaponAttack } from "@/lib/weaponAttack";
+import ContentManagerModal from "@/components/game/ContentManagerModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
 import {
   hasClassFeature, featAttackBonus, featDamageBonus,
-  getAvailableSubclasses, needsSubclassChoice, getSubclassById,
-  powerAttackModifiers, hasPowerAttackFeat, applyFeatGrants,
+  needsSubclassChoice, getSubclassById,
+  powerAttackModifiers,
 } from "@/lib/engine/progression";
 import { getSpellcastingRule, canReprepareOnLongRest, reprepareSpells } from "@/lib/magic";
 import { computeLongRestRecovery, computeShortRestHeal, restoreSlotsToMax } from "@/lib/engine/rest";
 import {
-  buildSidekick, sidekickTurnIntent, resolveSidekickAttack,
   SIDEKICK_BASES, type SidekickClass,
 } from "@/lib/engine/sidekick";
 // 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
@@ -84,16 +110,15 @@ import CharacterSheet from "@/components/game/CharacterSheet";
 import DungeonView from "@/components/game/DungeonView";
 import DMChat from "@/components/game/DMChat";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
-import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
-import { buildBridgeState, applyBridgeDamage, planMultiattackSequence, getCombatView, moveBy, setMovement, endTurn } from "@/lib/engine/combatBridge";
-import { applyDeathSaveRoll, resolveContestedAction } from "@/lib/engine/combat";
+import { resolveBridgeAttack, toDamageType } from "@/lib/bridgeAttack";
+import { buildBridgeState, planMultiattackSequence, getCombatView, moveBy, setMovement } from "@/lib/engine/combatBridge";
+import { resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName, toSpellDisplayName } from "@/lib/engine/effects";
-import { runEnemyTurn, type EnemyAIDeps } from "@/lib/engine/enemyAI";
 // Phase 3: spell-legality (2024) + vision/LOS wiring — engine-owned rules
 import { canCast2024, type SpellLegalityReason } from "@/lib/engine/magic";
 import { coverBetween, attackVisibilityModifier, type Obstacle } from "@/lib/engine/vision";
 import {
-  askOracle, rollRandomEvent, LIKELIHOOD_ORDER,
+  askOracle, rollRandomEvent,
   type Likelihood, type OracleResult, type RandomEvent,
 } from "@/lib/engine/oracle";
 import {
@@ -102,52 +127,13 @@ import {
 } from "@/lib/engine/campaignMemory";
 import {
   createDefaultSessionZero, normalizeSessionZero, summarizeSessionZero,
-  setTone, setPillars, addLine, addVeil, removeLine, removeVeil, setXCard,
-  setStartingSituation, hasStartingSituation, isDefaultSessionZero, pillarPercentages,
-  TONE_ORDER, type SessionZeroConfig, type CampaignTone,
+  hasStartingSituation, isDefaultSessionZero, type SessionZeroConfig,
 } from "@/lib/engine/sessionZero";
 import { resolveExplorationTurn } from "@/lib/engine/exploration";
-import { sellPrice as sellPriceOf, bargainOutcome } from "@/lib/engine/economy";
+import { bargainOutcome } from "@/lib/engine/economy";
 // Shared with game/* components (CharacterCreation, CharacterSheet, AdventureLog) —
 // lives in lib/ to avoid a circular import back into this file.
 import { d, makeCharacter, SRD_OK, setSrdOk } from "@/lib/dndSoloShared";
-
-/**
- * Enemy-HP owner seam (combat-state migration Stage A+B). The persistent
- * `cb.bridge` (a CombatBridgeState) is the SINGLE owner of enemy HP; every
- * enemy-damage site routes its already-final damage amount through the engine
- * via these helpers and reads the result back as the enemy blob's projected
- * `hpNow`. HP is never computed inline anymore — even the no-bridge fallback
- * (legacy saves that predate this field) derives newHP through a throwaway
- * one-combatant bridge, so there is exactly ONE source of truth.
- */
-function applyEnemyDamage(
-  bridge: any,
-  uid: string,
-  amount: number,
-  fallbackHp: number,
-  fallbackAc: number = 10,
-  fallbackName: string = "",
-): { bridge: any; hp: number } {
-  if (bridge) {
-    const r = applyBridgeDamage(bridge, uid, amount);
-    if (r.found) return { bridge: r.state, hp: r.newHP };
-  }
-  // Degraded path (no persistent bridge / enemy absent): derive via a throwaway
-  // engine bridge so the value is still bridge-computed, never inline arithmetic.
-  const tmp = buildBridgeState([{ id: uid, name: fallbackName, ac: fallbackAc, hp: fallbackHp, maxHp: fallbackHp, isPlayer: false }]);
-  const rr = applyBridgeDamage(tmp, uid, amount);
-  return { bridge, hp: rr.newHP };
-}
-
-/** Mutating convenience: apply damage to `target` via `cbLike.bridge`, sync the
- *  projected `hpNow`, and return the new HP. The ONLY place `hpNow` is assigned. */
-function hitEnemy(cbLike: any, target: any, amount: number): number {
-  const dd = applyEnemyDamage(cbLike?.bridge, target.uid, amount, target.hpNow, target.ac, target.th);
-  if (cbLike) cbLike.bridge = dd.bridge;
-  target.hpNow = dd.hp;
-  return dd.hp;
-}
 
 /* ============================================================
    D&D 5e SOLO — Full SRD Edition
@@ -162,548 +148,6 @@ function hitEnemy(cbLike: any, target: any, amount: number): number {
    - Classes: all 12 SRD classes.
    - Races: all 9+ SRD species.
    ============================================================ */
-
-export function rollFormula(formula: string) {
-  const m = String(formula).replace(/\s/g, "").match(/^(\d*)d(\d+)([+-]\d+)?$/i);
-  if (!m) return { total: 0, rolls: [] as number[], mod: 0, formula };
-  const n = parseInt(m[1] || "1", 10);
-  const sides = parseInt(m[2], 10);
-  const modv = m[3] ? parseInt(m[3], 10) : 0;
-  const rolls: number[] = [];
-  for (let i = 0; i < n; i++) rolls.push(d(sides));
-  return { total: rolls.reduce((a, b) => a + b, 0) + modv, rolls, mod: modv, formula };
-}
-
-function rollD20(modv: number, adv: "none" | "advantage" | "disadvantage" = "none") {
-  const a = d(20), b = d(20);
-  let die = a;
-  if (adv === "advantage") die = Math.max(a, b);
-  if (adv === "disadvantage") die = Math.min(a, b);
-  return { die, other: adv !== "none" ? (die === a ? b : a) : null, mod: modv, total: die + modv, adv };
-}
-
-function migrateChar(o: any) {
-  const cls = CLASSES[o.cls];
-  const n = { ...o };
-  if (typeof n.weapon !== "string" || !WEAPONS[n.weapon]) n.weapon = cls.weapon;
-  if (n.ranged === undefined) n.ranged = cls.ranged || null;
-  if (n.hitDiceLeft === undefined) n.hitDiceLeft = n.level;
-  if (!Array.isArray(n.extraSkills)) n.extraSkills = [];
-  // Expertise field migration — old saves may have `expertiseSkills` (legacy) or no field
-  if (!Array.isArray(n.expertise)) {
-    n.expertise = Array.isArray(n.expertiseSkills) ? n.expertiseSkills : [];
-  }
-  if (n.pendingExpertise === undefined) n.pendingExpertise = 0;
-  if (n.lastLongRestHoursAgo === undefined) n.lastLongRestHoursAgo = 99;
-  if (n.lastShortRestHoursAgo === undefined) n.lastShortRestHoursAgo = 99;
-  if (n.background === undefined) n.background = null;
-  if (n.actionSurgeUsed === undefined) n.actionSurgeUsed = false;
-  if (n.arcaneRecoveryUsed === undefined) n.arcaneRecoveryUsed = false;
-  if (n.preserveLifeUsed === undefined) n.preserveLifeUsed = false;
-  if (n.pendingAsi === undefined) n.pendingAsi = n.level >= 4 ? 1 : 0;
-  if (!Array.isArray(n.worn)) n.worn = [];
-  if (n.venomUsed === undefined) n.venomUsed = false;
-  if (n.rageUsed === undefined) n.rageUsed = 0;
-  if (n.kiUsed === undefined) n.kiUsed = 0;
-  if (!Array.isArray(n.buffs)) n.buffs = [];
-  if (!Array.isArray(n.feats)) n.feats = [];
-  if (n.layOnHandsPool === undefined) n.layOnHandsPool = (n.level || 1) * 5;
-  if (n.bardicInspirationUsed === undefined) n.bardicInspirationUsed = 0;
-  if (n.sorceryPoints === undefined) n.sorceryPoints = n.level || 1;
-  if (!Array.isArray(n.knownSpells)) n.knownSpells = [];
-  // Task #14: back-fill the spellbook pool for saves that predate it (prepared
-  // casters). Superset must at least contain the currently-prepared spells.
-  if (!Array.isArray(n.spellbook)) n.spellbook = [...n.knownSpells];
-  else for (const s of n.knownSpells) if (!n.spellbook.includes(s)) n.spellbook.push(s);
-  if (!Array.isArray(n.featGrantsApplied)) n.featGrantsApplied = [];
-  if (!Array.isArray(n.saveProficiencies)) n.saveProficiencies = [];
-  if (n.slots === undefined || n.slotsMax === undefined) {
-    const t = cls.caster ? getSlotTable(n.cls, n.level) : [];
-    n.slots = t.slice(); n.slotsMax = t.slice();
-  }
-  n.ac = computeAC(n);
-  return n;
-}
-
-function getMelee(c: any) { return WEAPONS[c.weapon] || WEAPONS[CLASSES[c.cls].weapon]; }
-function getRanged(c: any) { return c.ranged ? WEAPONS[c.ranged] : null; }
-
-// Feature check — must be defined before skillMod (which uses it for Expertise)
-// Phase 4: delegate to the progression engine so the check covers the full
-// Lv.1-20 class table PLUS the chosen subclass's features (not just Lv.1-5).
-export function hasFeature(c: any, key: string) {
-  return hasClassFeature(c.cls, c.level, c.subclass, key);
-}
-
-export function skillMod(c: any, skillKey: string) {
-  const s = SKILLS[skillKey];
-  if (!s) return mod(c.abilities.dex);
-  const isProf = CLASSES[c.cls].skills.includes(skillKey) || (c.extraSkills || []).includes(skillKey);
-  const isExpertise = (c.expertise || []).includes(skillKey);
-  const pb = profByLevel(c.level);
-  // D&D 5e/2024 Expertise: PB × 2 (double proficiency, NOT PB + PB)
-  // Source: roll20.net/compendium/dnd5e/Ability%20Scores#content
-  //   "Expertise doubles the proficiency bonus for chosen skills."
-  // Skill modifier = ability mod + (PB × 2 if Expertise) + (PB if proficient) + 0 if neither
-  let profBonus = 0;
-  if (isExpertise) profBonus = pb * 2;
-  else if (isProf) profBonus = pb;
-  // D&D 5e Jack of All Trades (Bard Lv.2): half PB on non-proficient ability checks
-  // Source: PHB "Jack of All Trades: ...you can add half your proficiency bonus...to any ability check you make that doesn't already include your proficiency bonus."
-  if (!isProf && hasFeature(c, "jack_of_all_trades")) profBonus = Math.floor(pb / 2);
-  let m0 = mod(c.abilities[s.abil]) + profBonus;
-  // Magic item bonuses (e.g., Gloves of Thievery +5 Sleight of Hand)
-  if (skillKey === "sleight_of_hand" && wornHas(c, "sleight5")) m0 += 5;
-  // D&D 5e/2024 Exhaustion: -2/level to ALL D20 Tests (includes skill checks)
-  // Source: D&D Beyond Free Rules 2024 — "Exhaustion [Condition]": "When you make a D20 Test, the roll is reduced by 2 times your Exhaustion level."
-  m0 -= exhaustionPenalty(c);
-  return m0;
-}
-export function saveMod(c: any, abil: string) {
-  const prof = CLASSES[c.cls].saves.includes(abil) ? profByLevel(c.level) : 0;
-  let m0 = mod(c.abilities[abil]) + prof;
-  // Magic item bonuses (Ring of Protection +1 saves, Cloak of Protection +1 saves)
-  (c.worn || []).forEach((n: string) => { const mi = MAGIC_ITEMS[n]; if (mi && mi.savePlus) m0 += mi.savePlus; });
-  // D&D 5e/2024 Exhaustion: -2/level to ALL D20 Tests (includes saving throws)
-  m0 -= exhaustionPenalty(c);
-  return m0;
-}
-export function attackMod(c: any, w: any) {
-  const weap = w || getMelee(c);
-  let m0 = mod(c.abilities[weap.abil]) + profByLevel(c.level) + (weap.plus || 0);
-  // Phase 4: Fighting Style — Archery grants +2 to ranged weapon attack rolls.
-  m0 += featAttackBonus(c.feats || [], weap);
-  // D&D 5e/2024 Exhaustion: -2/level to ALL D20 Tests (includes attack rolls)
-  m0 -= exhaustionPenalty(c);
-  return m0;
-}
-function hasDisadv(c: any) {
-  return c.conditions.some((x: string) => DISADV_CONDS.includes(x));
-}
-function hasCheckDisadv(c: any) {
-  return c.conditions.some((x: string) => CHECK_DISADV_CONDS.includes(x));
-}
-function isIncapacitated(c: any) {
-  return c.conditions.some((x: string) => INCAPACITATING_CONDS.includes(x));
-}
-// D&D 2024 Exhaustion: -2 per level to ALL D20 Tests (attack rolls, saving throws, ability checks)
-// Level 6 = death
-function exhaustionPenalty(c: any): number {
-  const level = c.exhaustionLevel || 0;
-  return level > 0 ? level * 2 : 0;
-}
-// Apply exhaustion penalty to a d20 roll total
-function applyExhaustion(c: any, rollTotal: number): number {
-  return rollTotal - exhaustionPenalty(c);
-}
-// Enemy-side condition effects: returns disadvantage-on-attack flags
-function enemyHasAttackDisadv(e: any) {
-  const conds = e.conditions || [];
-  // Prone: disadvantage on attack rolls while prone
-  // Restrained: disadvantage on attack rolls + DEX saves
-  // Blinded: disadvantage on attacks (can't see target)
-  return conds.some((c: string) => ["prone", "restrained", "blinded", "frightened", "poisoned"].includes(c));
-}
-// Enemy-side AC penalty from conditions
-function enemyAcPenalty(e: any): number {
-  const conds = e.conditions || [];
-  let pen = 0;
-  if (conds.includes("restrained")) pen += 0; // restrained doesn't change AC, but attackers get advantage
-  if (conds.includes("prone")) pen += 0;       // melee advantage / ranged disadvantage handled separately
-  return pen;
-}
-// Attackers get advantage vs these conditions on the target
-function attackerHasAdvVs(e: any): boolean {
-  const conds = e.conditions || [];
-  return conds.some((c: string) => ["restrained", "blinded", "paralyzed", "petrified", "prone", "stunned", "unconscious", "grappled"].includes(c));
-}
-// Thai wording for an illegal cast blocked by engine/magic.canCast2024.
-// (The engine owns the RULE + returns a reason code; the UI owns the wording.)
-function spellLegalityMessageTh(spellName: string, spellLevel: number, slotLevel: number, reason: SpellLegalityReason): string {
-  switch (reason) {
-    case "not_known":
-      return `⛔ ร่าย ${spellName} ไม่ได้ — ยังไม่ได้เรียน/เตรียมเวทนี้`;
-    case "below_spell_level":
-      return `⛔ ร่าย ${spellName} ไม่ได้ — เวทระดับ ${spellLevel} ต้องใช้ slot ระดับ ${spellLevel} ขึ้นไป (เลือก slot ${slotLevel})`;
-    case "slot_out_of_range":
-      return `⛔ ร่าย ${spellName} ไม่ได้ — ระดับ slot ${slotLevel} ไม่ถูกต้อง`;
-    case "no_slot":
-      return `⛔ ร่าย ${spellName} ไม่ได้ — ไม่มี spell slot ระดับ ${slotLevel} เหลือ (ไม่เสีย slot)`;
-    default:
-      return `⛔ ร่าย ${spellName} ไม่ได้`;
-  }
-}
-
-// D&D 2024 cover for a player→enemy attack, computed through engine/vision.coverBetween.
-// Other LIVING enemies lying on the line grant half cover (a creature gives half
-// cover, RAW). Creatures never give total cover, so the target is always targetable.
-// Returns the AC/DEX-save bonus (0/2/5) the cover confers on the defender.
-function coverForTarget(cb: any, targetUid: string): { bonus: number; label: string } {
-  if (!cb?.playerPos || !cb?.enemyPositions?.[targetUid]) return { bonus: 0, label: "" };
-  const obstacles: Obstacle[] = [];
-  for (const other of cb.enemies || []) {
-    if (other.uid === targetUid || other.hpNow <= 0) continue;
-    const p = cb.enemyPositions?.[other.uid];
-    if (p) obstacles.push({ pos: p, cover: "half" });
-  }
-  const res = coverBetween(cb.playerPos, cb.enemyPositions[targetUid], obstacles);
-  if (!isFinite(res.acBonus) || res.acBonus <= 0) return { bonus: 0, label: "" };
-  const label = res.level === "half" ? "half cover" : res.level === "threeQuarters" ? "three-quarter cover" : "";
-  return { bonus: res.acBonus, label };
-}
-
-export function sneakDice(level: number) { return Math.ceil(level / 2); }
-// critThreshold moved below hasFeature definition (which it depends on)
-// Check if character has any concentration buff active.
-// Which buff names require concentration is owned by the engine
-// (engine/effects.isConcentrationSpellName / CONCENTRATION_SPELL_NAMES).
-function hasConcentration(cc: any): boolean {
-  return (cc.buffs || []).some((b: any) => isConcentrationSpellName(b.name));
-}
-// Get the highest-priority concentration buff (the one to break first)
-function getActiveConcentrationBuff(cc: any): any | null {
-  return (cc.buffs || []).find((b: any) => isConcentrationSpellName(b.name)) || null;
-}
-function critThreshold(c: any) {
-  // Champion: Superior Critical (Lv.15) crits on 18-20; Improved Critical (Lv.3) on 19-20.
-  if (hasFeature(c, "superior_critical")) return 18;
-  return hasFeature(c, "improved_critical") ? 19 : 20;
-}
-
-/* ---------------- MAP ENGINE ---------------- */
-function emptyMap() { return { nodes: {} as Record<string, any>, edges: [] as [string, string][], current: null as string | null }; }
-
-function applyMapUpdate(mu: any, mp: any, pushEntry?: (t: string) => void) {
-  if (!mu) return mp;
-  const m = mp ? { nodes: { ...mp.nodes }, edges: mp.edges.slice(), current: mp.current } : emptyMap();
-  const al = mu.add_location;
-  if (al && al.id) {
-    if (!m.nodes[al.id]) {
-      let x = 0, y = 0;
-      const fromId = al.from && m.nodes[al.from] ? al.from : m.current;
-      if (fromId && m.nodes[fromId]) {
-        const v = DIRV[al.dir] || [1, 0];
-        x = m.nodes[fromId].x + v[0];
-        y = m.nodes[fromId].y + v[1];
-        let guard = 0;
-        while (Object.values(m.nodes).some((n: any) => n.x === x && n.y === y) && guard < 10) { x += 1; guard += 1; }
-        m.edges.push([fromId, al.id]);
-      }
-      m.nodes[al.id] = { name: al.name || al.id, type: MAP_ICON[al.type] ? al.type : "place", x, y };
-      if (pushEntry) pushEntry(`🗺️ Discovered new location: ${al.name || al.id}`);
-    } else if (m.current && m.current !== al.id && !m.edges.some(([a, b]) => (a === m.current && b === al.id) || (a === al.id && b === m.current))) {
-      m.edges.push([m.current, al.id]);
-    }
-  }
-  if (mu.connect && Array.isArray(mu.connect) && mu.connect.length === 2 && m.nodes[mu.connect[0]] && m.nodes[mu.connect[1]]) {
-    if (!m.edges.some(([a, b]) => (a === mu.connect[0] && b === mu.connect[1]) || (a === mu.connect[1] && b === mu.connect[0]))) m.edges.push([mu.connect[0], mu.connect[1]]);
-  }
-  if (mu.move_to && m.nodes[mu.move_to]) m.current = mu.move_to;
-  return m;
-}
-
-/* ---------------- DM (AI via /api/dm) ---------------- */
-function buildSystemPrompt(c: any, pacing?: { currentTension: string; recommendedNextTension: string; scenesSinceRest: number; scenesSinceCombat: number; scenesSinceRevelation: number; pacingNotes: string[]; arcPhase?: string } | null, memoryBrief?: string, sessionZeroBrief?: string) {
-  // Phase 5: feed persisted campaign memory so the DM keeps continuity across sessions.
-  const memoryDirective = memoryBrief && memoryBrief.trim()
-    ? `\n\n🧠 CAMPAIGN MEMORY (ความต่อเนื่องข้ามเซสชัน — ใช้อ้างอิงเพื่อรักษาความสอดคล้อง ห้ามขัดแย้งกับข้อมูลนี้):\n${memoryBrief}`
-    : "";
-  // Task #16: feed the player-authored Session-Zero charter (tone, safety, pillars,
-  // starting situation). Empty for a default/skipped charter (summarizeSessionZero → "").
-  const sessionZeroDirective = sessionZeroBrief && sessionZeroBrief.trim()
-    ? `\n\n${sessionZeroBrief}`
-    : "";
-  const cls = CLASSES[c.cls];
-  const maxSpellLv = cls.caster ? maxSpellLevel(c.cls, c.level) : 0;
-  const knownSpellsCount = (c.knownSpells || []).length;
-  // Phase 1 fix: inject pacing directive directly into system prompt (was: side-channel via log recap only)
-  const pacingDirective = pacing ? `\n\n📖 NARRATIVE PACING (engine-analyzed):
-- Arc phase: ${pacing.arcPhase || "unknown"}
-- Current tension: ${pacing.currentTension}
-- Recommended next tension: ${pacing.recommendedNextTension}
-- Scenes since rest: ${pacing.scenesSinceRest} · since combat: ${pacing.scenesSinceCombat} · since revelation: ${pacing.scenesSinceRevelation}
-${pacing.pacingNotes.length > 0 ? `- Pacing notes: ${pacing.pacingNotes.join(" · ")}` : ""}
-→ ปรับ narration ตาม pacing: ถ้า recommendedNextTension="calm" ให้บรรยายฉากสงบ; ถ้า "high" หรือ "climax" ให้เร่งเดิน; ถ้า scenesSinceRest >= 4 แนะนำให้พัก` : "";
-  return `คุณคือ Dungeon Master มืออาชีพสำหรับแคมเปญ D&D 5e เดี่ยว (solo) โทน dark fantasy ผจญภัยสนุก
-ภาษา: บรรยายเป็นภาษาไทยทั้งหมด ผสมศัพท์ D&D อังกฤษเมื่อจำเป็น (เช่น Stealth check, Initiative, tavern, Fire Bolt, AC, HP)
-
-engine เข้าถึง D&D 5e/2024 SRD ผ่าน Open5e v2 (api.open5e.com/v2) เป็นแหล่งข้อมูลเดียว — 2024 SRD 5.2 + 2014 SRD 5.1 ครบถ้วน:
-   - 1,955 spells, 3,541 creatures, 2,319 magic items, 151 classes, 63 species
-   - 2024 edition filter: ?document__gamesystem__key=5e-2024 (ใช้โดย default)
-   - Federated search: /api/open5e?search=<query> — ค้นหาข้ามทุก resource (spells + monsters + items + classes + ฯลฯ)
-   - Endpoints: /api/open5e?spell=<slug> | ?creature=<slug> | ?magicitem=<slug> | ?class=<slug> | ?list=spells|creatures|magicitems|classes|species|backgrounds|feats|conditions|weapons|armor
-
-คุณใช้ทรัพยากรเหล่านี้ได้ทั้งหมด:
-- เวทมนตร์ 2024 SRD 339 อัน + 2014 SRD 319 อัน ใช้ index แบบ kebab-case (เช่น fire-bolt, magic-missile, fireball, healing-word, hold-person, misty-step, banishment, wish) — engine จะดึง stat block จริง (ดาเมจ, save, scaling, AoE, conditions)
-- มอนสเตอร์ 2024 SRD 331 ตัว + 2014 SRD 334 ตัว ใช้ index แบบ kebab-case (เช่น goblin, owlbear, lich, ancient-red-dragon, tarrasque, skeleton, vampire) — engine ดึง AC/HP/attacks/saves/CR/legendary actions จริง
-- สภาวะ (conditions) 15 อย่าง: ${Object.keys(CONDITIONS_TH).join(", ")}
-- คลาส 12 อาชีพ, เผ่าพันธุ์ 9+ เผ่า, ภูมิหลัง 12+ แบบ
-- อุปกรณ์ SRD ทั้งหมด: อาวุธ 35+, เกราะ 11 ชนิด, ของใช้, เครื่องมือ
-- magic items SRD ทั้งหมด (cloak, ring, อาวุธ +1/+2/+3, scroll, potion) — 2,319 รายการ
-- feat SRD ทั้งหมด (เช่น grappler, keen-mind, lucky, war-caster) — มอบผ่าน items_add "Feat: <ชื่อ>"
-- trait SRD (ความสามารถเผ่าพันธุ์ เช่น darkvision, fey-ancestry)
-- damage types, magic schools, languages, proficiencies, weapon properties ทั้งหมด
-
-เคล็ดลับการใช้ engine:
-- ถ้าต้องการมอนสเตอร์ที่ไม่อยู่ใน BESTIARY: ใช้ index ใดก็ได้จาก Open5e — engine จะดึง stat block จริง (รวม abilities, saves, traits, legendary actions, resistances)
-- ถ้าต้องการเวทที่ไม่ได้อยู่ใน knownSpells: ใช้ spell index ใดก็ได้ — engine จะ resolve damage/save/AoE อัตโนมัติ
-- ถ้าต้องการค้นหา: ใช้ /api/open5e?search=<query> (เช่น "fire damage level 3" → จะเจอ Fireball, Fireball-like spells, etc.)
-
-กฎเหล็ก (สำคัญที่สุด — D&D 2024):
-1. ห้ามตัดสินผลเต๋า ห้ามกำหนดตัวเลขดาเมจ/HP เอง — engine เป็นคนทอยและคำนวณทั้งหมด
-1.1 สำคัญมาก: ถ้าผู้เล่นประกาศโจมตี/ร่ายเวท ห้ามบรรยายว่า "โดน" หรือเกิดดาเมจ (ยังไม่ได้ทอย!) ให้บรรยายแค่ช่วงจังหวะที่กำลังจะลงมือ แล้วสั่ง start_combat (D&D 2024: "surprise": true = ศัตรูทอย Initiative เสียเปรียบ ไม่ใช่ข้ามเทิร์น) — การโจมตีนัดแรกจะเกิดผ่านปุ่มใน combat
-1.2 ห้ามใช้คำ meta เช่น "engine", "ระบบ", "คำนวณ" ใน narration — บรรยายอยู่ในโลกแฟนตาซีเท่านั้น
-2. action ที่มีความเสี่ยง สั่ง check ผ่าน "requires" แล้วรอผลทอย
-3. การต่อสู้ ใช้ "start_combat" พร้อม monster index — มอนสเตอร์ใน engine: ${Object.keys(BESTIARY).join(", ")} หรือใช้ monster index ใดก็ได้จาก Open5e (kebab-case เช่น goblin, owlbear, lich, ancient-red-dragon) เลือกความยากตาม CR รวม ~ level/4 ถึง level/2 ของผู้เล่นเดี่ยว
-4. การเปลี่ยนแปลงสถานะ (ทอง/ไอเทม/XP/conditions/buffs) ผ่าน "updates" เท่านั้น — conditions_add/remove ต้องเป็น array ของ id lowercase เหล่านี้เท่านั้น (ห้ามใช้คำอื่น/พหูพจน์/ภาษาไทย): ${Object.keys(CONDITIONS_TH).join(", ")}
-5. บรรยายกระชับ 2-5 ประโยค จบด้วยสถานการณ์ที่ชวนตัดสินใจ
-6. DC แนะนำ (D&D 2024 Influence): NPC "Hesitant" DC = max(15, INT score ของ NPC); NPC ยินยอมอยู่แล้ว = auto-success; ขัดกับนิสัย NPC = auto-fail
-7. อย่าใจดีเกินไป โลกมีอันตรายจริง — ให้ XP/รางวัลเมื่อสำเร็จ (~50-200 XP ต่อเหตุการณ์สำคัญ)
-
-D&D 2024 Rules Reference (engine implement แล้วทั้งหมด):
-- Critical Hit: double ALL damage dice (weapon + Sneak Attack + Smite + Hex + Hunter's Mark)
-- Weapon Mastery: 8 ชนิด (Cleave, Graze, Nick, Push, Sap, Slow, Topple, Vex) — Flex dropped
-- Surprise: ทอย Initiative เสียเปรียบ (ไม่ข้ามเทิร์น)
-- Grapple/Shove: target ทอย STR/DEX save (เลือกเอง) vs DC = 8 + STR mod + PB
-- Concentration DC: max(10, damage/2) capped at 30
-- Long Rest: คืน HP เต็ม + คืน Hit Dice ทั้งหมด + ลด exhaustion 1 + รอ 16 ชม. ก่อน Long Rest ใหม่
-- Short Rest: 1 ชม. ใช้ Hit Dice — combat/spell/damage ระหว่างพัก = ยกเลิก
-- Exhaustion: -2/level ต่อ D20 Test + -5 ft/level Speed (Lv6 = ตาย)
-- Encounter Difficulty: 3 tiers — Low / Moderate / High
-- Encounter XP: flat XP (ไม่มี multiplier)
-- Healing Word: 2d4 + spellcasting mod | Cure Wounds: 2d8 + spellcasting mod
-- Counterspell: target ทอย CON save vs spell save DC
-- Origin Feats: 10 ตัว (Alert, Crafter, Healer, Lucky, Magic Initiate, Musician, Savage Attacker, Skilled, Tavern Brawler, Tough) — ใช้ PB
-- Species: ไม่ให้ ability score bonus (ย้ายไป Background)
-- Tool + Skill = Advantage (ถ้ามี proficiency ทั้งคู่)
-
-แผนที่โลก (สำคัญมาก — สร้างล่วงหน้าตอนเริ่มแคมเปญ):
-- ตอนเริ่มแคมเปญ คุณต้องสร้างแผนที่โลกที่สมบูรณ์ มีหลายสถานที่ให้ผู้เล่นสำรวจ ห้ามเปิดทีละที่
-- ใช้ฟิลด์ "world_map" (array ของ location) ใน response แรก เพื่อกำหนดโลกทั้งหมด แต่ละ location: { id, name, type, dir, from, description }
-- สร้างโลกที่เชื่อมโยงกัน: เมืองเริ่มต้น (hub) + สถานที่รอบๆ 3-5 แห่ง (ร้านค้า, โรงเตี๊ยม, วัด) + พื้นที่ป่า/ถนน 2-3 แห่ง + ดันเจี้ยน/ซากปรักหักพัง/ถ้ำ 2-3 แห่ง แตกออกไป
-- id ต้องเป็น snake_case ภาษาอังกฤษคงที่ (เช่น "phandalin", "stonehill_inn", "creeping_woods", "wave_echo_cave")
-- type: town (เมือง), building (ร้าน/โรงเตี๊ยม/วัด), room (ห้องในดันเจี้ยน), dungeon (ทางเข้าดันเจี้ยน), wilderness (ป่า/ถนน/ธรรมชาติ)
-- "dir" คือทิศจาก "from" (n/s/e/w/ne/nw/se/sw) เมืองเริ่มต้นมี from: null
-- หลังจาก world_map ผู้เล่นเห็นเฉพาะสถานที่ที่ค้นพบแล้ว (fog of war) แต่โครงสร้างโลกมีอยู่ engine ติดตามว่าผู้เล่นเคยไปที่ไหน
-- response ถัดไป ใช้ map_update เพื่อเพิ่มสถานที่ใหม่ที่ค้นพบ (เช่น ห้องลับในดันเจี้ยน) หรือ move_to เพื่อย้ายตำแหน่ง ห้าม redefine สถานที่เดิม
-
-🏰 ระบบดันเจี้ยน (Dungeon Blueprint — Domain 36) — DM เป็นคนตัดสินใจทุกอย่าง:
-- DM ตัวจริงเตรียมดันเจี้ยน "ทั้งหมดครั้งเดียว" ตอนผู้เล่นเข้า dungeon entrance — ไม่ใช่ add_location ทีละห้อง
-- ⚠️ DM เป็นคนตัดสินใจทุกอย่าง — ไม่มีให้ผู้เล่นเลือก theme/template ห้ามถามผู้เล่น "อยากเล่นดันเจี้ยนแบบไหน"
-- ใช้ฟิลด์ "dungeon_enter" ใน response เพื่อสร้าง/เข้าดันเจี้ยน — แนะนำให้ใช้รูปแบบสั้น { theme, id, name, hook?, antagonist? } engine จะ procedural generate ให้อัตโนมัติ
-- ⚠️ เมื่อผู้เล่นอยู่ที่ dungeon entrance บน world map และบอกว่าจะเข้า → DM ต้องส่ง dungeon_enter ทันทีใน response นั้น ไม่ต้องถามผู้เล่นเพิ่ม
-- theme ที่ใช้ได้: crypt (หลุมศพ), cave (ถ้ำ), wizard_tower (หอเวท), abandoned_mine (เหมืองร้าง), ancient_temple (วัดโบราณ), sewer (ท่อน้ำ), ruined_castle (ปราสาทร้าง), forest_shrine (ศาลาในป่า), underwater (ใต้น้ำ), fiendish (ขุมนรก), generic (อื่น ๆ)
-- เลือก theme ตามบรรยากาศและคำอธิบายของ dungeon entrance ใน world map (เช่น "ถ้ำกระดูก" → crypt, "หอเวทอัลดริก" → wizard_tower)
-- ถ้าต้องการควบคุมแบบละเอียด สามารถส่ง blueprint เต็มรูปแบบ { id, name, theme, entranceRoomId, rooms: [...], connections: [...], bossRoomId, recommendedLevel, hook, antagonist } แทน — แต่ส่วนใหญ่ใช้รูปแบบสั้นพอ
-- โครงสร้าง blueprint (engine สร้างให้ถ้าใช้รูปแบบสั้น):
-  • rooms[]: 5-8 ห้อง ตาม 5-Room pattern (entrance → puzzle → setback → climax → reward) + บางครั้งมี transition/secret/empty
-  • role: "entrance" | "puzzle" | "setback" | "climax" (บอส) | "reward" | "transition" | "secret" | "empty"
-  • connections[]: { from, to, type, direction, isLocked?, lockDC?, isSecret?, secretDetectionDC? }
-- การเคลื่อนที่ในดันเจี้ยน: ใช้ "dungeon_room_move" ฟิลด์ { room_id: "..." } — engine จะอัปเดต current room และ trigger staged encounter/trap/puzzle อัตโนมัติ
-- เมื่อ combat จบ engine จะ markRoomCleared อัตโนมัติ + ถ้าเป็น boss room จะ markBossDefeated + auto-complete เควสต์ที่เกี่ยวข้อง
-- ผู้เล่นเห็นแผนที่ดันเจี้ยนแบบ fog-of-war (เห็นเฉพาะห้องที่เคยไป + ห้องที่ adjacent ที่ไม่ใช่ secret)
-- ⚠️ เมื่ออยู่ในดันเจี้ยน ใช้ dungeon_room_move แทน map_update — ห้ามใช้ map_update.add_location สำหรับห้องในดันเจี้ยน
-- ⚠️ ใช้ dungeon_enter ครั้งเดียวตอนเข้าดันเจี้ยน — ถ้าเข้าแล้วใช้ dungeon_room_move หรือ dungeon_exit แทน
-- ใช้ "dungeon_exit" (true) เมื่อผู้เล่นออกจากดันเจี้ยนกลับสู่ world map
-- 💡 DM ควรจำแพทเทิร์น: ห้อง entrance มี guardian อ่อน ๆ; puzzle มี puzzle; setback มี trap; climax มี boss; reward มี loot + lore
-- 💡 Engine จะแสดง hint [🏰 DUNGEON ENTER REQUIRED] เมื่อผู้เล่นอยู่ที่ dungeon entrance และต้องการเข้า — ตอบสนองด้วย dungeon_enter ทันที
-
-ระบบ Buff/Debuff:
-- ใช้ updates.buffs_add เพื่อใส่ buff: { name, type ("buff"|"debuff"), duration (รอบ, 0=ทันที, -1=จนกว่าจะ long rest), source, effect_desc }
-- ใช้ updates.buffs_remove เพื่อถอน buff ตามชื่อ
-- buff ทั่วไป: Bless (+1d4 โจมตี/save, concentration), Haste (+2 AC, เร่งความเร็ว x2, concentration), Mage Armor (AC 13+DEX, 8 ชม.), Shield (+5 AC, 1 รอบ), Bardic Inspiration (+1d6), Rage (adv STR, +ดาเมจ, ต้านทาน), Guidance (+1d4 check), Shield of Faith (+2 AC, concentration)
-- debuff ทั่วไป: Bane (-1d4 โจมตี/save), Hunter's Mark (+1d6 ดาเมจ), Hex (+1d6 ดาเมจ, disadv ability), Faerie Fire (adv โจมตีใส่เป้า), Slow (ครึ่งความเร็ว, -2 AC)
-- engine ติดตาม duration และหมดอายุอัตโนมัติ — concentration buff จะหายถ้าผู้ร่ายโดนตีและทอย CON save ไม่ผ่าน
-
-การเรียนเวท:
-- ถ้าผู้เล่นต้องการเรียนเวท (scroll, อาจารย์, level up) ใช้ updates.items_add "Spell Scroll: <ชื่อเวท>" (เช่น "Spell Scroll: Misty Step") — engine จะเปิด UI "Learn Spell" ในแท็บเวทมนตร์
-- Wizard เรียนจาก spellbook ที่ได้จาก loot ได้ด้วย
-
-Feat:
-- level 4+ เลือก feat แทน ASI ได้ ใช้ updates.items_add "Feat: <ชื่อ>" (เช่น "Feat: War Caster")
-
-ตัวละครผู้เล่น: ${c.name} — ${RACES[c.race].th} ${cls.th} level ${c.level}${c.background && BACKGROUNDS[c.background] ? `, ภูมิหลัง: ${BACKGROUNDS[c.background].th}` : ""}, ${cls.feature}${cls.caster ? ` · เวทสูงสุด: Lv.${maxSpellLv} · เวทที่รู้: ${knownSpellsCount}` : ""}
-
-ระบบแผนที่รบ (Tactical Battle Grid):
-- เมื่อ start_combat ทำงาน engine จะสร้างกริด 12×10 ช่องอัตโนมัติ — ผู้เล่นอยู่ด้านล่าง ศัตรูอยู่ด้านบน
-- แต่ละช่อง = 5 ฟุต — D&D 2024: melee reach 5ft (1 ช่อง), reach weapons 10ft (2 ช่อง: Glaive/Halberd/Pike/Lance/Whip), ranged มี rangeNormal/rangeLong ที่แปลงเป็นช่อง
-- ผู้เล่นเคลื่อนที่ได้ 6 ช่อง/รอบ (30 ฟุต) — กดพื้นเขียวบนกริดเพื่อเคลื่อนที่
-- ศัตรูใช้ Tactical AI (Domain 32): ประเมิน risk, เลือก action (attack/retreat/hold/kite), หนีเมื่อ HP<25% + risk สูง
-- D&D 2024 Weapon Mastery: อาวุธแต่ละชนิดมี mastery 1 ชนิดจาก 8 (Cleave/Graze/Push/Sap/Slow/Topple/Vex/Nick) — เฉพาะ Fighter/Paladin/Ranger/Barbarian/Monk
-- Opportunity Attacks: ศัตรูโจมตีเมื่อผู้เล่นเคลื่อนที่ออกจาก reach — มี Disengage action สำหรับหลีก
-- ผู้เล่นหายตัว/ซ่อน: ศัตรูไม่เห็น → ไม่โจมตีได้ (ยกเว้นอยู่ติดกัน โจมตีมืดๆ ด้วย disadvantage)
-- engine คำนวณความยาก: legacy + Domain 34 (XP thresholds + CR suggestions)
-- 🧠 AI log: แสดง tactical decision ของศัตรูใน combat feed
-
-ระบบร้านค้า (Shop):
-- ผู้เล่นกดปุ่ม "🏪 ร้านค้า" เพื่อซื้อ/ขาย อาวุธ/เกราะ/ของวิเศษ/ยา
-- ราคาตาม PHB 2024 · ขายของได้ 50% ของราคาซื้อ (D&D 5e standard)
-- เปิดร้านได้เฉพาะตอนไม่อยู่ใน combat
-
-ระบบสถานที่ (Scene Types):
-- D&D 5e มี 3 pillars: Combat, Social, Exploration — แต่ละ scene มี tension (calm/low/medium/high/climax)
-- 5-Room Dungeon pattern: Entrance+Guardian → Puzzle → Trick/Setback → Climax → Reward/Revelation
-- DM ควรสร้าง dungeon ตาม pattern นี้เพื่อให้ผู้เล่นมีประสบการณ์ครบ
-
-ระบบเสริมที่ engine รองรับ:
-- Temporary HP: ใช้ updates.temp_hp เพื่อให้ temp HP (ดูดดาเมจก่อน HP จริง)
-- Resistance/Vulnerability/Immunity: ใส่ใน monster stat block (resistances/vulnerabilities/immunities array ของ damage type)
-- Cover System: แต่ละช่องบนกริดมี cover (none/half/three-quarter/total) ให้ +AC
-- Passive Perception: engine คำนวณ 10 + WIS mod + proficiency (แสดงใน character sheet)
-- Grapple/Shove (D&D 2024): ปุ่มใน combat — target ทอย STR หรือ DEX save (เลือกเอง) vs DC = 8 + STR mod + PB ของคุณ → ตรึง (Grappled) หรือ ผลัก 5 ฟุต / ล้ม (Prone)
-- Dual Wield: ถ้าถืออาวุธ light ได้ bonus action โจมตีมือนอก (ดาเมจ = เต๋าอาวุธอย่างเดียว)
-- Quest Journal: ใช้ updates.quest_add เป็น object เดียว (ไม่ใช่ array) { id, title, description, objectives, reward, giver } และ updates.quest_update เป็น object เดียวเช่นกัน { id, status/complete_objective } — ถ้ามีหลายเควสในเทิร์นเดียวกันให้ส่งแค่อันที่สำคัญที่สุด
-- Time/Calendar: ใช้ updates.time_delta (ชั่วโมง) — engine ติดตามวันและเวลา แสดงใน header
-- Encounter Difficulty: engine คำนวณอัตโนมัติตอน combat เริ่ม (D&D 2024: Low / Moderate / High) พร้อม XP thresholds และ CR แนะนำ
-
-AI DM Layer (Domain 31-35) — engine วิเคราะห์ให้คุณ:
-- Intent Analysis: engine วิเคราะห์ intent ของผู้เล่น (greeting/ask_question/negotiate/persuade/intimidate/deceive/trade/give_item/request_quest/report_progress/accuse/flatter/threaten/end_conversation) — ดูใน hint ที่ engine ส่งให้ก่อน Player: ... ใช้ปรับน้ำเสียง narration ให้เหมาะกับ intent
-- Narrative Pacing: engine ติดตาม tension (calm/low/medium/high/climax) และ scene types — ถ้าเล่นมานานเกินไป engine จะแนะนำให้มี scene สงบ
-- Encounter Difficulty Tables: Lv.${c.level} thresholds (D&D 2024: trivial ${getDifficultyThresholds(c.level).trivial}/low ${getDifficultyThresholds(c.level).low}/moderate ${getDifficultyThresholds(c.level).moderate}/high ${getDifficultyThresholds(c.level).high}/impossible ${getDifficultyThresholds(c.level).impossible} XP) — เลือก monsters ตาม target difficulty (3 tiers + 2 informal)
-- Combat Events: engine ปล่อย events (on_attack, on_hit, on_damage, on_cast_spell, on_turn_start/end) — features/feats ทำงานอัตโนมัติผ่าน EventBus (เช่น Savage Attacker, Poison Weapon, Relentless Endurance)
-- Concentration Tracking: engine roll CON save อัตโนมัติเมื่อ caster โดนดาเมจ — Bless/Haste/Shield of Faith อาจหายได้
-- Tactical AI (Domain 32): ศัตรูตัดสินใจเอง — ประเมิน risk, เลือก action (attack/retreat/hold/kite), หนีเมื่อ HP < 25% และ risk สูง — engine แสดง 🧠 AI log ใน combat feed
-- Content Management (Domain 35): ผู้เล่นเปิด Content Manager ได้ (ปุ่ม 📦 Content) เพื่อ import/export homebrew — สามารถสร้าง spell/monster/item เองแล้วใช้ในเกม
-
-ตอบเป็น JSON เท่านั้น (ห้าม markdown, ห้ามข้อความนอก JSON):
-{
-  "narration": "ข้อความบรรยายภาษาไทย",
-  "scene": "ป้ายสถานที่สั้นๆ หรือ null",
-  "requires": null หรือ {"type":"check","skill":"<หนึ่งใน: ${Object.keys(SKILLS).join("|")}>","dc":13,"advantage":"none|advantage|disadvantage"} หรือ {"type":"save","ability":"str|dex|con|int|wis|cha","dc":12,"on_fail_damage":"2d6","half_on_success":true},
-  "start_combat": null หรือ {"monsters":["goblin","goblin"], "surprise": false},
-  "world_map": null หรือ [{ "id":"phandalin", "name":"Phandalin", "type":"town", "dir":"n", "from":null, "description":"เมืองเริ่มต้น" }, ...],
-  "map_update": null หรือ {"add_location":{"id":"old_mill","name":"Old Mill","type":"building","dir":"ne","from":null},"move_to":"old_mill","connect":null},
-  "dungeon_enter": null หรือ {"theme":"crypt","id":"bonecrypt","name":"ถ้ำกระดูก","hook":"ชาวบ้านหายไป","antagonist":"Lich"} หรือ {"id":"...","name":"...","theme":"...","entranceRoomId":"entrance_1","rooms":[...],"connections":[...],"bossRoomId":"climax_4","recommendedLevel":2,"hook":"...","antagonist":"..."},
-  "dungeon_room_move": null หรือ {"room_id":"puzzle_2"},
-  "dungeon_exit": null หรือ true,
-  "updates": null หรือ {"hp_delta":0,"gold_delta":0,"xp_award":0,"items_add":[],"items_use":[],"items_remove":[],"conditions_add":[],"conditions_remove":[],"buffs_add":[],"buffs_remove":[]}
-}
-ห้ามใช้ requires และ start_combat พร้อมกัน ถ้าเพิ่งได้รับ [ผลทอย] ห้ามสั่ง requires ซ้ำ ใช้ world_map เฉพาะ response แรกของแคมเปญใหม่เท่านั้น ใช้ map_update สำหรับการค้นพบถัดไป เมื่ออยู่ในดันเจี้ยนใช้ dungeon_room_move แทน map_update.add_location สำหรับห้องใหม่
-
-ฟิลด์เพิ่มเติมใน "updates" ที่ DM ใช้ได้ (D&D DM capabilities):
-- "loot_drop": ["50gp", "Potion of Healing", "Longsword +1"] — มอบของหลัง combat/เหตุการณ์
-- "npc_attitude": {"npc_id": "barbara", "attitude": "friendly", "reason": "ช่วยเหลือ"} — เปลี่ยนท่าที NPC
-- "faction_reputation": {"faction_id": "town_guard", "delta": 10} — ปรับชื่อเสียงกับกลุ่ม
-- "weather": "rain" — เปลี่ยนอากาศ (rain/fog/storm/clear/snow)
-- "environment": "darkness" — สภาพแวดล้อมพิเศษ (darkness/fog/magical_darkness)
-- "scene_type": "social" — ประเภทฉาก (combat/social/exploration/puzzle/rest/revelation)
-- "exhaustion_delta": 1 — เพิ่ม/ลด exhaustion (D&D 2024: -2/level ต่อ D20 Test, Lv6 = ตาย). ใช้ได้เฉพาะเมื่อมีเหตุผลที่สมเหตุสมผล:
-  • Forced march: ถ้า time_delta > 8 ชม. ของการเดินทาง — engine จะ auto CON save ให้แล้ว ไม่ต้องส่ง exhaustion_delta
-  • ไม่กินไม่ดื่ม: หลายวันโดยไม่มีอาหาร/น้ำ → 1 level/วัน
-  • สภาพอากาศหนัก: หนาวจัด/ร้อนจัดโดยไม่มีอุปกรณ์ป้องกัน
-  • เวทมนตร์: บางเวทสร้าง exhaustion (Sickening Radiance)
-  • ห้ามใช้ exhaustion_delta โดยไม่มีเหตุผลชัดเจน — ห้ามเพิ่มเพราะ "เดินไปร้านค้า" หรือ "ออกจากห้อง"
-- "rest_trigger": "short" หรือ "long" — แนะนำให้ผู้เล่นพัก (⚠️ ห้ามใช้ถ้าผู้เล่นเพิ่งพัก! ดู "พักผ่อน" ใน STORY CONTEXT — ถ้าเขียนว่า "เพิ่งตื่นนอน" หรือ "ยังสดชื่น" ห้ามแนะนำให้พักเด็ดขาด)
-- "level_up_choice": true — มอบตัวเลือก ASI/Feat (เมื่อ level up)
-- "temp_hp": 5 — มอบ Temporary HP
-
-DM สามารถทำได้ทุกอย่างที่ DM ตัวจริงทำ:
-- บรรยายฉาก สร้างบรรยากาศ ควบคุม NPC
-- สั่ง Skill check / Saving throw
-- เริ่ม/จบ combat พร้อมมอนสเตอร์จาก SRD
-- มอบ XP/ทอง/ไอเทม/เวท/Feat
-- ใส่/ถอน Conditions และ Buffs
-- สร้างแผนที่โลก เพิ่มสถานที่ ย้ายผู้เล่น
-- เพิ่ม/อัปเดตเควสต์
-- เปลี่ยนอากาศ/สภาพแวดล้อม
-- ปรับท่าที NPC และชื่อเสียงกลุ่ม
-- มอบ Exhaustion (เดินทางนาน/ไม่พัก/คาถา)
-- บังคับพัก (เมื่อเหมาะสม)
-- มอบ Loot หลัง combat
-
-⚠️ กฎการอยู่ในฉาก (Scene Anchoring) — สำคัญมาก:
-1. ผู้เล่นอยู่ในสถานที่ปัจจุบัน (ระบุใน [CURRENT SCENE] ก่อนข้อความผู้เล่น) — ห้ามเปลี่ยนสถานที่โดยที่ผู้เล่นไม่ได้บอกว่าจะไปที่อื่น
-2. ถ้าผู้เล่นพูด/ถาม/โต้ตอบ → ให้ตอบในฐานะ NPC หรือบรรยายผลในฉากเดิม — ห้ามข้ามไปเล่าเรื่องอื่น
-3. ถ้าผู้เล่นถามเกี่ยวกับสินค้า/ราคา/ซื้อขาย → ให้พ่อค้า NPC ตอบเอง — ห้ามบรรยายการเดินทางหรือเข้าป่า
-4. ถ้าผู้เล่นสำรวจ/มอง/ฟัง → บรรยายเฉพาะสิ่งที่อยู่ในฉากปัจจุบันเท่านั้น
-5. จะย้ายผู้เล่นไปสถานที่ใหม่ได้ก็ต่อเมื่อผู้เล่นพูดชัดเจน เช่น "ออกจากร้าน", "เดินไปป่า", "ไปวัด"
-6. ใช้ map_update.move_to เฉพาะเมื่อผู้เล่นย้ายที่จริง ๆ — ไม่ใช่ตอนที่ผู้เล่นแค่ถามคำถาม
-
-⚠️ Intent-based Response Rules:
-- intent=trade/bargain → ตอบเป็นพ่อค้า NPC (พูดถึงสินค้า ราคา การแลกเปลี่ยน) ห้ามเปลี่ยนฉาก
-- intent=negotiate/persuade/intimidate/deceive → ตอบเป็น NPC ที่กำลังโต้ตอบกับผู้เล่น ห้ามเปลี่ยนฉาก
-- intent=greeting/ask_question → ตอบในฉากเดิม ห้าม advance story
-- intent=request_quest → ให้ NPC หรือสถานการณ์ในฉากเดิมเสนอเควสต์ ห้ามเปลี่ยนฉาก
-- intent=explore → บรรยายสิ่งที่เห็นในฉากเดิม ถ้าผู้เล่นบอกว่าจะไปที่อื่นค่อยย้าย
-- เฉพาะ intent ที่ชัดเจนว่าจะย้ายที่ (เช่น "เดินไป...", "ออกจาก...", "ไปที่...") เท่านั้นที่อนุญาตให้เปลี่ยนฉาก
-
-โครงสร้างการตอบ:
-1. อ่าน [CURRENT SCENE] เพื่อรู้ว่าผู้เล่นอยู่ที่ไหน
-2. อ่าน [AI DM hint: intent=...] เพื่อรู้ว่าผู้เล่นต้องการอะไร
-3. ตอบในฉากเดิม — ห้ามข้ามไปเล่าเรื่องอื่น
-4. ถ้าผู้เล่นต้องการย้ายที่จริง ๆ ถึงจะใช้ map_update.move_to${pacingDirective}${sessionZeroDirective}${memoryDirective}`;
-}
-
-async function callDM(systemPrompt: string, history: any[]): Promise<{ narration: string; scene?: string | null; requires?: any; start_combat?: any; world_map?: any; map_update?: any; dungeon_enter?: any; dungeon_room_move?: any; dungeon_exit?: any; updates?: any; __validationWarnings?: string[] }> {
-  const response = await fetch("/api/dm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ system: systemPrompt, messages: history }),
-  });
-  if (!response.ok) {
-    let msg = `DM HTTP ${response.status}`;
-    try { const err = await response.json(); if (err?.error) msg = err.error; } catch (_) {}
-    throw new Error(msg);
-  }
-  const data = await response.json();
-  const text: string = data.text || "";
-  const clean = text.replace(/```json|```/g, "").trim();
-  const start = clean.indexOf("{");
-  const end = clean.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error("DM ไม่ได้ตอบเป็น JSON");
-  const jsonStr = clean.slice(start, end + 1);
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (parseErr) {
-    // Try to repair: if the JSON was cut off (max_tokens), close any open arrays/objects
-    let repaired = jsonStr;
-    repaired = repaired.replace(/,\s*$/, "");
-    const opens = (repaired.match(/[\[{]/g) || []).length;
-    const closes = (repaired.match(/[\]}]/g) || []).length;
-    while (opens > closes) {
-      repaired += "}";
-      const o2 = (repaired.match(/[\[{]/g) || []).length;
-      const c2 = (repaired.match(/[\]}]/g) || []).length;
-      if (c2 >= o2) break;
-    }
-    try {
-      parsed = JSON.parse(repaired);
-    } catch {
-      // Last resort: extract just the narration field
-      const narrMatch = repaired.match(/"narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const sceneMatch = repaired.match(/"scene"\s*:\s*("(?:[^"\\]|\\.)*"|null)/);
-      parsed = {
-        narration: narrMatch ? narrMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n') : "DM ตอบ JSON ไม่สมบูรณ์ ลองพิมพ์ action ใหม่",
-        scene: sceneMatch ? (sceneMatch[1] === "null" ? null : sceneMatch[1].slice(1, -1)) : null,
-        requires: null,
-        start_combat: null,
-        world_map: null,
-        map_update: null,
-        updates: null,
-      };
-    }
-  }
-
-  // === Phase 1: Schema validation (zod) — engine ไม่ trust LLM ===
-  const validation = validateDMResponse(parsed);
-  if (validation.warnings.length > 0 || validation.errors.length > 0) {
-    // Log to console for debugging
-    if (validation.errors.length > 0) {
-      console.warn("[DM schema validation errors]", validation.errors);
-    }
-    if (validation.warnings.length > 0) {
-      console.warn("[DM schema validation warnings]", validation.warnings);
-    }
-  }
-  // Always return validated data (with __validationWarnings for UI display)
-  const result = validation.data!;
-  return {
-    ...result,
-    __validationWarnings: validation.warnings,
-  };
-}
 
 /* ---------------- STORAGE (delegates to engineAdapters for v3 + versioning) ---------------- */
 async function saveGame(payload: any) {
@@ -913,122 +357,36 @@ export default function DnDSolo() {
     setSessionZeroConfig((prev) => { const next = fn(prev); sessionZeroRef.current = next; return next; });
   }, []);
 
-  /** Reusable Session-Zero configuration modal (shown from both menu + play). */
-  function renderSessionZeroModal() {
-    if (!sessionZeroOpen) return null;
-    const cfg = sessionZeroConfig;
-    const pct = pillarPercentages(cfg);
-    const TONE_UI: Record<CampaignTone, string> = {
-      "dark-fantasy": "แฟนตาซีมืดหม่น", heroic: "วีรบุรุษ", mystery: "ปริศนา", horror: "สยองขวัญ",
-    };
-    return (
-      <div className="sheet-overlay" onClick={() => setSessionZeroOpen(false)}>
-        <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-            <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🎭 Session Zero</span>
-            <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setSessionZeroOpen(false)}>✕</button>
-          </div>
-          <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ fontSize: 12, color: "#8A7F9E" }}>กำหนดโทน ความปลอดภัย และสไตล์ของแคมเปญก่อนเริ่มเล่น (ไม่บังคับ — ข้ามได้) ป้อนข้อมูลนี้จะถูกส่งให้ DM เคารพทุกข้อ</div>
-
-            {/* Tone / genre */}
-            <div>
-              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>โทน / แนวเรื่อง</div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {TONE_ORDER.map((t) => (
-                  <button key={t} className={"btn" + (cfg.tone === t ? " btn-gold" : "")}
-                    style={{ flex: "1 0 40%", fontSize: 12, padding: "6px" }}
-                    onClick={() => editSz((c0) => setTone(c0, t))}>{TONE_UI[t]}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Pillar weights */}
-            <div>
-              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>น้ำหนักสามเสาหลัก ({pct.combat}/{pct.exploration}/{pct.social})</div>
-              {([["combat", "⚔️ ต่อสู้"], ["exploration", "🧭 สำรวจ"], ["social", "💬 สังคม"]] as const).map(([key, label]) => (
-                <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: "#8A7F9E", width: 80 }}>{label}</span>
-                  <input type="range" min={0} max={100} step={5} value={cfg.pillars[key]}
-                    onChange={(e) => editSz((c0) => setPillars(c0, { [key]: Number(e.target.value) }))}
-                    style={{ flex: 1 }} />
-                  <span style={{ fontSize: 12, color: "#C9BFE0", width: 32, textAlign: "right" }}>{cfg.pillars[key]}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Safety tools */}
-            <div>
-              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>Safety Tools</div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                <input className="input-main" placeholder="เส้นต้องห้าม (line) — ห้ามปรากฏ" value={szLineInput}
-                  onChange={(e) => setSzLineInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && szLineInput.trim()) { editSz((c0) => addLine(c0, szLineInput)); setSzLineInput(""); } }}
-                  style={{ fontSize: 12, padding: "6px 10px" }} />
-                <button className="btn" style={{ fontSize: 12 }} disabled={!szLineInput.trim()}
-                  onClick={() => { editSz((c0) => addLine(c0, szLineInput)); setSzLineInput(""); }}>+ line</button>
-              </div>
-              {cfg.safety.lines.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                  {cfg.safety.lines.map((l) => (
-                    <button key={l} className="btn btn-red" style={{ fontSize: 11, padding: "3px 8px" }}
-                      onClick={() => editSz((c0) => removeLine(c0, l))}>{l} ✕</button>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                <input className="input-main" placeholder="ม่านบัง (veil) — ตัดฉาก ไม่บรรยายตรง ๆ" value={szVeilInput}
-                  onChange={(e) => setSzVeilInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && szVeilInput.trim()) { editSz((c0) => addVeil(c0, szVeilInput)); setSzVeilInput(""); } }}
-                  style={{ fontSize: 12, padding: "6px 10px" }} />
-                <button className="btn" style={{ fontSize: 12 }} disabled={!szVeilInput.trim()}
-                  onClick={() => { editSz((c0) => addVeil(c0, szVeilInput)); setSzVeilInput(""); }}>+ veil</button>
-              </div>
-              {cfg.safety.veils.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                  {cfg.safety.veils.map((v) => (
-                    <button key={v} className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
-                      onClick={() => editSz((c0) => removeVeil(c0, v))}>{v} ✕</button>
-                  ))}
-                </div>
-              )}
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#C9BFE0" }}>
-                <input type="checkbox" checked={cfg.safety.xCard} onChange={(e) => editSz((c0) => setXCard(c0, e.target.checked))} />
-                เปิดใช้ X-card (หยุด/ข้ามฉากได้ทันที)
-              </label>
-            </div>
-
-            {/* Starting situation */}
-            <div>
-              <div style={{ fontSize: 13, color: "#C9BFE0", marginBottom: 6 }}>สถานการณ์เริ่มต้น (ไม่บังคับ)</div>
-              <input className="input-main" placeholder="สถานที่เริ่มต้น" value={cfg.situation.location}
-                onChange={(e) => editSz((c0) => setStartingSituation(c0, { location: e.target.value }))}
-                style={{ fontSize: 12, padding: "6px 10px", marginBottom: 6 }} />
-              <input className="input-main" placeholder="Hook เปิดเรื่อง" value={cfg.situation.hook}
-                onChange={(e) => editSz((c0) => setStartingSituation(c0, { hook: e.target.value }))}
-                style={{ fontSize: 12, padding: "6px 10px", marginBottom: 6 }} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <input className="input-main" placeholder="NPC ผูกพัน (ชื่อ)" value={cfg.situation.bondNpc.name}
-                  onChange={(e) => editSz((c0) => setStartingSituation(c0, { bondNpc: { name: e.target.value } }))}
-                  style={{ fontSize: 12, padding: "6px 10px" }} />
-                <input className="input-main" placeholder="ความสัมพันธ์" value={cfg.situation.bondNpc.relationship}
-                  onChange={(e) => editSz((c0) => setStartingSituation(c0, { bondNpc: { relationship: e.target.value } }))}
-                  style={{ fontSize: 12, padding: "6px 10px" }} />
-              </div>
-            </div>
-
-            <button className="btn btn-gold" style={{ padding: "10px", fontSize: 14 }} onClick={() => setSessionZeroOpen(false)}>
-              บันทึกกฎบัตร
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   function entryNarration(text: string) { return { id: nextId(), type: "dm", text }; }
   function entryPlayer(text: string) { return { id: nextId(), type: "player", text }; }
   function entrySystem(text: string) { return { id: nextId(), type: "system", text }; }
+
+  // Injected dependency bundle for the extracted combat resolvers (combatResolve.ts):
+  // the component's log-entry factory + id counter, and the two React-facing seams
+  // (player death → setPhase, victory → dungeon-room-clear) they cannot import.
+  function combatDeps() {
+    return {
+      entrySystem, nextId,
+      onDeath: () => setPhase("dead"),
+      onVictoryDungeon: (e: any[]) => handleCombatEndDungeonUpdate(e, true),
+    };
+  }
+
+  // Combat spell-menu handler (lifted out of CombatOverlay so the overlay stays
+  // presentational): fetch the spell to learn its level, then cast at the lowest
+  // legal slot. Legality (known/prepared + slot availability) is enforced
+  // authoritatively by the engine (canCast2024) inside castSRDSpell.
+  function castSpellFromMenu(idx: string) {
+    setThinking(true);
+    (async () => {
+      try {
+        const sp = await fetchSpell(idx, 1, c.level);
+        if (!sp) { setLog((prev) => [...prev, entrySystem("⚠️ Spell not found")]); return; }
+        const slotLv = sp.level === 0 ? 0 : Math.max(sp.level, 1);
+        playerCombatAction("spell", `${idx}@${slotLv}`);
+      } finally { setThinking(false); }
+    })();
+  }
 
   /** Phase 1: Show DM schema validation warnings to player (transparent about state drift) */
   function logValidationWarnings(res: any, entries: any[]): void {
@@ -1054,108 +412,6 @@ export default function DnDSolo() {
     return false;
   }
 
-  // Apply pending state changes produced by feature triggers (data-driven)
-  function applyPendingChanges(changes: PendingStateChange[], cc: any, cb: any, entries: any[]): { cc: any; cb: any } {
-    let nc = cc;
-    let ncb = cb;
-    for (const change of changes) {
-      if (change.payload.narration) entries.push(entrySystem(`✨ ${change.payload.narration}`));
-      switch (change.type) {
-        case "apply_condition": {
-          const cid = change.payload.conditionId!;
-          const dur = change.payload.conditionDuration || 1;
-          if (change.targetId === "player" || change.targetId === nc.id) {
-            if (!nc.conditions.includes(cid)) {
-              nc = { ...nc, conditions: [...nc.conditions, cid] };
-              entries.push(entrySystem(`   → ติดสภาวะ ${cid} (${dur} รอบ) — จาก ${change.sourceFeature}`));
-            }
-          } else {
-            ncb = { ...ncb, enemies: ncb.enemies.map((e: any) => {
-              if (e.uid === change.targetId) {
-                const conds = e.conditions || [];
-                if (!conds.includes(cid)) {
-                  entries.push(entrySystem(`   → ${e.th} ติดสภาวะ ${cid} — จาก ${change.sourceFeature}`));
-                  return { ...e, conditions: [...conds, cid] };
-                }
-              }
-              return e;
-            })};
-          }
-          emitConditionApplied(change.targetId, cid, change.sourceFeature);
-          break;
-        }
-        case "deal_damage": {
-          const dmg = change.payload.damageFormula ? rollFormula(change.payload.damageFormula).total : 0;
-          if (dmg > 0) {
-            let newBridge = ncb.bridge;
-            const newEnemies = ncb.enemies.map((e: any) => {
-              if (e.uid === change.targetId) {
-                const dd = applyEnemyDamage(newBridge, e.uid, dmg, e.hpNow, e.ac, e.th);
-                newBridge = dd.bridge;
-                entries.push(entrySystem(`   → ${e.th} โดน ${dmg} ${change.payload.damageType || ""} (${change.sourceFeature}) → ${dd.hp} HP`));
-                return { ...e, hpNow: dd.hp };
-              }
-              return e;
-            });
-            ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
-            emitDamageDealt("player", change.targetId, dmg, change.payload.damageType);
-          }
-          break;
-        }
-        case "heal": {
-          const heal = change.payload.healFormula ? rollFormula(change.payload.healFormula).total : 0;
-          if (heal > 0 && (change.targetId === "player" || change.targetId === nc.id)) {
-            nc = { ...nc, hp: Math.min(nc.maxHp, nc.hp + heal) };
-            entries.push(entrySystem(`   → ฟื้น ${heal} HP (${change.sourceFeature})`));
-            emitHeal("player", change.targetId, heal);
-          }
-          break;
-        }
-        case "narrate":
-          break;
-        case "reroll_damage": {
-          // B4 fix: Savage Attacker (D&D 2024) — reroll weapon damage dice, keep higher total
-          // The trigger fires after a weapon hit. We need the weapon's damage formula.
-          // Since we don't have access to the weapon here, we store lastDamageRoll on the combat state.
-          // Fallback: if no lastDamageRoll tracked, reroll 1d8 (average weapon die) as approximation
-          const lastRoll = (cb as any)._lastWeaponDamageRoll;
-          let rerollTotal: number;
-          let rerollFormula: string;
-          if (lastRoll && lastRoll.formula) {
-            const reroll = rollFormula(lastRoll.formula);
-            rerollTotal = reroll.total;
-            rerollFormula = lastRoll.formula;
-            // Keep higher of original vs reroll
-            if (rerollTotal > lastRoll.total) {
-              const bonusDmg = rerollTotal - lastRoll.total;
-              let newBridge = ncb.bridge;
-              const newEnemies = ncb.enemies.map((e: any) => {
-                if (e.uid === change.targetId) {
-                  const dd = applyEnemyDamage(newBridge, e.uid, bonusDmg, e.hpNow, e.ac, e.th);
-                  newBridge = dd.bridge;
-                  entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} > ${lastRoll.total} → +${bonusDmg} → ${dd.hp} HP`));
-                  return { ...e, hpNow: dd.hp };
-                }
-                return e;
-              });
-              ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
-              emitDamageDealt("player", change.targetId, bonusDmg, lastRoll.damageType || "slashing");
-            } else {
-              entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} ≤ ${lastRoll.total} → keep original`));
-            }
-            // Consume the tracked roll (once per turn)
-            (cb as any)._lastWeaponDamageRoll = null;
-          } else {
-            // No tracked roll — skip (shouldn't happen if trigger fires correctly)
-            entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: no weapon damage to reroll`));
-          }
-          break;
-        }
-      }
-    }
-    return { cc: nc, cb: ncb };
-  }
-
   /**
    * Apply a DM response's `updates` to the character — now ATOMIC.
    *
@@ -1170,40 +426,6 @@ export default function DnDSolo() {
    * are stripped out and layered around the reducer below. All React setters are
    * deferred to the very end, after every computation has succeeded.
    */
-  /**
-   * Task #14: apply ASI-granting feats idempotently at the feat-grant seam.
-   * The engine (progression.applyFeatGrants) owns the rule + the idempotency
-   * ledger; this wrapper just folds the result onto the character, logs the new
-   * grants, and recomputes derived stats (max HP on CON, AC on DEX/armor).
-   */
-  function applyFeatGrantsToChar(nc: any, entries: any[]): any {
-    const res = applyFeatGrants({
-      feats: nc.feats || [],
-      abilities: nc.abilities,
-      featGrantsApplied: nc.featGrantsApplied || [],
-      saveProficiencies: nc.saveProficiencies || [],
-    });
-    if (res.applied.length === 0) return nc; // nothing new → no-op (idempotent)
-    const oldConMod = mod(nc.abilities.con);
-    const out: any = {
-      ...nc,
-      abilities: res.abilities,
-      featGrantsApplied: res.featGrantsApplied,
-      saveProficiencies: res.saveProficiencies,
-    };
-    for (const g of res.applied) {
-      entries.push(entrySystem(`💪 Feat: +1 ${ABIL_TH[g.ability] || g.ability.toUpperCase()}${g.saveProficiency ? ` + ความชำนาญ Saving Throw (${ABIL_TH[g.saveProficiency] || g.saveProficiency.toUpperCase()})` : ""}`));
-    }
-    const newConMod = mod(out.abilities.con);
-    if (newConMod > oldConMod) {
-      const diff = (newConMod - oldConMod) * (out.level || 1);
-      out.maxHp += diff; out.hp += diff;
-      entries.push(entrySystem(`❤️ CON เพิ่มขึ้น → Max HP +${diff}`));
-    }
-    out.ac = computeAC(out);
-    return out;
-  }
-
   function applyUpdates(u: any, cc: any, entries: any[]) {
     if (!u) return cc;
 
@@ -1250,7 +472,7 @@ export default function DnDSolo() {
     // (and save proficiency for Resilient) IDEMPOTENTLY — the featGrantsApplied
     // ledger means a re-applied update never doubles the bonus. Derived stats
     // (max HP on CON, AC on DEX/armor) are recomputed at this same seam.
-    nc = applyFeatGrantsToChar(nc, entries);
+    nc = applyFeatGrantsToChar(nc, (t) => entries.push(entrySystem(t)));
 
     const newQuests = after.quests;
     let newGameTime = gameTime;
@@ -1276,7 +498,7 @@ export default function DnDSolo() {
     });
 
     // === 3. (3c) xp_award — gainXP does the full class math (HP/slots/feats) =
-    if (xp_award) nc = gainXP(nc, xp_award, entries);
+    if (xp_award) nc = gainXP(nc, xp_award, (t) => entries.push(entrySystem(t)));
 
     // === 4. (3b) time_delta — WorldClock sync + rest timers + forced march ==
     if (time_delta) {
@@ -1313,21 +535,6 @@ export default function DnDSolo() {
     return nc;
   }
 
-  // Tick down buff durations by one round (called at end of each combat round)
-  function tickBuffs(cc: any, entries: any[]) {
-    const nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    const expired: string[] = [];
-    nc.buffs = nc.buffs.map((b: any) => ({ ...b })).filter((b: any) => {
-      if (b.duration > 0) {
-        b.duration -= 1;
-        if (b.duration <= 0) { expired.push(b.name); return false; }
-      }
-      return true; // keep duration === 0 (instant, already applied) and duration === -1 (until long rest)
-    });
-    expired.forEach((name) => entries.push(entrySystem(`⏳ Buff หมดอายุ: ${name}`)));
-    return nc;
-  }
-
   // Get total AC bonus from active buffs
   function buffACBonus(cc: any): number {
     return (cc.buffs || []).reduce((sum: number, b: any) => {
@@ -1340,62 +547,6 @@ export default function DnDSolo() {
       }
       return sum;
     }, 0);
-  }
-
-  // Apply a buff's effect via castSRDSpell — add to character state
-  function applyBuffToCharacter(buff: any, cc: any): any {
-    const nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    // Remove existing buff with same name
-    nc.buffs = nc.buffs.filter((b: any) => b.name !== buff.name);
-    nc.buffs.push(buff);
-    // Mage Armor — set flag for AC computation
-    if (buff.name === "Mage Armor") nc.mageArmor = true;
-    return nc;
-  }
-
-  /* -------- world map pre-generation -------- */
-  function applyWorldMap(worldMap: any[], mp: any, pushEntry?: (t: string) => void): any {
-    if (!Array.isArray(worldMap) || worldMap.length === 0) return mp;
-    const m = mp ? { nodes: { ...mp.nodes }, edges: mp.edges.slice(), current: mp.current } : emptyMap();
-    let added = 0;
-    for (const loc of worldMap) {
-      if (!loc.id || m.nodes[loc.id]) continue;
-      let x = 0, y = 0;
-      const fromId = loc.from && m.nodes[loc.from] ? loc.from : (m.current || null);
-      if (fromId && m.nodes[fromId]) {
-        const v = DIRV[loc.dir] || [1, 0];
-        x = m.nodes[fromId].x + v[0];
-        y = m.nodes[fromId].y + v[1];
-        let guard = 0;
-        while (Object.values(m.nodes).some((n: any) => n.x === x && n.y === y) && guard < 20) { x += 1; guard += 1; }
-        m.edges.push([fromId, loc.id]);
-      } else if (m.nodes[Object.keys(m.nodes)[0]]) {
-        // Anchor to first node if no from specified
-        const firstId = Object.keys(m.nodes)[0];
-        const v = DIRV[loc.dir] || [1, 0];
-        x = m.nodes[firstId].x + v[0];
-        y = m.nodes[firstId].y + v[1];
-        m.edges.push([firstId, loc.id]);
-      }
-      m.nodes[loc.id] = {
-        name: loc.name || loc.id,
-        type: MAP_ICON[loc.type] ? loc.type : "place",
-        x, y,
-        description: loc.description,
-        visited: false, // player hasn't visited yet — fog of war
-      };
-      added += 1;
-    }
-    // If no current, set to first town or first node
-    if (!m.current) {
-      const townId = worldMap.find((l) => l.type === "town")?.id || Object.keys(m.nodes)[0];
-      if (townId && m.nodes[townId]) {
-        m.current = townId;
-        m.nodes[townId].visited = true;
-      }
-    }
-    if (pushEntry && added > 0) pushEntry(`🗺️ World map generated: ${added} locations laid out (${Object.values(m.nodes).filter((n:any)=>!n.visited).length} undiscovered)`);
-    return m;
   }
 
   /* -------- Domain 36: Dungeon Blueprint application -------- */
@@ -1605,64 +756,6 @@ export default function DnDSolo() {
     }
   }
 
-  function gainXP(cc: any, amount: number, entries: any[]) {
-    let nc = { ...cc, xp: cc.xp + amount };
-    entries.push(entrySystem(`+${amount} XP (รวม ${nc.xp})`));
-    while (nc.level < 20 && nc.xp >= XP_THRESHOLDS[nc.level]) {
-      const cls = CLASSES[nc.cls];
-      const hpGain = Math.floor(cls.hitDie / 2) + 1 + mod(nc.abilities.con);
-      nc = {
-        ...nc, level: nc.level + 1,
-        maxHp: nc.maxHp + hpGain, hp: nc.hp + hpGain,
-        hitDiceLeft: Math.min(nc.level + 1, (nc.hitDiceLeft || 0) + 1),
-      };
-      if (cls.caster) {
-        const newSlotsMax = getSlotTable(nc.cls, nc.level);
-        // Preserve used slots — add new slots from level up
-        const oldSlotsMax = nc.slotsMax || [];
-        const newSlots = newSlotsMax.map((max: number, i: number) => {
-          const oldMax = oldSlotsMax[i] || 0;
-          const oldCur = nc.slots[i] || 0;
-          // Gain the difference (new slots from level-up are filled)
-          return Math.min(max, oldCur + (max - oldMax));
-        });
-        nc.slotsMax = newSlotsMax;
-        nc.slots = newSlots;
-      }
-      // Replenish per-day resources
-      nc.rageUsed = 0;
-      nc.kiUsed = 0;
-      nc.sorceryPoints = nc.level;
-      nc.layOnHandsPool = nc.level * 5;
-      nc.bardicInspirationUsed = 0;
-      nc.ac = computeAC(nc);
-      entries.push(entrySystem(`🎉 LEVEL UP! → Level ${nc.level} (Max HP +${hpGain}, Proficiency +${profByLevel(nc.level)})`));
-      // Phase 2: use extended features (Lv.1-20) instead of FEATURES (Lv.1-5 only)
-      const allFeatures = getExtendedFeatures()[nc.cls] || {};
-      (allFeatures[nc.level] || []).forEach((f: any) => {
-        entries.push(entrySystem(`✨ ปลดความสามารถใหม่: ${f.th} — ${f.desc}`));
-        if (f.k === "asi") nc.pendingAsi = (nc.pendingAsi || 0) + 1;
-        // D&D 5e/2024: Bard gets Expertise at Lv.3, Lv.10 (gains 2 Expertise picks each time)
-        // Rogue gets Expertise at Lv.1, Lv.6 (gains 2 Expertise picks each time)
-        // We track pending Expertise picks via `nc.pendingExpertise`
-        if (f.k === "expertise") {
-          nc.pendingExpertise = (nc.pendingExpertise || 0) + 2;
-          entries.push(entrySystem(`🎯 Expertise unlock! เลือก 2 สกิลเพิ่ม proficiency ×2 — เปิดที่ character sheet → Skills tab`));
-        }
-      });
-      // Phase 4: subclass — prompt at unlock level, then grant subclass features on level-up.
-      if (needsSubclassChoice(nc.cls, nc.level, nc.subclass)) {
-        entries.push(entrySystem(`🎓 เลือก Subclass ได้แล้ว! เปิดหน้าตัวละครเพื่อเลือกสาย (subclass) ของ ${CLASSES[nc.cls].th}`));
-      } else if (nc.subclass) {
-        const sub = getSubclassById(nc.subclass);
-        (sub?.features?.[nc.level] || []).forEach((f: any) => {
-          entries.push(entrySystem(`✨ ${sub!.th}: ${f.th} — ${f.desc}`));
-        });
-      }
-    }
-    return nc;
-  }
-
   /* -------- combat engine -------- */
   async function initCombat(monsterIds: string[], cc: any, entries: any[], surprise = false) {
     const ids = (monsterIds || []).slice(0, 6);
@@ -1792,102 +885,6 @@ export default function DnDSolo() {
     return cb;
   }
 
-  // D&D 5e grid distance: Chebyshev (8-directional, diagonal = 1 square)
-  // Each square = 5 ft
-  function gridDistance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-    return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-  }
-  // Check if target is adjacent (within 1 square = melee range)
-  function isAdjacent(posA: { x: number; y: number }, posB: { x: number; y: number }): boolean {
-    return gridDistance(posA, posB) <= 1;
-  }
-
-  // Runs the enemy portion of the initiative-interleaved turn loop. The bridge's
-  // own turn pointer (getCombatView().currentCombatantId) is the SINGLE source of
-  // truth for whose turn it is: each enemy acts in initiative order via enemyTurn,
-  // and the loop yields back to the interactive UI the instant the pointer lands
-  // on the player. Returns the player clone (nc), like the former enemyAttacks
-  // batch did.
-  //   advancePastPlayer=true  → the player's own turn just ended (A/B/C paths):
-  //     advance the bridge past the player before running enemies.
-  //   advancePastPlayer=false → combat start (D/E): the pointer already sits on
-  //     the first combatant, so run from where it is.
-  function runEnemyPhase(cb: any, cc: any, entries: any[], advancePastPlayer: boolean) {
-    let nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    // Recompute AC to include all current buffs (Haste, Shield of Faith, Shield reaction, Slow, etc.)
-    nc.ac = computeAC(nc);
-    const enemyHasAdv = nc.conditions.some((k: string) => ENEMY_ADV_CONDS.includes(k));
-    const aliveEnemies = cb.enemies.filter((e: any) => e.hpNow > 0);
-    // Uncanny Dodge halves only the FIRST hit across all enemies each round. It now
-    // lives on cb so it survives across runEnemyPhase calls (a round's enemy turns
-    // may span more than one call) and resets on each bridge round rollover.
-    if (cb.uncannyUsed === undefined) cb.uncannyUsed = false;
-    // Advance the bridge one turn; reset the round-scoped Uncanny flag whenever the
-    // advance rolls the initiative order back to the top (a new round begins).
-    const advance = () => {
-      const before = getCombatView(cb.bridge).round;
-      cb.bridge = endTurn(cb.bridge).state;
-      if (getCombatView(cb.bridge).round > before) cb.uncannyUsed = false;
-    };
-    if (advancePastPlayer) advance();
-    // Build the injected-deps bundle once — component/module-local functions the
-    // pure engine turn (runEnemyTurn) cannot import (they close over idRef / component scope).
-    const deps: EnemyAIDeps = {
-      attackMod, rollD20, rollFormula, hitEnemy, enemyHasAttackDisadv,
-      exhaustionPenalty, saveMod, hasFeature, hasConcentration,
-      getActiveConcentrationBuff, gridDistance, entrySystem, nextId,
-    };
-    const maxIter = getCombatView(cb.bridge).order.length * 2 + 2;
-    for (let i = 0; i < maxIter; i++) {
-      const view = getCombatView(cb.bridge);
-      const currentId = view.currentCombatantId;
-      const idx = view.order.findIndex((o: any) => o.id === currentId);
-      // Single source of truth: derive the UI's current-turn index from the bridge
-      // pointer — never maintain it in parallel.
-      cb.currentInitIdx = idx;
-      const cur = view.order[idx];
-      if (!cur || cur.isPlayer) break; // yield to the interactive UI
-      const e = cb.enemies.find((x: any) => x.uid === currentId);
-      if (e && e.hpNow > 0) {
-        const res = runEnemyTurn(deps, e, cb, cc, nc, entries, aliveEnemies, enemyHasAdv, cb.uncannyUsed);
-        cb.uncannyUsed = res.uncannyUsed;
-        if (res.stop) break; // player dropped to 0 HP — stop the enemy phase
-      }
-      advance();
-      if (cb.enemies.filter((x: any) => x.hpNow > 0).length === 0) break; // all enemies dead
-    }
-    return nc;
-  }
-
-  function checkCombatEnd(cb: any, cc: any, entries: any[]) {
-    const alive = cb.enemies.filter((e: any) => e.hpNow > 0);
-    if (alive.length === 0) {
-      const totalXP = cb.enemies.reduce((a: number, e: any) => a + (e.xp || 50), 0);
-      const numEnemies = cb.enemies.length;
-      entries.push(entrySystem(`🏆 ชนะ! กำจัดศัตรูทั้งหมดแล้ว`));
-      const nc = gainXP(cc, totalXP, entries);
-      // Phase 1 fix: auto-generate loot from reward tables (instead of relying on LLM freeform)
-      // D&D 2024: calculate difficulty from XP + party level, then roll reward items
-      const difficulty = calculateDifficulty(totalXP, numEnemies, nc.level, 1);
-      const reward = calculateReward(difficulty, totalXP, nc.level);
-      const rolledItems = rollRewardItems(reward);
-      if (reward.gold > 0) {
-        nc.gold = (nc.gold || 0) + reward.gold;
-        entries.push(entrySystem(`💰 +${reward.gold} gp (loot จาก combat — ${difficulty})`));
-      }
-      if (rolledItems.length > 0) {
-        rolledItems.forEach((item: string) => {
-          nc.inventory.push(item);
-          entries.push(entrySystem(`📦 ได้รับ: ${item} (loot จาก combat)`));
-        });
-      }
-      // Domain 36: mark current dungeon room cleared (and boss defeated if applicable)
-      handleCombatEndDungeonUpdate(entries, true);
-      return { ended: true, cc: nc };
-    }
-    return { ended: false, cc };
-  }
-
   /** Phase 1 fix: build pacing object for buildSystemPrompt from narrativeEngine state */
   function getPacingForPrompt(): any {
     if (!narrativeEngine) return null;
@@ -1953,338 +950,6 @@ export default function DnDSolo() {
     setC(cc2); setCombat(cb2); setLog(log2);
   }
 
-  /* -------- generic SRD spell caster (combat) -------- */
-  async function castSRDSpell(spellIndex: string, slotLevel: number, cc: any, cb: any, entries: any[]): Promise<{ cc: any; cb: any; endsTurn: boolean }> {
-    const sp: NormalizedSpell | null = await fetchSpell(spellIndex, slotLevel, cc.level);
-    if (!sp) {
-      entries.push(entrySystem(`⚠️ โหลดเวท "${spellIndex}" จาก SRD ไม่ได้`));
-      return { cc, cb, endsTurn: true };
-    }
-    // === Phase 3: D&D 2024 spell-legality gate (engine/magic.canCast2024) ===
-    // Enforces known/prepared + valid slot (incl. upcast) BEFORE any slot is
-    // spent or cast event emitted. Illegal casts are blocked with a Thai
-    // message and do NOT consume the turn (endsTurn:false) or a slot.
-    const legality = canCast2024({
-      spellLevel: sp.level,
-      slotLevel,
-      slots: cc.slots || [],
-      isKnownOrPrepared: (cc.knownSpells || []).includes(spellIndex),
-    });
-    if (!legality.ok) {
-      entries.push(entrySystem(spellLegalityMessageTh(sp.name, sp.level, slotLevel, legality.reason)));
-      return { cc, cb, endsTurn: false };
-    }
-    entries.push(entrySystem(`✨ กำลังร่าย ${sp.name} (Lv.${sp.level} ${sp.school})${slotLevel > sp.level ? ` อัปเคสต์เป็น slot ${slotLevel}` : ""}`));
-
-    // Emit cast spell event (for features/items that trigger on spell cast)
-    emitCastSpell("player", spellIndex, sp.level, cb.enemies.filter((e: any) => e.hpNow > 0).map((e: any) => e.uid));
-
-    // Deduct slot (cantrips are free)
-    let nc = { ...cc, conditions: [...cc.conditions] };
-    let ncb = { ...cb, enemies: cb.enemies.map((e: any) => ({ ...e })) };
-    if (sp.level > 0) {
-      nc.slots = nc.slots.map((v: number, i: number) => (i === slotLevel - 1 ? v - 1 : v));
-    }
-
-    let endsTurn = true;
-    if (sp.bonusAction) endsTurn = false;
-
-    // Single-target resolution: hit whichever enemy the player selected via the
-    // shared combatTargetId state (the SAME target-selection convention weapon
-    // attacks use — see doWeaponAttack's `payload` lookup), falling back to the
-    // first living enemy if nothing is selected or the selection has died.
-    const pickTarget = (pool: any[]) =>
-      pool.find((e: any) => e.uid === combatTargetId && e.hpNow > 0) || pool.find((e: any) => e.hpNow > 0);
-    // AoE origin: center on the selected enemy's grid position when one is chosen
-    // (reusing the same enemy-selection UI), else fall back to the player's own
-    // position — the previous, always-on default.
-    const aoeOrigin = (combatTargetId && ncb.enemyPositions?.[combatTargetId]) || ncb.playerPos;
-
-    if (sp.kind === "heal") {
-      const h = rollFormula(sp.heal || "1d8");
-      const healAmount = h.total + mod(nc.abilities[CLASSES[nc.cls].castAbil]);
-      const oldHp = nc.hp;
-      nc.hp = Math.min(nc.maxHp, nc.hp + healAmount);
-      // Emit heal event
-      emitHeal("player", "player", healAmount);
-      // Reset death saves on any healing (D&D 5e rule)
-      if (oldHp <= 0 && nc.hp > 0) {
-        nc.deathSaves = { s: 0, f: 0 };
-        entries.push(entrySystem(`✨ ${sp.name}: ฟื้น ${healAmount} HP → ${nc.hp}/${nc.maxHp} · Death saves reset`));
-      } else {
-        entries.push(entrySystem(`✨ ${sp.name}: ฟื้น ${healAmount} HP → ${nc.hp}/${nc.maxHp}`));
-      }
-    } else if (sp.kind === "attack") {
-      const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-      // AoE targeting: use actual distance from the chosen origin
-      let targets: any[] = [];
-      if (sp.aoeType && sp.aoeSize) {
-        const aoeRadiusSquares = Math.ceil(sp.aoeSize / 5);
-        targets = alive.filter((e: any) => {
-          const ePos = ncb.enemyPositions?.[e.uid];
-          if (!ePos || !aoeOrigin) return true; // fallback if no positions
-          const dist = gridDistance(aoeOrigin, ePos);
-          return dist <= aoeRadiusSquares;
-        });
-        if (targets.length === 0) { const t = pickTarget(alive); targets = t ? [t] : []; } // fallback: hit selected/nearest
-        entries.push(entrySystem(`🌐 AoE ${sp.aoeType} ${sp.aoeSize}ft กระทบ ${targets.length} เป้าหมาย`));
-      } else {
-        const t = pickTarget(alive);
-        targets = t ? [t] : [];
-      }
-      for (const t of targets) {
-        // 2024 unseen-attacker/target via engine/vision (spell attack rolls).
-        const sAttackerSeesTarget = !(t.conditions && t.conditions.includes("invisible"));
-        const sTargetSeesAttacker = !(nc.hiddenAdv || ncb.surprise || ncb.invisible);
-        const sVisMod = attackVisibilityModifier(sAttackerSeesTarget, sTargetSeesAttacker);
-        let adv: "none" | "advantage" | "disadvantage" = (sVisMod === "advantage" || t.glow || attackerHasAdvVs(t)) ? "advantage" : "none";
-        if (sVisMod === "disadvantage" || hasDisadv(nc)) adv = adv === "advantage" ? "none" : "disadvantage";
-        let atkModTotal = spellAtkMod(nc);
-        // Bless applies to spell attacks too
-        if ((nc.buffs || []).some((b: any) => b.name === "Bless")) {
-          atkModTotal += d(4);
-        }
-        // D&D 2024 cover (engine/vision.coverBetween) raises the target's effective AC.
-        const sCover = coverForTarget(ncb, t.uid);
-        const sEffectiveAC = t.ac + sCover.bonus;
-        const atk = rollD20(atkModTotal, adv);
-        if (t.glow) t.glow = false;
-        const hit = atk.die !== 1 && (atk.die === 20 || atk.total >= sEffectiveAC);
-        if (sCover.bonus > 0) entries.push(entrySystem(`🛡️ ${t.th}: ${sCover.label} (+${sCover.bonus} AC = ${sEffectiveAC})`));
-        let extra: string | null = null;
-        if (hit) {
-          const dr = rollFormula(sp.damage || "1d6");
-          let dmg = dr.total;
-          if (atk.die === 20) dmg += rollFormula(sp.damage || "1d6").total;
-          // Hunter's Mark / Hex apply to spell attacks too
-          if ((nc.buffs || []).some((b: any) => b.name === "Hunter's Mark")) dmg += rollFormula("1d6").total;
-          if ((nc.buffs || []).some((b: any) => b.name === "Hex")) dmg += rollFormula("1d6").total;
-          // === NEW: apply spell damage type resistance/immunity/vulnerability ===
-          const sDmgType = (sp.damageType || "force").toLowerCase();
-          const resistedDmg = applyDamageModifiers(dmg, sDmgType, {
-            resistances: t.damageResistances,
-            vulnerabilities: t.damageVulnerabilities,
-            immunities: t.damageImmunities,
-          });
-          const resistTag =
-            resistedDmg === 0 && dmg > 0 ? ` 🛡️IMMUNE`
-            : resistedDmg < dmg ? ` 🛡️resist -${dmg - resistedDmg}`
-            : resistedDmg > dmg ? ` 💥vuln +${resistedDmg - dmg}`
-            : "";
-          dmg = resistedDmg;
-          hitEnemy(ncb, t, dmg);
-          extra = `${sp.damageType || "force"} ${dmg}${resistTag} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}`;
-          if (sp.conditionsAdd && sp.conditionsAdd.length > 0) {
-            for (const cond of sp.conditionsAdd) {
-              if (!t.conditions) t.conditions = [];
-              if (!t.conditions.includes(cond)) t.conditions.push(cond);
-              extra += ` · ${cond}`;
-            }
-          }
-        }
-        entries.push({ id: nextId(), type: "roll", title: `${sp.name} → ${t.th}`, roll: atk, vsAc: t.ac, success: hit, extra });
-      }
-    } else if (sp.kind === "save") {
-      const dc = spellDC(nc);
-      const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-      // AoE targeting: use actual distance from the chosen origin
-      let targets: any[] = [];
-      if (sp.aoeType && sp.aoeSize) {
-        const aoeRadiusSquares = Math.ceil(sp.aoeSize / 5);
-        targets = alive.filter((e: any) => {
-          const ePos = ncb.enemyPositions?.[e.uid];
-          if (!ePos || !aoeOrigin) return true;
-          const dist = gridDistance(aoeOrigin, ePos);
-          return dist <= aoeRadiusSquares;
-        });
-        if (targets.length === 0) { const t = pickTarget(alive); targets = t ? [t] : []; }
-        entries.push(entrySystem(`🌐 AoE ${sp.aoeType} ${sp.aoeSize}ft กระทบ ${targets.length} เป้าหมาย (DC ${dc})`));
-      } else {
-        const t = pickTarget(alive);
-        targets = t ? [t] : [];
-      }
-      // AoE damage rolled once
-      const aoeRoll = sp.damage ? rollFormula(sp.damage) : null;
-      for (const t of targets) {
-        const saveAbil = sp.saveAbility || "dex";
-        // Restrained enemies have disadvantage on DEX saves
-        let saveAdv: "none" | "disadvantage" = "none";
-        if (saveAbil === "dex" && t.conditions && t.conditions.includes("restrained")) saveAdv = "disadvantage";
-        // D&D 2024 cover (engine/vision.coverBetween): half/three-quarter cover
-        // adds its bonus to the defender's DEX saving throws (Fireball etc.).
-        const saveCover = saveAbil === "dex" ? coverForTarget(ncb, t.uid) : { bonus: 0, label: "" };
-        const sv = rollD20(monSave(t, saveAbil) + saveCover.bonus, saveAdv);
-        const failed = sv.total < dc;
-        let dmg = failed ? (aoeRoll?.total || 0) : sp.saveSuccess === "half" ? Math.floor((aoeRoll?.total || 0) / 2) : 0;
-        // === NEW: apply spell damage type resistance/immunity/vulnerability ===
-        // For half-damage-on-save, the resistance stacks (i.e. half then half again = quarter).
-        const sDmgType = (sp.damageType || "").toLowerCase();
-        if (sDmgType && dmg > 0) {
-          dmg = applyDamageModifiers(dmg, sDmgType, {
-            resistances: t.damageResistances,
-            vulnerabilities: t.damageVulnerabilities,
-            immunities: t.damageImmunities,
-          });
-        }
-        hitEnemy(ncb, t, dmg);
-        let extra = `${dmg} ${sp.damageType || ""} → ${t.th} ${t.hpNow <= 0 ? "dead!" : `${t.hpNow} HP left`}`;
-        if (sp.conditionsAdd && sp.conditionsAdd.length > 0 && failed) {
-          for (const cond of sp.conditionsAdd) {
-            if (!t.conditions) t.conditions = [];
-            if (!t.conditions.includes(cond)) t.conditions.push(cond);
-            extra += ` · ${cond}`;
-          }
-        }
-        entries.push({ id: nextId(), type: "roll", title: `${sp.name} → ${t.th} (${saveAbil.toUpperCase()} save DC ${dc})`, roll: sv, dc, success: failed, extra });
-      }
-    } else if (sp.kind === "auto") {
-      // Auto-hit spell (Magic Missile style). Data-driven via sp.darts field if present.
-      const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-      // Detect magic-missile pattern: index === "magic-missile" OR sp.darts > 0 OR sp.damage === "1d4+1"
-      const dartsCount = sp.index === "magic-missile"
-        ? 3 + (slotLevel - 1)
-        : (sp as any).darts ? (sp as any).darts : 1;
-      const dartDamage = sp.index === "magic-missile" ? "1d4+1" : (sp.damage || "1d6");
-      if (dartsCount > 1 || sp.index === "magic-missile") {
-        const parts: string[] = [];
-        // Magic Missile is force damage per SRD; for other auto-hit spells, fall back to sp.damageType.
-        const sDmgType = (sp.index === "magic-missile" ? "force" : (sp.damageType || "force")).toLowerCase();
-        for (let dart = 0; dart < dartsCount; dart++) {
-          const tgt = pickTarget(ncb.enemies);
-          if (!tgt) break;
-          const dr = rollFormula(dartDamage);
-          // === NEW: apply resistance/immunity/vulnerability to each dart ===
-          const dartDmg = applyDamageModifiers(dr.total, sDmgType, {
-            resistances: tgt.damageResistances,
-            vulnerabilities: tgt.damageVulnerabilities,
-            immunities: tgt.damageImmunities,
-          });
-          hitEnemy(ncb, tgt, dartDmg);
-          parts.push(`dart ${dart + 1}: ${dartDmg}${dartDmg < dr.total ? " (resist)" : dartDmg === 0 && dr.total > 0 ? " (immune)" : dartDmg > dr.total ? " (vuln)" : ""} → ${tgt.th}${tgt.hpNow <= 0 ? " dead!" : ""}`);
-        }
-        entries.push(entrySystem(`✨ ${sp.name}: โดนอัตโนมัติ · ${parts.join(" · ")}`));
-      } else {
-        // Generic auto-hit
-        const dr = rollFormula(sp.damage || "1d6");
-        const tgt = pickTarget(alive);
-        if (tgt) {
-          // === NEW: apply resistance/immunity/vulnerability ===
-          const sDmgType = (sp.damageType || "force").toLowerCase();
-          const dmg = applyDamageModifiers(dr.total, sDmgType, {
-            resistances: tgt.damageResistances,
-            vulnerabilities: tgt.damageVulnerabilities,
-            immunities: tgt.damageImmunities,
-          });
-          hitEnemy(ncb, tgt, dmg);
-          entries.push({ id: nextId(), type: "roll", title: `${sp.name} → ${tgt.th}`, roll: { die: 0, other: null, mod: 0, total: 0, adv: "none" }, success: true, extra: `Auto-hit: ${dmg} ${sp.damageType || "force"} → ${tgt.th} ${tgt.hpNow <= 0 ? "dead!" : `${tgt.hpNow} HP left`}` });
-        }
-      }
-    } else if (sp.kind === "buff") {
-      // Concentration buff. Apply via buff system so it gets tracked + ticked.
-      // Spell-name → buff metadata mapping (data-driven approach)
-      const buffMap: Record<string, { duration: number; effectDesc: string }> = {
-        "shield":           { duration: 1,  effectDesc: "+5 AC (reaction, 1 รอบ)" },
-        "mage-armor":       { duration: -1, effectDesc: "AC 13 + DEX (8 ชม.)" },
-        "spirit-guardians": { duration: 10, effectDesc: "ศัตรูโดน 3d8/รอบ (WIS save ลดครึ่ง)" },
-        "spiritual-weapon": { duration: 10, effectDesc: "โจมตีเอง 1d8+WIS/รอบ" },
-        "bless":            { duration: 10, effectDesc: "+1d4 โจมตี/save" },
-        "haste":            { duration: 10, effectDesc: "+2 AC, ได้เปรียบ DEX, ความเร็ว x2, +1 action/รอบ" },
-        "shield-of-faith":  { duration: 10, effectDesc: "+2 AC" },
-        "bane":             { duration: 10, effectDesc: "-1d4 โจมตี/save (ศัตรู)" },
-        "hunter-s-mark":    { duration: 60, effectDesc: "+1d6 ดาเมจต่อการโจมตี" },
-        "hex":              { duration: 60, effectDesc: "+1d6 ดาเมจ + disadv ability" },
-        "faerie-fire":      { duration: 10, effectDesc: "adv โจมตีใส่เป้า (glow)" },
-        "slow":             { duration: 10, effectDesc: "ครึ่งความเร็ว, -2 AC, -2 save" },
-      };
-      const buffMeta = buffMap[sp.index] || { duration: 10, effectDesc: sp.desc.slice(0, 80) };
-      const buffName = toSpellDisplayName(sp.name);
-      // D&D 2024 single-concentration: casting a new concentration spell ends the
-      // previous one. Which buffs are concentration is owned by the engine
-      // (engine/effects.isConcentrationSpellName) — this is the single source of
-      // truth; do not hand-maintain a second "concentration: true" list here.
-      const isConcentration = isConcentrationSpellName(buffName);
-      if (isConcentration) {
-        const superseded = (nc.buffs || []).filter(
-          (b: any) => isConcentrationSpellName(b.name) && b.name !== buffName,
-        );
-        if (superseded.length > 0) {
-          nc = { ...nc, buffs: (nc.buffs || []).filter((b: any) => !(isConcentrationSpellName(b.name) && b.name !== buffName)) };
-          if (superseded.some((b: any) => b.name === "Spirit Guardians")) ncb.spiritGuardians = false;
-          entries.push(entrySystem(`🌀 เลิกสมาธิจาก ${superseded.map((b: any) => b.name).join(", ")} (ร่ายสมาธิใหม่: ${buffName})`));
-        }
-      }
-      // Apply buff via applyBuffToCharacter
-      nc = applyBuffToCharacter({ name: buffName, type: "buff", duration: buffMeta.duration, source: "spell", effect_desc: buffMeta.effectDesc }, nc);
-      // Special flags
-      if (sp.index === "mage-armor") { nc.mageArmor = true; nc.ac = computeAC(nc); }
-      if (sp.index === "spirit-guardians") ncb.spiritGuardians = true;
-      if (sp.index === "spiritual-weapon") { ncb.spiritualWeapon = true; ncb.swRounds = 10; if (!ncb.bonusUsed) { ncb.bonusUsed = true; endsTurn = false; } }
-      if (sp.index === "shield") { ncb.shieldAC = 5; endsTurn = false; }
-      if (sp.index === "faerie-fire") {
-        // Mark all visible enemies as glowing
-        ncb.enemies.forEach((e: any) => { if (e.hpNow > 0) e.glow = true; });
-      }
-      if (sp.index === "haste") {
-        ncb.haste = true;
-        // Haste gives +1 action — already tracked via buff
-      }
-      entries.push(entrySystem(`✨ ${sp.name}: ${buffMeta.effectDesc}${isConcentration ? " (concentration)" : ""}`));
-      // Apply conditionsAdd (Hold Person, etc.)
-      if (sp.conditionsAdd && sp.conditionsAdd.length > 0) {
-        const alive = ncb.enemies.filter((e: any) => e.hpNow > 0);
-        for (const cond of sp.conditionsAdd) {
-          // Single-target conditions apply to the selected enemy; AoE to all in range
-          const primary = pickTarget(alive);
-          const targets = sp.aoeType ? alive : (primary ? [primary] : []);
-          for (const t of targets) {
-            if (!t.conditions) t.conditions = [];
-            if (!t.conditions.includes(cond)) {
-              t.conditions.push(cond);
-              entries.push(entrySystem(`   → ${t.th} ติดสภาวะ ${cond}`));
-            }
-          }
-        }
-      }
-    } else {
-      // utility — narrate effect
-      entries.push(entrySystem(`✨ ${sp.name}: ${sp.desc.slice(0, 150)}${sp.desc.length > 150 ? "..." : ""}`));
-    }
-
-    // End invisibility if attacking
-    if (sp.kind === "attack" || sp.kind === "save" || sp.kind === "auto") {
-      if (ncb.invisible) { ncb.invisible = false; entries.push(entrySystem("🫥 You become visible again (casting ends invisibility)")); }
-      nc.hiddenAdv = false;
-    }
-
-    return { cc: nc, cb: ncb, endsTurn };
-  }
-
-  // Shared death-save state transition (D&D 5e/2024 dying rules): 3 successes = stable,
-  // 3 failures = dead, nat-20 = revive at 1 HP, nat-1 = 2 failures. The pure dice/math +
-  // HP/dead bookkeeping lives in engine combat.applyDeathSaveRoll; this helper is the
-  // React-facing wrapper (setPhase, log entries) so both the in-combat turn loop
-  // (playerCombatAction) and out-of-combat hazard damage (submitAction) share one code path.
-  function resolveDeathSave(cc: any, entries: any[], inCombat: boolean): { cc: any; state: "unconscious" | "stable" | "dead" | "revived" } {
-    const r = rollD20(0);
-    const prev = { successes: cc.deathSaves.s, failures: cc.deathSaves.f, hp: cc.hp };
-    const result = applyDeathSaveRoll(prev, r.die);
-    const dsr = result.rollResult;
-    const nc = { ...cc, hp: result.hp, deathSaves: { s: result.deathSaves.successes, f: result.deathSaves.failures }, dead: result.dead };
-
-    if (dsr.state === "revived") { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
-    else if (dsr.successes > prev.successes) { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${dsr.successes}/3` }); }
-    else { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${dsr.failures}/3` }); }
-
-    if (result.state === "dead") {
-      entries.push(entrySystem(`☠️ ${nc.name} เสียชีวิต...`));
-      setPhase("dead");
-      return { cc: nc, state: "dead" };
-    }
-    if (result.state === "stable") {
-      entries.push(entrySystem(inCombat ? "อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป" : "อาการคงที่ — รอดชีวิตอย่างหวุดหวิด"));
-    }
-    return { cc: nc, state: result.state };
-  }
 
   function playerCombatAction(kind: string, payload?: any) {
     const combat0 = combatRef.current;
@@ -2299,7 +964,7 @@ export default function DnDSolo() {
     //     wraps engine.combat.rollDeathSave; 3 successes = stable, 3 failures = dead,
     //     nat-20 = revive 1 HP, nat-1 = 2 failures) ---
     if (cc.hp <= 0 && !cc.dead) {
-      const dsResult = resolveDeathSave(cc, entries, true);
+      const dsResult = resolveDeathSave(cc, entries, true, combatDeps());
       cc = dsResult.cc;
       if (dsResult.state === "dead") {
         const finalLog = [...log0, ...entries];
@@ -2334,7 +999,7 @@ export default function DnDSolo() {
       const proneIdx = cc.conditions.indexOf("prone");
       if (proneIdx >= 0) { cc.conditions.splice(proneIdx, 1); entries.push(entrySystem("🧍 Stood up — no longer Prone")); }
       // enemies act
-      cc = runEnemyPhase(cb, cc, entries, true);
+      cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
       cb.round += 1;
       cb.bonusUsed = false; cb.extraAction = false;
       const finalLog = [...log0, ...entries];
@@ -2353,368 +1018,9 @@ export default function DnDSolo() {
     let fled = false;
     let endsTurn = true;
 
-    const doWeaponAttack = (w: any, label: string) => {
-      const target = cb.enemies.find((e: any) => e.uid === payload && e.hpNow > 0) || cb.enemies.find((e: any) => e.hpNow > 0);
-      if (!target || !w) return;
-      // === D&D 2024 Range Rules ===
-      // 1 grid square = 5 ft
-      // Melee: reach 5 ft = 1 square, reach 10 ft = 2 squares (Glaive/Halberd/Pike/Lance/Whip)
-      // Ranged: rangeNormal/rangeLong in feet → convert to squares (/5)
-      //   Within rangeNormal: normal attack
-      //   Beyond rangeNormal but within rangeLong: disadvantage
-      //   Beyond rangeLong: can't attack
-      const targetPos = cb.enemyPositions?.[target.uid] || { x: 0, y: 0 };
-      const dist = cb.playerPos ? gridDistance(cb.playerPos, targetPos) : 1;
-      const distFeet = dist * 5;
-      const isRanged = w.ranged === true;
-      // Reach weapons (Glaive, Halberd, Pike, Lance, Whip) have reach 10 ft = 2 squares
-      const reachFeet = w.reach || 5;
-      const reachSquares = Math.floor(reachFeet / 5);
-      if (!isRanged) {
-        // Melee weapon
-        if (dist > reachSquares) {
-          entries.push(entrySystem(`⚠️ เป้าหมาย ${target.th} อยู่ไกลเกินไป (${dist} ช่อง = ${distFeet} ฟุต) — อาวุธระยะประชิด (reach ${reachFeet} ฟุต = ${reachSquares} ช่อง) ต้องเข้าใกล้ก่อน`));
-          return;
-        }
-      } else {
-        // Ranged weapon — check normal/long range
-        const normalRange = w.rangeNormal || 25;  // default short range
-        const longRange = w.rangeLong || 100;     // default long range
-        const normalSquares = Math.floor(normalRange / 5);
-        const longSquares = Math.floor(longRange / 5);
-        if (dist > longSquares) {
-          entries.push(entrySystem(`⚠️ เป้าหมาย ${target.th} อยู่ไกลเกินระยะโจมตี (${dist} ช่อง = ${distFeet} ฟุต > long range ${longRange} ฟุต) — ยิงไม่ถึง`));
-          return;
-        }
-        if (dist > normalSquares) {
-          entries.push(entrySystem(`📍 ยิงในระยะไกล (${distFeet} ฟุต > normal ${normalRange} ฟุต) — เสียเปรียบ`));
-        }
-      }
-      // Ranged attacks at long range have disadvantage
-      let rangedDisadv = false;
-      if (isRanged) {
-        const normalRange = w.rangeNormal || 25;
-        const normalSquares = Math.floor(normalRange / 5);
-        if (dist > normalSquares) rangedDisadv = true;
-      }
-      // Ranged attacks while enemy is adjacent (within 5 ft) have disadvantage (D&D 5e RAW)
-      let meleeAdjacentDisadv = isRanged && dist <= 1;
-      // Ranged attacks against prone target have disadvantage (melee has advantage vs prone)
-      let proneRangedDisadv = isRanged && target.conditions && target.conditions.includes("prone");
-      // === D&D 2024 Cover System (engine/vision.coverBetween) ===
-      // Cover is computed by tracing the player→target line and treating any
-      // living enemy on that line as half cover (a creature grants half cover).
-      const coverRes = coverForTarget(cb, target.uid);
-      const targetCoverAC = coverRes.bonus;
-      const targetCoverLabel = coverRes.label;
-      // Apply cover bonus to target's effective AC for this attack
-      const effectiveTargetAC = target.ac + targetCoverAC;
-      // === D&D 2024 unseen-attacker / unseen-target (engine/vision) ===
-      // targetSeesAttacker=false when the player is hidden/surprising/invisible
-      // → attacker advantage; attackerSeesTarget=false when the target is
-      // Invisible (and player has no special sense) → attacker disadvantage.
-      const attackerSeesTarget = !(target.conditions && target.conditions.includes("invisible"));
-      const targetSeesAttacker = !(cc.hiddenAdv || cb.surprise || cb.invisible);
-      const visMod = attackVisibilityModifier(attackerSeesTarget, targetSeesAttacker);
-      // Advantages: unseen attacker, target glowing (Faerie Fire), target has advantage-conditions, Help action, Vex mastery
-      let adv: "none" | "advantage" | "disadvantage" = (visMod === "advantage" || target.glow || target.helpBuff || cc.vexTarget === target.uid || attackerHasAdvVs(target)) ? "advantage" : "none";
-      // Consume helpBuff + vexTarget on attack (D&D 5e: advantage lasts until first attack)
-      if (target.helpBuff) {
-        target.helpBuff = false;
-        entries.push(entrySystem(`🤝 Help advantage consumed`));
-      }
-      if (cc.vexTarget === target.uid) {
-        cc.vexTarget = null;
-        entries.push(entrySystem(`⚔️ Vex advantage consumed`));
-      }
-      // Disadvantages: unseen target, player's debuff conditions, ranged long range, prone target (ranged only), melee adjacent (ranged only)
-      if (visMod === "disadvantage" || hasDisadv(cc) || rangedDisadv || proneRangedDisadv || meleeAdjacentDisadv) adv = adv === "advantage" ? "none" : "disadvantage";
-      // Bless buff: +1d4 to attack rolls (data-driven: read from active buffs)
-      let atkModTotal = attackMod(cc, w);
-      let blessDie = 0;
-      if ((cc.buffs || []).some((b: any) => b.name === "Bless")) {
-        blessDie = d(4);
-        atkModTotal += blessDie;
-      }
-      // Bane debuff: -1d4 to attack rolls
-      let baneDie = 0;
-      if ((cc.buffs || []).some((b: any) => b.name === "Bane")) {
-        baneDie = d(4);
-        atkModTotal -= baneDie;
-      }
-      // Task #14: GWM/Sharpshooter −5/+10 power attack. The engine gates on the
-      // feat being present AND the weapon qualifying (heavy melee / ranged); the
-      // −5 is applied to the roll here and the matching +10 to damage below.
-      const powerAtk = powerAttackModifiers(cc.feats || [], w, powerAttackOn);
-      if (powerAtk.applies) atkModTotal += powerAtk.toHit;
-      // Note: Exhaustion penalty is already applied inside attackMod() — do NOT subtract again here
-      // (D&D 2024: -2/level to all D20 Tests including attack rolls)
-      // === Engine seam (1c-b): resolve the to-hit + base weapon damage through
-      // combatBridge → resolveAttack, so the d20 roll, crit and base damage come
-      // from the tested engine instead of hand-rolled inline dice. Feature dice
-      // (sneak, smite, Hunter's Mark, masteries, …) are still layered on below.
-      const dmgDie = w.versatileDmg && (w.properties || []).includes("versatile") ? w.versatileDmg : w.dmg;
-      const abilDmgMod = mod(cc.abilities[w.abil]) + (w.plus || 0);
-      const baseDamageExpr = abilDmgMod !== 0 ? `${dmgDie}${abilDmgMod >= 0 ? "+" : ""}${abilDmgMod}` : dmgDie;
-      const engineDmgType = toDamageType(w.damageType || w.dmgType);
-      const bridgeRes = resolveBridgeAttack({
-        attacker: { id: "player", name: cc.name, ac: cc.ac, hp: cc.hp, maxHp: cc.maxHp, speed: cc.speed || 30 },
-        // Pass the target's BASE ac + cover separately so the engine forms the
-        // effective AC itself; empty resistances (see CombatView) → engine base
-        // damage is unresisted and the final resist below applies exactly once.
-        target: { id: target.uid, name: target.th, ac: target.ac, hp: Math.max(1, target.hpNow), maxHp: target.hp },
-        attackBonus: atkModTotal,
-        damageExpr: baseDamageExpr,
-        damageType: engineDmgType,
-        advantage: adv === "advantage",
-        disadvantage: adv === "disadvantage",
-        coverAC: targetCoverAC,
-      });
-      // Reconstruct the roll-ticket shape the log renderer expects.
-      const atk = { die: bridgeRes.roll, other: null, mod: atkModTotal, total: bridgeRes.total, adv };
-      if (target.glow) target.glow = false;
-      const critOn = critThreshold(cc);
-      const hit = bridgeRes.hit;
-      // Phase 2: Auto-crit vs paralyzed/unconscious within 5ft (D&D 2024)
-      // Also auto-crit vs petrified (DM ruling — typically counts as incapacitated)
-      const targetIncapacitated = target.conditions && (target.conditions.includes("paralyzed") || target.conditions.includes("unconscious") || target.conditions.includes("petrified"));
-      const isAutoCrit = hit && targetIncapacitated && dist <= 1; // melee within 5ft
-      // Engine crits on a natural 20; the app additionally crits on the class
-      // crit threshold (Champion 19-20) and auto-crit vs incapacitated.
-      const isCrit = bridgeRes.critical || isAutoCrit || (hit && bridgeRes.roll >= critOn);
-      let extra: string | null = null;
-      if (isAutoCrit) {
-        if (extra === null) extra = "";
-        extra += `💀 AUTO-CRIT (target incapacitated within 5ft)`;
-      }
-      if (targetCoverAC > 0) {
-        // Show cover info in the roll entry
-        if (extra === null) extra = "";
-        extra += `🛡️ ${targetCoverLabel} (+${targetCoverAC} AC = ${effectiveTargetAC})`;
-      }
-      if (hit) {
-        // === D&D 2024 Weapon Damage ===
-        // Base weapon damage (dice + ability mod, doubled on a natural-20 crit)
-        // already computed by the engine above; feature dice are layered on next.
-        let dmg = bridgeRes.damage;
-        // B4: Track last weapon damage roll for Savage Attacker reroll
-        (cb as any)._lastWeaponDamageRoll = { formula: dmgDie, total: dmg, damageType: w.dmgType || "slashing" };
-        let parts = [`${dmgDie}+${abilDmgMod}${w.plus ? ` (อาวุธ +${w.plus})` : ""}${w.versatileDmg && dmgDie === w.versatileDmg ? " (2H)" : ""} = ${dmg}`];
-        // Task #14: GWM/Sharpshooter +10 damage (paired with the −5 to-hit above).
-        if (powerAtk.applies) { dmg += powerAtk.damage; parts.push(`${powerAtk.reason === "sharpshooter" ? "Sharpshooter" : "GWM"} +${powerAtk.damage}`); }
-        // Phase 4: Fighting Style — Dueling grants +2 damage with a one-handed melee weapon.
-        const duelBonus = featDamageBonus(cc.feats || [], w);
-        if (duelBonus > 0) { dmg += duelBonus; parts.push(`Dueling +${duelBonus}`); }
-        if (blessDie > 0) parts.push(`Bless +${blessDie}`);
-        if (baneDie > 0) parts.push(`Bane -${baneDie}`);
-        // D&D 2024 Critical Hit: roll ALL damage dice twice (weapon dice + Sneak Attack + Hunter's Mark + Smite + Hex + any other dice)
-        // Source: D&D Beyond Free Rules 2024 "Critical Hits": "If the attack involves other damage dice, such as from the Rogue's Sneak Attack feature, you also roll those dice twice."
-        // We accomplish this by doubling the dice count via a critMultiplier flag that the additional-damage blocks check.
-        const critMultiplier = isCrit ? 2 : 1;
-        if (isCrit && !bridgeRes.critical) {
-          // Champion improved-crit / auto-crit vs incapacitated: the engine only
-          // doubles weapon dice on a natural 20, so add the extra weapon dice here.
-          const cr = rollFormula(dmgDie);
-          dmg += cr.total;
-          parts.push(`CRIT(${critOn}-20) +${cr.total} (weapon dice doubled)`);
-        } else if (isCrit) {
-          parts.push(`CRIT (nat 20, weapon dice doubled)`);
-        }
-        // Sneak Attack: D&D 5e/2024 RAW — advantage on attack roll OR ally within 5ft of target
-        // In solo play (no allies), only advantage qualifies
-        // D&D 2024: Sneak Attack dice ARE doubled on crit (same as 5e — verbatim from PHB 2024)
-        if (hasFeature(cc, "sneak_attack")) {
-          const sneakEligible = adv === "advantage" || attackerHasAdvVs(target);
-          if (sneakEligible) {
-            const nDice = sneakDice(cc.level) * critMultiplier; // Double on crit (D&D 2024)
-            const sn = rollFormula(`${nDice}d6`);
-            dmg += sn.total; parts.push(`Sneak Attack ${nDice}d6 +${sn.total}${isCrit ? " (crit ×2)" : ""}`);
-          }
-        }
-        // Hunter's Mark buff: +1d6 damage (doubled on crit — D&D 2024)
-        if ((cc.buffs || []).some((b: any) => b.name === "Hunter's Mark")) {
-          const hmDice = 1 * critMultiplier;
-          const hm = rollFormula(`${hmDice}d6`);
-          dmg += hm.total; parts.push(`Hunter's Mark +${hm.total}${isCrit ? " (crit ×2)" : ""}`);
-        }
-        // === D&D 2024 Weapon Mastery ===
-        // Only Fighter, Paladin, Ranger, Barbarian, Monk (and some feats) get Weapon Mastery
-        const hasMastery = ["fighter", "paladin", "ranger", "barbarian", "monk"].includes(cc.cls);
-        if (hasMastery && w.mastery) {
-          const masteryKey = w.mastery as string;
-          const masteryInfo = WEAPON_MASTERIES[masteryKey];
-          if (masteryInfo) {
-            switch (masteryKey) {
-              case "cleave": {
-                // Deal weapon damage to another enemy within 5 ft (no ability mod)
-                const adjacent = cb.enemies.find((e: any) => e.hpNow > 0 && e.uid !== target.uid && cb.enemyPositions[e.uid] && gridDistance(cb.playerPos, cb.enemyPositions[e.uid]) <= 1);
-                if (adjacent) {
-                  const cleaveDmg = rollFormula(dmgDie).total;
-                  hitEnemy(cb, adjacent, cleaveDmg);
-                  parts.push(`⚔️ Cleave → ${adjacent.th} +${cleaveDmg}`);
-                }
-                break;
-              }
-              case "graze": {
-                // On miss, deal ability mod damage — but we're in hit block, so graze doesn't apply here
-                // (graze is handled in the miss block below)
-                break;
-              }
-              case "push": {
-                // Push target 10 ft (2 squares) away if Large or smaller
-                if (cb.enemyPositions[target.uid]) {
-                  const ep = cb.enemyPositions[target.uid];
-                  const dx = ep.x - cb.playerPos.x;
-                  const dy = ep.y - cb.playerPos.y;
-                  const pushX = ep.x + (dx !== 0 ? Math.sign(dx) * 2 : 0);
-                  const pushY = ep.y + (dy !== 0 ? Math.sign(dy) * 2 : 0);
-                  if (pushX >= 0 && pushX < (cb.grid?.w || 12) && pushY >= 0 && pushY < (cb.grid?.h || 10)) {
-                    cb.enemyPositions[target.uid] = { x: pushX, y: pushY };
-                    parts.push(`💨 Push 10ft → (${pushX},${pushY})`);
-                  }
-                }
-                break;
-              }
-              case "sap": {
-                // Target has disadvantage on next attack roll
-                if (!target.conditions) target.conditions = [];
-                if (!target.conditions.includes("sap_effect")) {
-                  target.conditions.push("sap_effect");
-                  parts.push(" Sap (disadv next atk)");
-                }
-                break;
-              }
-              case "slow": {
-                // Reduce target speed by 10 ft (2 squares) until start of next turn
-                target.speedReduced = (target.speedReduced || 0) + 10;
-                parts.push(" Slow (-10ft speed)");
-                break;
-              }
-              case "topple": {
-                // Force CON save or fall prone
-                const toppleDC = 8 + profByLevel(cc.level) + mod(cc.abilities[w.abil]);
-                const sv = rollD20(monSave(target, "con"));
-                if (sv.total < toppleDC) {
-                  if (!target.conditions) target.conditions = [];
-                  if (!target.conditions.includes("prone")) {
-                    target.conditions.push("prone");
-                    parts.push(` Topple! CON ${sv.total}<${toppleDC} → Prone`);
-                  }
-                }
-                break;
-              }
-              case "vex": {
-                // Gain advantage on next attack against this target
-                cc.vexTarget = target.uid;
-                parts.push(" Vex (adv next atk vs target)");
-                break;
-              }
-              case "nick": {
-                // Nick: bonus action attack with off-hand weapon uses full damage die (no ability mod reduction)
-                // Handled in dual_wield logic — just log it
-                break;
-              }
-            }
-          }
-        }
-        // Hex buff: +1d6 damage (doubled on crit — D&D 2024)
-        if ((cc.buffs || []).some((b: any) => b.name === "Hex")) {
-          const hxDice = 1 * critMultiplier;
-          const hx = rollFormula(`${hxDice}d6`);
-          dmg += hx.total; parts.push(`Hex +${hx.total}${isCrit ? " (crit ×2)" : ""}`);
-        }
-        // Barbarian Rage bonus (feature-based)
-        if (hasFeature(cc, "rage") && cc.raging && w.abil === "str") {
-          const rageDmg = cc.level >= 9 ? 3 : 2;
-          dmg += rageDmg; parts.push(`Rage +${rageDmg}`);
-        }
-        // Paladin Divine Smite — D&D 5e RAW: player chooses to smite after hitting
-        // We auto-smite if toggle is on (default: on) and slots available
-        if (hasFeature(cc, "divine_smite") && cc.divineSmiteReady && cc.slots && cc.slots.some((v: number) => v > 0) && cc.divineSmiteToggle !== false) {
-          // Find lowest available slot
-          let slotIdx = -1;
-          for (let li = 0; li < cc.slots.length; li++) {
-            if (cc.slots[li] > 0) { slotIdx = li; break; }
-          }
-          if (slotIdx >= 0) {
-            cc.slots = cc.slots.map((v: number, i: number) => i === slotIdx ? v - 1 : v);
-            const smiteDice = (2 + slotIdx) * critMultiplier; // 2d8 + 1d8 per slot above 1, doubled on crit (D&D 2024)
-            const sm = rollFormula(`${smiteDice}d8`);
-            dmg += sm.total; parts.push(`Divine Smite ${smiteDice}d8 +${sm.total} (slot ${slotIdx + 1})${isCrit ? " (crit ×2)" : ""}`);
-          }
-        }
-        // Monk Flurry of Blows (ki)
-        if (w.venom && !cc.venomUsed) {
-          cc.venomUsed = true;
-          const sv = rollD20(monSave(target, "con"));
-          if (sv.total < 15) {
-            const p = rollFormula("2d10");
-            dmg += p.total; parts.push(`🐍 poison +${p.total} (CON save ${sv.total} < 15)`);
-          } else parts.push(`🐍 poison resisted (CON save ${sv.total} ≥ 15)`);
-        }
-        // Bardic Inspiration die (1d6 at Lv1)
-        if (cb.bardicInspiration) {
-          const bi = d(6);
-          dmg += bi; parts.push(`Bardic Inspiration +${bi}`);
-          cb.bardicInspiration = false;
-        }
-        // === NEW: D&D 5e damage type resistance/immunity/vulnerability ===
-        // Apply AFTER all damage modifiers (crit, sneak, hunter's mark, hex, smite, etc.)
-        // so the resistance applies to the final total, not just the weapon die.
-        // Weapon damage type defaults to "slashing" when not specified (per spec).
-        const wDmgType = (w.damageType || w.dmgType || "slashing").toLowerCase();
-        const resistedDmg = applyDamageModifiers(dmg, wDmgType, {
-          resistances: target.damageResistances,
-          vulnerabilities: target.damageVulnerabilities,
-          immunities: target.damageImmunities,
-        });
-        if (resistedDmg === 0 && dmg > 0) parts.push(`🛡️ IMMUNE (${wDmgType})`);
-        else if (resistedDmg < dmg) parts.push(`🛡️ RESIST (${wDmgType}) -${dmg - resistedDmg}`);
-        else if (resistedDmg > dmg) parts.push(`💥 VULNERABLE (${wDmgType}) +${resistedDmg - dmg}`);
-        dmg = resistedDmg;
-        // Bless die (+1d4 to attack rolls, not damage — already applied to atk in real 5e but we simplified)
-        hitEnemy(cb, target, dmg);
-        extra = `${parts.join(" · ")} = ${dmg} damage → ${target.th} ${target.hpNow <= 0 ? "dead!" : `${target.hpNow} HP left`}`;
-        // Emit events for feature triggers (data-driven)
-        emitAttack("player", target.uid, w.th);
-        if (hit) {
-          emitHit("player", target.uid, w.th, dmg);
-          emitDamageDealt("player", target.uid, dmg, wDmgType);
-          // Query feature triggers for on_hit (e.g. savage_attacker, poison_weapon)
-          const hitTriggers = queryFeatureTriggers("on_hit", "player", target.uid, { weapon: w.th, damage: dmg }, characterHasFeatureById);
-          if (hitTriggers.length > 0) {
-            const applied = applyPendingChanges(hitTriggers, cc, cb, entries);
-            cc = applied.cc; cb = applied.cb;
-            // Re-find target after pending changes may have updated enemy list
-            const updatedTarget = cb.enemies.find((e: any) => e.uid === target.uid);
-            if (updatedTarget) target.hpNow = updatedTarget.hpNow;
-          }
-          // Check for kill
-          if (target.hpNow <= 0) {
-            emitKill("player", target.uid);
-            emitDeath(target.uid, "player");
-            entries.push(entrySystem(`💀 ${target.th} ล้มลง!`));
-          }
-        }
-      }
-      // === D&D 2024 Weapon Mastery: Graze (on miss, deal ability mod damage) ===
-      if (!hit && w.mastery === "graze") {
-        const hasMastery = ["fighter", "paladin", "ranger", "barbarian", "monk"].includes(cc.cls);
-        if (hasMastery) {
-          const grazeDmg = Math.max(1, mod(cc.abilities[w.abil]));
-          hitEnemy(cb, target, grazeDmg);
-          extra = `Graze: +${grazeDmg} ${w.abil.toUpperCase()} mod damage → ${target.th} ${target.hpNow <= 0 ? "dead!" : `${target.hpNow} HP left`}`;
-          emitDamageDealt("player", target.uid, grazeDmg, "slashing");
-          if (target.hpNow <= 0) {
-            emitKill("player", target.uid);
-            entries.push(entrySystem(`💀 ${target.th} ล้มลงจาก Graze!`));
-          }
-        }
-      }
-      entries.push({ id: nextId(), type: "roll", title: `${label} ${target.th} (${w.th})`, roll: atk, vsAc: effectiveTargetAC, success: hit, extra });
-      cc.hiddenAdv = false;
-      if (cb.invisible) { cb.invisible = false; entries.push(entrySystem("🫥 You become visible again (attacking ends invisibility)")); }
-    };
+    // Weapon-attack context for the extracted resolveWeaponAttack (weaponAttack.ts):
+    // the selected target, power-attack toggle, ref-reading feature check, and logging.
+    const attackCtx = { targetId: payload, powerAttackOn, characterHasFeatureById, deps: combatDeps() };
 
     if (kind === "attack" || kind === "attack_ranged") {
       const w = kind === "attack_ranged" ? getRanged(cc) : getMelee(cc);
@@ -2736,14 +1042,14 @@ export default function DnDSolo() {
       for (let i = 0; i < numAttacks; i++) {
         if (!cb.enemies.some((e: any) => e.hpNow > 0)) break;
         if (i > 0) entries.push(entrySystem("⚔️ Extra Attack — second strike"));
-        doWeaponAttack(w, label);
+        ({ cc, cb } = resolveWeaponAttack(w, label, cc, cb, entries, attackCtx));
       }
       cc.attackedThisRound = true; // Track for Rage maintenance
       if (monkBonus && cb.enemies.some((e:any) => e.hpNow > 0) && !cb.bonusUsed) {
         // D&D 2024: Monk Martial Arts die = 1d4 at Lv1-4, 1d6 at Lv5-10, 1d8 at Lv11-16, 1d10 at Lv17+
         const martialDie = cc.level >= 17 ? "1d10" : cc.level >= 11 ? "1d8" : cc.level >= 5 ? "1d6" : "1d4";
         entries.push(entrySystem(`🥋 Martial Arts — bonus action unarmed strike (${martialDie}+DEX)`));
-        doWeaponAttack({ th: "Unarmed Strike", dmg: martialDie, abil: "dex", ranged: false, reach: 5, properties: [] }, "👊");
+        ({ cc, cb } = resolveWeaponAttack({ th: "Unarmed Strike", dmg: martialDie, abil: "dex", ranged: false, reach: 5, properties: [] }, "👊", cc, cb, entries, attackCtx));
         cb.bonusUsed = true;
       }
     } else if (kind === "item") {
@@ -2786,7 +1092,7 @@ export default function DnDSolo() {
       setThinking(true);
       (async () => {
         try {
-          const result = await castSRDSpell(spellIndex, slotLevel, cc, cb, entries);
+          const result = await castSRDSpell(spellIndex, slotLevel, cc, cb, entries, combatDeps(), combatTargetId);
           cc = result.cc; cb = result.cb;
           let finalEndsTurn = result.endsTurn;
           // Action Surge: keep turn going
@@ -2797,7 +1103,7 @@ export default function DnDSolo() {
           }
           setCombatMenu("");
           // win check
-          let endW = checkCombatEnd(cb, cc, entries);
+          let endW = checkCombatEnd(cb, cc, entries, combatDeps());
           cc = endW.cc;
           if (endW.ended) {
             const finalLog = [...log0, ...entries];
@@ -2850,7 +1156,7 @@ export default function DnDSolo() {
               entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
             }
           }
-          endW = checkCombatEnd(cb, cc, entries);
+          endW = checkCombatEnd(cb, cc, entries, combatDeps());
           cc = endW.cc;
           if (endW.ended) {
             const finalLog = [...log0, ...entries];
@@ -2859,7 +1165,7 @@ export default function DnDSolo() {
             narrateCombatEvent(`[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e:any)=>e.th).join(", ")}. HP คงเหลือ ${cc.hp}/${cc.maxHp}. บรรยายผลหลังการต่อสู้และอาจให้ loot — อย่าลืมอ้างถึงแผลที่ได้รับและสภาพรอบตัวในฉากเดิม`, cc, scene, finalLog, history);
             return;
           }
-          cc = runEnemyPhase(cb, cc, entries, true);
+          cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
           // Emit turn-end for player + turn-start for new round
           emitTurnEnd("player", cb.round);
           cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
@@ -2999,7 +1305,7 @@ export default function DnDSolo() {
         // Two extra unarmed strikes
         for (let i = 0; i < 2; i++) {
           if (!cb.enemies.some((e:any)=>e.hpNow>0)) break;
-          doWeaponAttack({ th: "Unarmed Strike", dmg: "1d4", abil: "dex", ranged: false }, `🥋 Flurry ${i+1}`);
+          ({ cc, cb } = resolveWeaponAttack({ th: "Unarmed Strike", dmg: "1d4", abil: "dex", ranged: false }, `🥋 Flurry ${i+1}`, cc, cb, entries, attackCtx));
         }
         entries.push(entrySystem(`🌀 Flurry of Blows (1 ki point, ${cc.level - cc.kiUsed} ki left)`));
       }
@@ -3218,7 +1524,7 @@ export default function DnDSolo() {
     }
 
     // win check
-    let endW = checkCombatEnd(cb, cc, entries);
+    let endW = checkCombatEnd(cb, cc, entries, combatDeps());
     cc = endW.cc;
     if (endW.ended || fled) {
       const finalLog = [...log0, ...entries];
@@ -3274,7 +1580,7 @@ export default function DnDSolo() {
           entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
         }
       }
-      endW = checkCombatEnd(cb, cc, entries);
+      endW = checkCombatEnd(cb, cc, entries, combatDeps());
       cc = endW.cc;
       if (endW.ended) {
         const finalLog = [...log0, ...entries];
@@ -3284,8 +1590,8 @@ export default function DnDSolo() {
       }
       // Task #14: sidekick assist acts at the END of the player's turn, before
       // the enemies. Its damage routes through hitEnemy (bridge-owned HP).
-      runSidekickAssist(cb, cc, entries);
-      const skEnd = checkCombatEnd(cb, cc, entries);
+      runSidekickAssist(cb, cc, (t) => entries.push(entrySystem(t)), combatTargetId);
+      const skEnd = checkCombatEnd(cb, cc, entries, combatDeps());
       cc = skEnd.cc;
       if (skEnd.ended) {
         const finalLog = [...log0, ...entries];
@@ -3294,8 +1600,8 @@ export default function DnDSolo() {
         return;
       }
       // Tick buff durations BEFORE enemies attack (= end of player's turn)
-      cc = tickBuffs(cc, entries);
-      cc = runEnemyPhase(cb, cc, entries, true);
+      cc = tickBuffs(cc, (t) => entries.push(entrySystem(t)));
+      cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
       cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
       if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
       // End of round: rage expires if no attack happened this round
@@ -3454,7 +1760,14 @@ export default function DnDSolo() {
 
       let entries = [entryNarration(res.narration)];
       logValidationWarnings(res, entries);
-      let cc = applyUpdates(res.updates, c, entries);
+      // Rule 2.3 guard: if this response asks for a check/save, its consequences
+      // (damage/gold/items/conditions/buffs) must wait for the roll — the follow-up
+      // response (res2) applies them. Otherwise the player is punished/rewarded
+      // before the dice are known, and a successful roll can't undo it.
+      const setupUpdates = res.requires && !res.start_combat
+        ? deferConsequenceUpdates(res.updates)
+        : res.updates;
+      let cc = applyUpdates(setupUpdates, c, entries);
 
       // === Narrative Pacing: track scene type + tension ===
       let sc = res.scene || scene;
@@ -3595,21 +1908,23 @@ export default function DnDSolo() {
         }
       }
 
-      if (cb && !cb.playerFirst) { cc = runEnemyPhase(cb, cc, entries, false); cb.round += 1; }
+      if (cb && !cb.playerFirst) { cc = runEnemyPhase(cb, cc, entries, false, combatDeps()); cb.round += 1; }
 
       if (cc.hp <= 0 && !cc.dead && !cb) {
-        const dsResult = resolveDeathSave(cc, entries, false);
+        const dsResult = resolveDeathSave(cc, entries, false, combatDeps());
         cc = dsResult.cc;
       }
 
       const finalLog = [...baseLog, ...entries];
-      // Smart history trimming — keep first 2 (world map setup) + last 22 + summary of middle
+      // Smart history trimming — keep first 2 (world map setup) + summary of middle + last 21.
+      // Total is capped at 24 so persist()'s own hist.slice(-24) keeps the whole thing
+      // (a 25-item trim would let persist drop one of the first-2 setup messages on save).
       let trimmedHist = hist;
-      if (hist.length > 26) {
+      if (hist.length > 24) {
         const first2 = hist.slice(0, 2);
-        const last22 = hist.slice(-22);
+        const lastN = hist.slice(-21);
         // Build summary of skipped messages
-        const skipped = hist.slice(2, -22);
+        const skipped = hist.slice(2, -21);
         const skipSummary = skipped.map((h: any) => {
           if (h.role === "user") {
             const playerMatch = h.content.match(/Player:\s*(.+)/);
@@ -3623,7 +1938,7 @@ export default function DnDSolo() {
           return "";
         }).filter(Boolean).join(" → ");
         const summaryEntry = { role: "user" as const, content: `[SUMMARY OF PAST EVENTS: ${skipSummary}]` };
-        trimmedHist = [...first2, summaryEntry, ...last22];
+        trimmedHist = [...first2, summaryEntry, ...lastN];
       }
       mapRef.current = mp;
       setC(cc); setScene(sc); setCombat(cb); setLog(finalLog); setHistory(trimmedHist); setMap(mp);
@@ -3680,6 +1995,29 @@ export default function DnDSolo() {
    * solo player gets an exploration loop without an LLM round-trip. RNG (d20 +
    * d100s) lives HERE at the UI edge; the engine (resolveExplorationTurn) is pure.
    */
+  /* -------- Shop handlers (extracted from the inline ShopModal onClicks) -------- */
+  function shopBuy(label: string, price: number, invItem: string, bargainKey?: string) {
+    if (c.gold < price) return;
+    const nc = { ...c, gold: c.gold - price, inventory: [...c.inventory, invItem] };
+    setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${label} — ${price} gp → เหลือ ${nc.gold} gp`)]);
+    persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${label} — ${price} gp`)], null, history);
+    // A bargained price is spent once used — a fresh negotiation is needed next time.
+    if (bargainKey) setBargainedPrices((prev) => { const next = { ...prev }; delete next[bargainKey]; return next; });
+  }
+  function shopBargain(key: string, basePrice: number, label: string) {
+    // D&D 5e Bargaining: Persuasion check vs a price-scaled DC. Pure economy engine
+    // owns the rule; the d20 roll (RNG) is injected here at the UI edge.
+    const r = rollD20(skillMod(c, "persuasion"));
+    const { dc: bargainDC, success, discountPct: discount, price: newPrice } = bargainOutcome(r.total, basePrice);
+    setLog([...log, entrySystem(`🗣️ เจรจา ${label}: Persuasion ${r.total} vs DC ${bargainDC} → ${success ? `สำเร็จ! ลด ${discount}% → ${newPrice} gp` : `ล้มเหลว! ราคาเพิ่ม ${Math.abs(discount)}% → ${newPrice} gp`}`)]);
+    setBargainedPrices((prev) => ({ ...prev, [key]: newPrice }));
+  }
+  function shopSell(item: string, index: number, sellPrice: number) {
+    const nc = { ...c, gold: c.gold + sellPrice, inventory: c.inventory.filter((_: string, j: number) => j !== index) };
+    setC(nc); setLog([...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp → รวม ${nc.gold} gp`)]);
+    persist(nc, scene, [...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp`)], null, history);
+  }
+
   function exploreAction() {
     if (thinking || combat) return;
     const d20 = () => Math.floor(Math.random() * 20) + 1;
@@ -3940,52 +2278,6 @@ export default function DnDSolo() {
     persist(cc, scene, finalLog, combat, history);
   }
 
-  /**
-   * Run the sidekick's automatic assist turn. The engine (sidekick.ts) owns the
-   * stat block, the deterministic turn-intent ladder, and the attack resolution;
-   * this only rolls the injected dice and routes damage through hitEnemy so the
-   * combat bridge stays the single owner of enemy HP. Companion HP is not
-   * tracked (assist-only, enemies target the player) — a deliberately light
-   * integration. No-op when there is no sidekick or no living enemy.
-   */
-  function runSidekickAssist(cb: any, cc: any, entries: any[]) {
-    const sk = cc?.sidekick;
-    if (!sk || !cb || !Array.isArray(cb.enemies)) return;
-    const base = SIDEKICK_BASES[sk.baseKey];
-    if (!base) return;
-    const living = cb.enemies.filter((e: any) => e.hpNow > 0);
-    if (living.length === 0) return;
-    const block = buildSidekick(base, sk.klass, Math.max(1, Math.min(10, sk.level || cc.level || 1)));
-    const intent = sidekickTurnIntent(block, {
-      selfHpFraction: 1, // untracked HP → treat as healthy (assist-only)
-      woundedAllyHpFraction: cc.maxHp > 0 ? cc.hp / cc.maxHp : null,
-      enemyInReach: true,
-      hasSpellSlot: !!block.spellcasting,
-      canHeal: false, // this light wiring only performs offensive assists
-    });
-    if (intent.action !== "attack" && intent.action !== "cast_attack") {
-      entries.push(entrySystem(`🐕 ${base.name}: ${intent.reason}`));
-      return;
-    }
-    const target = living.find((e: any) => e.uid === combatTargetId) || living[0];
-    for (let i = 0; i < block.attacksPerAction; i++) {
-      if (target.hpNow <= 0) break;
-      const d20 = d(20);
-      const res = resolveSidekickAttack(block, {
-        targetAc: target.ac,
-        d20,
-        damageDiceTotal: rollFormula(block.attack.damageDice).total,
-        critDiceTotal: rollFormula(block.attack.damageDice).total,
-      });
-      if (res.hit) {
-        hitEnemy(cb, target, res.damage);
-        entries.push(entrySystem(`🐕 ${base.name} ${intent.action === "cast_attack" ? "ร่ายเวทใส่" : "โจมตี"} ${target.th}: ${res.crit ? "CRIT! " : ""}${res.damage} dmg → ${target.hpNow <= 0 ? "ล้ม!" : `${target.hpNow} HP`}`));
-      } else {
-        entries.push(entrySystem(`🐕 ${base.name} โจมตี ${target.th} พลาด (d20=${d20})`));
-      }
-    }
-  }
-
   /* -------- new game flow -------- */
   // Quick-start with a pre-made character
   async function quickStart(cls: string) {
@@ -4034,7 +2326,7 @@ export default function DnDSolo() {
       }
       const finalHist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
       const finalLog = [...entries];
-      if (ncb && !ncb.playerFirst) { nc = runEnemyPhase(ncb, nc, finalLog, false); ncb.round += 1; }
+      if (ncb && !ncb.playerFirst) { nc = runEnemyPhase(ncb, nc, finalLog, false, combatDeps()); ncb.round += 1; }
       setC(nc); setScene(sc); setLog(finalLog); setCombat(ncb); setHistory(finalHist); setMap(mp);
       persist(nc, sc, finalLog, ncb, finalHist);
     } catch (e: any) {
@@ -4230,7 +2522,7 @@ export default function DnDSolo() {
               </div>
             </div>
           )}
-          {renderSessionZeroModal()}
+          {<SessionZeroModal open={sessionZeroOpen} config={sessionZeroConfig} onClose={() => setSessionZeroOpen(false)} editSz={editSz} lineInput={szLineInput} setLineInput={setSzLineInput} veilInput={szVeilInput} setVeilInput={setSzVeilInput} />}
         </div>
       </div>
     );
@@ -4387,129 +2679,13 @@ export default function DnDSolo() {
       {/* LOG */}
       <AdventureLog log={log} thinking={thinking} logRef={logRef} onScroll={handleLogScroll} />
 
-      {/* ASI MODAL */}
-      {c?.pendingAsi > 0 && (
-        <div className="sheet-overlay">
-          <div className="sheet-modal" style={{ maxWidth: 440 }}>
-            <div style={{ padding: "14px 16px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>💪 Ability Score Improvement</span>
-              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>Pick +1 twice (same score twice = +2) · max 20</div>
-              {ABILS.map((a) => {
-                const picks = asiPicks.filter((p) => p === a).length;
-                const atMax = c.abilities[a] + picks >= 20;
-                return (
-                  <div key={a} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 4px", borderBottom: "1px dashed #2E2748", fontSize: 14 }}>
-                    <span><b style={{ color: "#E0A83E" }}>{ABIL_TH[a]}</b> {c.abilities[a]}{picks > 0 ? ` → ${c.abilities[a] + picks}` : ""}</span>
-                    <button className="btn" style={{ padding: "3px 14px" }} disabled={asiPicks.length >= 2 || atMax} onClick={() => setAsiPicks([...asiPicks, a])}>+1</button>
-                  </div>
-                );
-              })}
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <button className="btn" disabled={asiPicks.length === 0} onClick={() => setAsiPicks([])}>Clear</button>
-                <button className="btn btn-gold" style={{ flex: 1 }} disabled={asiPicks.length !== 2} onClick={applyAsi}>Confirm ({asiPicks.length}/2)</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ASI + SUBCLASS level-up modals */}
+      <AsiModal open={(c?.pendingAsi ?? 0) > 0} abilities={c?.abilities ?? {}} picks={asiPicks} setPicks={setAsiPicks} onConfirm={applyAsi} />
+      <SubclassModal open={!!(c && !combat && !c.pendingAsi && needsSubclassChoice(c.cls, c.level, c.subclass))} cls={c?.cls ?? ""} level={c?.level ?? 1} onChoose={chooseSubclass} />
 
-      {/* SUBCLASS MODAL — appears once the class reaches its subclass level (not in combat) */}
-      {c && !combat && !c.pendingAsi && needsSubclassChoice(c.cls, c.level, c.subclass) && (
-        <div className="sheet-overlay">
-          <div className="sheet-modal" style={{ maxWidth: 480 }}>
-            <div style={{ padding: "14px 16px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🎓 เลือก Subclass</span>
-              <div style={{ fontSize: 13, color: "#9C92B8", margin: "6px 0 12px" }}>สาย{CLASSES[c.cls].th} — เลือก 1 (กำหนดความสามารถพิเศษ)</div>
-              {getAvailableSubclasses(c.cls, c.level).map((sub) => (
-                <div key={sub.id} style={{ padding: "8px 4px", borderBottom: "1px dashed #2E2748" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <b style={{ color: "#E0A83E", fontSize: 14 }}>{sub.th}</b>
-                    <button className="btn btn-gold" style={{ padding: "3px 14px" }} onClick={() => chooseSubclass(sub.id)}>เลือก</button>
-                  </div>
-                  <div style={{ fontSize: 12, color: "#9C92B8", marginTop: 3 }}>{sub.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Task #14: RE-PREPARE modal (prepared casters, at/after long rest) */}
-      {reprepareOpen && c && (() => {
-        const castAbil = CLASSES[c.cls]?.castAbil;
-        const abilMod = castAbil ? mod(c.abilities[castAbil]) : 0;
-        const maxHeld = getSpellcastingRule(c.cls, c.level, abilMod).maxHeld;
-        const book: string[] = c.spellbook || c.knownSpells || [];
-        // Only LEVELED spells are managed here (cantrips are always prepared).
-        const leveledBook = book.filter((idx) => {
-          const info = availableSpells.find((s) => s.index === idx);
-          return info ? info.level > 0 : true;
-        });
-        const pretty = (idx: string) => idx.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-        const toggle = (idx: string) => setReprepareSel((sel) =>
-          sel.includes(idx) ? sel.filter((x) => x !== idx) : (sel.length < maxHeld ? [...sel, idx] : sel));
-        return (
-          <div className="sheet-overlay" onClick={() => setReprepareOpen(false)}>
-            <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-                <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🔄 เตรียมเวทใหม่ ({reprepareSel.length}/{maxHeld})</span>
-                <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setReprepareOpen(false)}>✕</button>
-              </div>
-              <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกเวทที่จะเตรียม (สูงสุด {maxHeld} เวท) — cantrip เตรียมอัตโนมัติเสมอ</div>
-                {leveledBook.length === 0 && <div style={{ fontSize: 12, color: "#8A7F9E" }}>ยังไม่มีเวทในสมุด — เรียนเวทก่อน (📜 → เวทมนตร์)</div>}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4, maxHeight: 320, overflowY: "auto" }}>
-                  {leveledBook.map((idx) => {
-                    const on = reprepareSel.includes(idx);
-                    const full = !on && reprepareSel.length >= maxHeld;
-                    return (
-                      <button key={idx} className={"btn" + (on ? " btn-gold" : "")} style={{ textAlign: "left", padding: "6px 10px", opacity: full ? 0.5 : 1 }}
-                        disabled={full} onClick={() => toggle(idx)}>
-                        {on ? "✅" : "⬜"} {pretty(idx)}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button className="btn btn-gold" style={{ padding: "8px" }} onClick={() => commitReprepare(reprepareSel)}>ยืนยันการเตรียมเวท</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Task #14: COMPANION recruit modal (out of combat) */}
-      {recruitOpen && c && !combat && (
-        <div className="sheet-overlay" onClick={() => setRecruitOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🐕 สหายร่วมทาง</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setRecruitOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {c.sidekick ? (
-                <>
-                  <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                    สหายปัจจุบัน: <b>{SIDEKICK_BASES[c.sidekick.baseKey]?.name}</b> — {c.sidekick.klass} (Lv.{c.sidekick.level})
-                  </div>
-                  <button className="btn btn-red" onClick={() => recruitSidekick(null)}>ปลดสหาย</button>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 12, color: "#8A7F9E" }}>เลือกสหาย 1 คนที่จะช่วยโจมตีในสนามรบอัตโนมัติ</div>
-                  {([
-                    { key: "guard", klass: "warrior" as SidekickClass, label: "⚔️ องครักษ์ (Warrior) — โจมตีประชิด อึด" },
-                    { key: "scout", klass: "expert" as SidekickClass, label: "🏹 หน่วยสอดแนม (Expert) — ยิงระยะไกล" },
-                    { key: "acolyte", klass: "spellcaster" as SidekickClass, label: "✨ นักบวช (Spellcaster) — เวทสนับสนุน" },
-                  ]).map((o) => (
-                    <button key={o.key} className="btn" style={{ textAlign: "left", padding: "10px 12px" }}
-                      onClick={() => recruitSidekick({ baseKey: o.key, klass: o.klass })}>{o.label}</button>
-                  ))}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* RE-PREPARE + COMPANION modals */}
+      <ReprepareModal open={reprepareOpen} c={c} availableSpells={availableSpells} sel={reprepareSel} setSel={setReprepareSel} onCommit={commitReprepare} onClose={() => setReprepareOpen(false)} />
+      <CompanionModal open={recruitOpen && !!c && !combat} sidekick={c?.sidekick} onClose={() => setRecruitOpen(false)} onRecruit={recruitSidekick} />
 
       {/* MORE MENU — secondary actions (Shop, AI DM, Content) */}
       {moreMenuOpen && !combat && (
@@ -4576,602 +2752,30 @@ export default function DnDSolo() {
       )}
 
       {/* SESSION ZERO MODAL — Task #16 campaign charter (deterministic engine: src/lib/engine/sessionZero.ts) */}
-      {renderSessionZeroModal()}
+      {<SessionZeroModal open={sessionZeroOpen} config={sessionZeroConfig} onClose={() => setSessionZeroOpen(false)} editSz={editSz} lineInput={szLineInput} setLineInput={setSzLineInput} veilInput={szVeilInput} setVeilInput={setSzVeilInput} />}
 
-      {/* ORACLE MODAL — Phase 5 solo GM emulator (deterministic engine: src/lib/engine/oracle.ts) */}
-      {oracleOpen && (
-        <div className="sheet-overlay" onClick={() => setOracleOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🔮 ออราเคิล</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setOracleOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ fontSize: 12, color: "#8A7F9E" }}>ถามคำถามใช่/ไม่ใช่ แล้วให้โชคชะตาตอบ — สำหรับเล่นคนเดียวโดยไม่ต้องรอ DM</div>
-              <input className="input-main" placeholder="เช่น มีใครซ่อนอยู่ในห้องนี้ไหม?" value={oracleQuestion}
-                onChange={(e) => setOracleQuestion(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") askOracleAction(); }}
-                style={{ fontSize: 13, padding: "8px 12px" }} />
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {LIKELIHOOD_ORDER.map((lk) => (
-                  <button key={lk} className={"btn" + (oracleLikelihood === lk ? " btn-gold" : "")}
-                    style={{ flex: "1 0 30%", fontSize: 11, padding: "6px" }}
-                    onClick={() => setOracleLikelihood(lk)}>
-                    {lk === "certain" ? "แน่นอนมาก" : lk === "likely" ? "น่าจะใช่" : lk === "50-50" ? "50-50" : lk === "unlikely" ? "ไม่น่าใช่" : "แทบเป็นไปไม่ได้"}
-                  </button>
-                ))}
-              </div>
-              <button className="btn btn-gold" style={{ padding: "10px", fontSize: 14 }} onClick={askOracleAction}>
-                🎲 ถามออราเคิล
-              </button>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "40vh", overflowY: "auto" }}>
-                {oracleLog.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "#6B6284", textAlign: "center", padding: 16 }}>ยังไม่มีคำถาม</div>
-                ) : oracleLog.map((entry, i) => (
-                  <div key={i} className="item-row" style={{ borderLeft: `3px solid ${entry.res.affirmative ? "#7FA85C" : "#C74B44"}`, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 12, color: "#C9BFE0" }}>{entry.q}</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: entry.res.affirmative ? "#7FA85C" : "#C74B44" }}>
-                      {entry.res.label} <span style={{ fontSize: 11, color: "#6B6284", fontWeight: 400 }}>(d100={entry.res.roll})</span>
-                    </div>
-                    {entry.event && (
-                      <div style={{ fontSize: 12, color: "#E0A83E", marginTop: 4 }}>
-                        ⚡ เหตุการณ์สุ่ม: {entry.event.focusLabel} — <span style={{ color: "#C9BFE0" }}>{entry.event.meaning.prompt}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ORACLE MODAL — Phase 5 solo GM emulator (src/lib/engine/oracle.ts) */}
+      <OracleModal open={oracleOpen} onClose={() => setOracleOpen(false)} question={oracleQuestion} setQuestion={setOracleQuestion} likelihood={oracleLikelihood} setLikelihood={setOracleLikelihood} log={oracleLog} onAsk={askOracleAction} />
 
       {/* QUEST JOURNAL MODAL */}
-      {questJournalOpen && (
-        <div className="sheet-overlay" onClick={() => setQuestJournalOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>📜 บันทึกเควสต์</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setQuestJournalOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body">
-              {quests.length === 0 ? (
-                <div style={{ fontSize: 13, color: "#8A7F9E", textAlign: "center", padding: 30 }}>ยังไม่มีเควสต์ — DM จะมอบเควสต์เมื่อคุณพบ NPC ที่เกี่ยวข้อง</div>
-              ) : (
-                quests.map((q) => (
-                  <div key={q.id} className="item-row" style={{ marginBottom: 8, borderLeft: q.status === "active" ? "3px solid #E0A83E" : q.status === "completed" ? "3px solid #7FA85C" : "3px solid #C74B44" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: q.status === "active" ? "#E0A83E" : q.status === "completed" ? "#7FA85C" : "#C74B44" }}>
-                      {q.status === "active" ? "▶" : q.status === "completed" ? "✅" : "❌"} {q.title}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#9C92B8", marginTop: 4 }}>{q.description}</div>
-                    {q.objectives && q.objectives.length > 0 && (
-                      <div style={{ fontSize: 11, color: "#C9BFE0", marginTop: 4 }}>
-                        {q.objectives.map((o, i) => (
-                          <div key={i}>{o.done ? "✓" : "○"} {o.text}</div>
-                        ))}
-                      </div>
-                    )}
-                    {q.reward && <div style={{ fontSize: 11, color: "#B9A96A", marginTop: 4 }}>🎁 รางวัล: {q.reward}</div>}
-                    {q.giver && <div style={{ fontSize: 10, color: "#6B6284", marginTop: 2 }}>ผู้มอบ: {q.giver}</div>}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <QuestJournalModal open={questJournalOpen} onClose={() => setQuestJournalOpen(false)} quests={quests} />
 
-      {/* SHOP MODAL — D&D 5e economy: buy/sell weapons, armor, magic items, consumables */}
-      {shopOpen && c && !combat && (
-        <div className="sheet-overlay" onClick={() => setShopOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 650 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🏪 ร้านค้า</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 14, color: "#B9A96A" }}>💰 {c.gold} gp</span>
-                <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setShopOpen(false)}>✕</button>
-              </div>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
-              {/* Tabs */}
-              <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-                {(["weapons", "armor", "magic", "consumables", "sell"] as const).map(tab => (
-                  <button key={tab} className={"btn" + (shopTab === tab ? " btn-gold" : "")} style={{ flex: 1, fontSize: 11, padding: "5px" }}
-                    onClick={() => setShopTab(tab)}>
-                    {tab === "weapons" ? "⚔️ อาวุธ" : tab === "armor" ? "🛡️ เกราะ" : tab === "magic" ? "✨ ของวิเศษ" : tab === "consumables" ? "🧪 ยา" : "📤 ขายของ"}
-                  </button>
-                ))}
-              </div>
-              {/* Search box */}
-              <input className="input-main" placeholder="🔍 ค้นหา..." value={shopSearch}
-                onChange={(e) => setShopSearch(e.target.value)}
-                style={{ marginBottom: 10, fontSize: 13, padding: "8px 12px" }} />
+      {/* SHOP MODAL — D&D 5e economy (component: game/ShopModal) */}
+      <ShopModal open={shopOpen && !!c && !combat} c={c} tab={shopTab} setTab={setShopTab} search={shopSearch} setSearch={setShopSearch} bargainedPrices={bargainedPrices} onBuy={shopBuy} onBargain={shopBargain} onSell={shopSell} onClose={() => setShopOpen(false)} />
 
-              {/* Buy Weapons */}
-              {shopTab === "weapons" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(WEAPONS).filter(([, w]: any) => (w.type === "simple" || w.type === "martial")).filter(([key, w]: any) => !shopSearch || w.th.toLowerCase().includes(shopSearch.toLowerCase()) || key.includes(shopSearch.toLowerCase())).map(([key, w]: any) => {
-                    // Calculate price with reputation discount (D&D 5e: Persuasion can reduce price)
-                    const basePrice = w.price;
-                    const charRep = c.gold > 500 ? 10 : 0; // simple reputation proxy
-                    // A negotiated bargain price (if this item was just haggled over) overrides
-                    // the passive reputation discount — it's the more specific, explicit price.
-                    const finalPrice = bargainedPrices[key] ?? Math.max(1, Math.floor(basePrice * (1 - charRep / 100)));
-                    return (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{w.th}</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 4 }}>{w.dmg} {w.abil === "dex" ? "DEX" : "STR"}{w.versatileDmg ? ` (2H: ${w.versatileDmg})` : ""}</span>
-                        {w.mastery && <span style={{ color: "#7FA85C", fontSize: 9, marginLeft: 4 }}>[{w.mastery}]</span>}
-                        <div style={{ color: "#B9A96A" }}>
-                          {finalPrice !== basePrice ? (
-                            <span><s style={{ color: "#6B6284" }}>{basePrice}</s> {finalPrice} gp</span>
-                          ) : (
-                            <span>{basePrice} gp</span>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 3 }}>
-                        <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                          disabled={c.gold < finalPrice}
-                          onClick={() => {
-                            if (c.gold >= finalPrice) {
-                              const nc = { ...c, gold: c.gold - finalPrice, inventory: [...c.inventory, w.th] };
-                              setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${w.th} — ${finalPrice} gp → เหลือ ${nc.gold} gp`)]);
-                              persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${w.th} — ${finalPrice} gp`)], null, history);
-                              // Bargain price is spent once used — a fresh negotiation is needed next time.
-                              setBargainedPrices((prev) => { const next = { ...prev }; delete next[key]; return next; });
-                            }
-                          }}>ซื้อ</button>
-                        <button className="btn" style={{ padding: "3px 6px", fontSize: 9 }}
-                          onClick={() => {
-                            // D&D 5e Bargaining: Persuasion check vs a price-scaled DC.
-                            // Resolved by the pure economy engine (src/lib/engine/economy.ts);
-                            // RNG (the d20 roll) is injected here at the UI edge.
-                            const r = rollD20(skillMod(c, "persuasion"));
-                            const { dc: bargainDC, success, discountPct: discount, price: newPrice } = bargainOutcome(r.total, basePrice);
-                            setLog([...log, entrySystem(`🗣️ เจรจา ${w.th}: Persuasion ${r.total} vs DC ${bargainDC} → ${success ? `สำเร็จ! ลด ${discount}% → ${newPrice} gp` : `ล้มเหลว! ราคาเพิ่ม ${Math.abs(discount)}% → ${newPrice} gp`}`)]);
-                            // Persist the negotiated price so Buy actually charges it.
-                            setBargainedPrices((prev) => ({ ...prev, [key]: newPrice }));
-                          }}>เจรจา</button>
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
+      {/* CONTENT MANAGER MODAL (component: game/ContentManagerModal) */}
+      <ContentManagerModal open={contentManagerOpen && !!c} onClose={() => setContentManagerOpen(false)}
+        registry={contentRegistry} setRegistry={setContentRegistry}
+        importText={contentImportText} setImportText={setContentImportText}
+        importMsg={contentImportMsg} setImportMsg={setContentImportMsg}
+        filterType={contentFilterType} setFilterType={setContentFilterType}
+        exportText={contentExportText} setExportText={setContentExportText} />
 
-              {/* Buy Armor */}
-              {shopTab === "armor" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(ARMOR).filter(([key, a]: any) => !shopSearch || a.th.toLowerCase().includes(shopSearch.toLowerCase()) || key.includes(shopSearch.toLowerCase())).map(([key, a]: any) => (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{a.th}</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 4 }}>
-                          {a.acPlus ? `+${a.acPlus} AC` : `AC ${a.acBase}${a.dexBonus ? "+DEX" : ""}${a.maxDex ? `(max ${a.maxDex})` : ""}`}
-                        </span>
-                        <span style={{ color: "#6B6284", fontSize: 9, marginLeft: 4 }}>[{a.type}]</span>
-                        <div style={{ color: "#B9A96A" }}>{a.price} gp</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < a.price}
-                        onClick={() => {
-                          if (c.gold >= a.price) {
-                            const nc = { ...c, gold: c.gold - a.price, inventory: [...c.inventory, a.th] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${a.th} — ${a.price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${a.th} — ${a.price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
+      {/* AI DM HELPER MODAL (component: game/AiDmHelperModal) */}
+      <AiDmHelperModal open={dmHelperOpen && !!c} onClose={() => setDmHelperOpen(false)} level={c?.level ?? 1} lastIntent={lastIntent} narrativeEngine={narrativeEngine} />
 
-              {/* Buy Magic Items */}
-              {shopTab === "magic" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(MAGIC_ITEMS).filter(([, m]: any) => m.price <= c.gold + 500).filter(([name, m]: any) => !shopSearch || name.toLowerCase().includes(shopSearch.toLowerCase())).map(([name, m]: any) => (
-                    <div key={name} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#E0A83E", fontWeight: 600 }}>{name}</span>
-                        <span style={{ color: "#6B6284", fontSize: 9, marginLeft: 4 }}>[{m.slot}]</span>
-                        <div style={{ color: "#B9A96A" }}>{m.price} gp</div>
-                        <div style={{ color: "#8A7F9E", fontSize: 9 }}>{m.desc?.slice(0, 60)}...</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < m.price}
-                        onClick={() => {
-                          if (c.gold >= m.price) {
-                            const nc = { ...c, gold: c.gold - m.price, inventory: [...c.inventory, name] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${name} — ${m.price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${name} — ${m.price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Buy Consumables */}
-              {shopTab === "consumables" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(CONSUMABLES).filter(([key, con]: any) => !shopSearch || (con.th || key).toLowerCase().includes(shopSearch.toLowerCase())).map(([key, con]: any) => (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{con.th || key}</span>
-                        <div style={{ color: "#8A7F9E", fontSize: 9 }}>{con.heal ? `ฟื้น ${con.heal} HP` : con.cure ? `รักษา ${con.cure}` : "ใช้ใน combat"}</div>
-                        <div style={{ color: "#B9A96A" }}>{con.price || 25} gp</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < (con.price || 25)}
-                        onClick={() => {
-                          const price = con.price || 25;
-                          if (c.gold >= price) {
-                            const nc = { ...c, gold: c.gold - price, inventory: [...c.inventory, key] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${con.th || key} — ${price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${con.th || key} — ${price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Sell items from inventory (50% of base price) */}
-              {shopTab === "sell" && (
-                <div>
-                  <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 8 }}>
-                    ขายของจากเป้ (ราคาขาย = 50% ของราคาซื้อ — D&D 5e standard)
-                  </div>
-                  {c.inventory.length === 0 ? (
-                    <div style={{ fontSize: 12, color: "#8A7F9E", textAlign: "center", padding: 20 }}>ไม่มีของในเป้</div>
-                  ) : (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                      {c.inventory.map((item: string, i: number) => {
-                        const wEntry = weaponByName(item) as [string, any] | undefined;
-                        const w = wEntry?.[1];
-                        const armorEntries = Object.entries(ARMOR) as [string, any][];
-                        const armorMatch = armorEntries.find(([, a]) => a.th === item);
-                        const magicMatch = (MAGIC_ITEMS as any)[item];
-                        const conMatch = (CONSUMABLES as any)[item];
-                        const basePrice = w?.price || armorMatch?.[1]?.price || magicMatch?.price || conMatch?.price || 5;
-                        const sellPrice = sellPriceOf(basePrice);
-                        return (
-                          <div key={i} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <div>
-                              <span style={{ color: "#C9BFE0" }}>{item}</span>
-                              <div style={{ color: "#7FA85C" }}>ขาย {sellPrice} gp</div>
-                            </div>
-                            <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                              onClick={() => {
-                                const nc = { ...c, gold: c.gold + sellPrice, inventory: c.inventory.filter((_: string, j: number) => j !== i) };
-                                setC(nc); setLog([...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp → รวม ${nc.gold} gp`)]);
-                                persist(nc, scene, [...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp`)], null, history);
-                              }}>ขาย</button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div style={{ marginTop: 10, fontSize: 10, color: "#6B6284", textAlign: "center" }}>
-                D&D 5e Economy — ราคาตาม PHB 2024 · ขายของได้ 50% · เปิดร้านได้ตอนไม่อยู่ใน combat
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CONTENT MANAGER MODAL — Domain 35: import/export homebrew content */}
-      {contentManagerOpen && c && (
-        <div className="sheet-overlay" onClick={() => setContentManagerOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>📦 Content Manager (Domain 35)</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setContentManagerOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "75vh", overflowY: "auto" }}>
-              {/* Stats */}
-              <div style={{ marginBottom: 14, padding: 10, background: "#1B1530", borderRadius: 8 }}>
-                <div className="sec-label">📊 Registry Stats</div>
-                <div style={{ fontSize: 12, color: "#C9BFE0", marginTop: 4 }}>
-                  Total entries: <b style={{ color: "#E0A83E" }}>{Object.keys(contentRegistry.entries).length}</b>
-                  {" · "}Homebrew content: <b style={{ color: "#7FA85C" }}>{Object.values(contentRegistry.entries).filter(e => e.source === "homebrew" || e.source === "custom").length}</b>
-                </div>
-              </div>
-
-              {/* Import section */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📥 Import Homebrew (JSON)</div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 6 }}>
-                  Paste JSON content below — supports spells, monsters, items, NPCs, locations, etc.
-                  Each entry needs: id, type, name, and type-specific required fields.
-                </div>
-                <textarea
-                  className="input-main"
-                  style={{ width: "100%", minHeight: 120, fontFamily: "monospace", fontSize: 11, resize: "vertical" }}
-                  placeholder={`{\n  "id": "fireball_custom",\n  "type": "spell",\n  "name": "Fireball Plus",\n  "level": 3,\n  "school": "evocation",\n  "data": { "damage": "10d6", "save": "dex" }\n}`}
-                  value={contentImportText}
-                  onChange={(e) => setContentImportText(e.target.value)}
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  <button
-                    className="btn btn-gold"
-                    onClick={() => {
-                      try {
-                        const { registry, result } = importContentJSON(contentRegistry, contentImportText, "homebrew");
-                        setContentRegistry(registry);
-                        setContentImportMsg(`✅ Imported ${result.imported} entries${result.errors.length > 0 ? `, ${result.skipped} skipped` : ""}`);
-                      } catch (e: any) {
-                        setContentImportMsg(`❌ Import failed: ${e.message}`);
-                      }
-                    }}
-                  >
-                    📥 Import
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      // Load sample homebrew spell as example
-                      const sample = {
-                        id: "thunderclap_enhanced",
-                        type: "spell",
-                        name: "Thunderclap Enhanced",
-                        level: 0,
-                        school: "evocation",
-                        data: { damage: "1d6+con_mod", damage_type: "thunder", save: "con", aoe: { type: "sphere", size: 5 } },
-                        description: "Homebrew cantrip — thunder damage in 5ft radius",
-                      };
-                      setContentImportText(JSON.stringify(sample, null, 2));
-                      setContentImportMsg("Loaded sample homebrew — click Import to register");
-                    }}
-                  >
-                    📋 Load Sample
-                  </button>
-                  <button className="btn" onClick={() => { setContentImportText(""); setContentImportMsg(""); }}>Clear</button>
-                </div>
-                {contentImportMsg && (
-                  <div style={{ fontSize: 12, color: contentImportMsg.startsWith("✅") ? "#7FA85C" : "#C74B44", marginTop: 6 }}>
-                    {contentImportMsg}
-                  </div>
-                )}
-              </div>
-
-              {/* Export section */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📤 Export Content</div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                  <select
-                    className="input-main"
-                    style={{ width: "auto", padding: "4px 8px", fontSize: 12 }}
-                    value={contentFilterType}
-                    onChange={(e) => setContentFilterType(e.target.value as ContentType | "all")}
-                  >
-                    <option value="all">All types</option>
-                    <option value="spell">Spells</option>
-                    <option value="monster">Monsters</option>
-                    <option value="item">Items</option>
-                    <option value="magic_item">Magic Items</option>
-                    <option value="npc">NPCs</option>
-                    <option value="location">Locations</option>
-                    <option value="quest">Quests</option>
-                  </select>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      if (contentFilterType === "all") {
-                        const all = Object.values(contentRegistry.entries);
-                        setContentExportText(JSON.stringify(all, null, 2));
-                      } else {
-                        setContentExportText(exportByType(contentRegistry, contentFilterType));
-                      }
-                    }}
-                  >
-                    📤 Export
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(contentExportText);
-                      setContentImportMsg("📋 Copied to clipboard");
-                    }}
-                    disabled={!contentExportText}
-                  >
-                    📋 Copy
-                  </button>
-                </div>
-                {contentExportText && (
-                  <textarea
-                    className="input-main"
-                    style={{ width: "100%", minHeight: 120, fontFamily: "monospace", fontSize: 11, resize: "vertical" }}
-                    value={contentExportText}
-                    readOnly
-                  />
-                )}
-              </div>
-
-              {/* Browse registry */}
-              <div>
-                <div className="sec-label">🗂️ Registry Browser</div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 4 }}>
-                  Showing {contentFilterType === "all" ? "all types" : contentFilterType}:
-                </div>
-                <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #3A3054", borderRadius: 6, padding: 6 }}>
-                  {Object.values(contentRegistry.entries)
-                    .filter(e => contentFilterType === "all" || e.type === contentFilterType)
-                    .map((entry) => (
-                      <div key={`${entry.type}:${entry.id}`} style={{ padding: "4px 6px", borderBottom: "1px solid #2A2340", fontSize: 11 }}>
-                        <span style={{ color: "#E0A83E" }}>{entry.name}</span>
-                        <span style={{ color: "#6B6284", marginLeft: 6 }}>[{entry.type}]</span>
-                        <span style={{ color: "#7FA85C", marginLeft: 6, fontSize: 10 }}>({entry.source})</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 6, fontSize: 10 }}>v{entry.version}</span>
-                      </div>
-                    ))}
-                  {Object.values(contentRegistry.entries).length === 0 && (
-                    <div style={{ fontSize: 12, color: "#8A7F9E", textAlign: "center", padding: 20 }}>
-                      No content yet — import homebrew above to populate the registry.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ marginTop: 12, fontSize: 10, color: "#6B6284", textAlign: "center" }}>
-                Domain 35 — Content Management · 8 sub-systems: Registry, Importer, Homebrew, Validator, Version Tracker, Diff, Exporter, Content Pack
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* AI DM HELPER MODAL — shows AI DM Layer state (Domain 31-35) */}
-      {dmHelperOpen && c && (
-        <div className="sheet-overlay" onClick={() => setDmHelperOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🤖 AI DM Helper</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setDmHelperOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
-              {/* Dialogue Intent */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">🔍 Intent Analysis (Domain 31)</div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Last intent: <b style={{ color: "#E0A83E" }}>{lastIntent || "—"}</b>
-                </div>
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 4 }}>
-                  Engine วิเคราะห์ input ของผู้เล่นเพื่อช่วย AI DM ปรับน้ำเสียง (greeting/negotiate/persuade/intimidate/deceive/trade/etc.)
-                </div>
-              </div>
-
-              {/* Narrative State */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📖 Narrative State (Domain 33)</div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Arc phase: <b style={{ color: "#E0A83E" }}>{narrativeEngine?.arc.currentPhase || "—"}</b>
-                </div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Current tension: <b style={{ color: "#E0A83E" }}>{narrativeEngine?.pacing.currentTension || "—"}</b>
-                </div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Recommended next: <b style={{ color: "#7FA85C" }}>{narrativeEngine?.pacing.recommendedNextTension || "—"}</b>
-                </div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginTop: 4 }}>
-                  Scenes since rest: {narrativeEngine?.pacing.scenesSinceRest || 0} · since combat: {narrativeEngine?.pacing.scenesSinceCombat || 0} · since revelation: {narrativeEngine?.pacing.scenesSinceRevelation || 0}
-                </div>
-                {narrativeEngine?.pacing.pacingNotes && narrativeEngine.pacing.pacingNotes.length > 0 && (
-                  <div style={{ fontSize: 11, color: "#B9A96A", marginTop: 4 }}>
-                    💡 {narrativeEngine.pacing.pacingNotes.join(" · ")}
-                  </div>
-                )}
-              </div>
-
-              {/* Encounter Difficulty */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">⚔️ Encounter Difficulty (Domain 34)</div>
-                <div style={{ fontSize: 12, color: "#C9BFE0", marginBottom: 4 }}>
-                  Lv.{c.level} XP thresholds (solo play):
-                </div>
-                {(() => {
-                  const t = getDifficultyThresholds(c.level);
-                  return (
-                    <div style={{ fontSize: 11, color: "#9C92B8", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-                      <div>Trivial: <b style={{ color: "#8A7F9E" }}>{t.trivial}</b></div>
-                      <div>Low: <b style={{ color: "#7FA85C" }}>{t.low}</b></div>
-                      <div>Moderate: <b style={{ color: "#E0A83E" }}>{t.moderate}</b></div>
-                      <div>High: <b style={{ color: "#E0734A" }}>{t.high}</b></div>
-                      <div>Impossible: <b style={{ color: "#C74B44" }}>{t.impossible}</b></div>
-                      <div>Soft daily: <b style={{ color: "#B9A96A" }}>{t.high * 4}</b></div>
-                    </div>
-                  );
-                })()}
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 6 }}>
-                  ใช้ตารางนี้เพื่อเลือก CR มอนสเตอร์ — engine จะคำนวณ difficulty อัตโนมัติตอน combat เริ่ม
-                </div>
-              </div>
-
-              {/* EventBus Activity */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">⚡ EventBus + Features (Domain 28)</div>
-                <div style={{ fontSize: 11, color: "#9C92B8" }}>
-                  Engine ปล่อย events ทุกครั้งที่มีการกระทำ (on_attack, on_hit, on_damage, on_cast_spell, on_turn_start/end)
-                </div>
-                <div style={{ fontSize: 11, color: "#C9BFE0", marginTop: 4 }}>
-                  Features ที่ trigger อัตโนมัติผ่าน EventBus:
-                </div>
-                <ul style={{ fontSize: 11, color: "#9C92B8", paddingLeft: 18, marginTop: 2 }}>
-                  <li><b>poison_weapon</b> — on_hit → apply poisoned</li>
-                  <li><b>savage_attacker</b> — on_hit → +1d6 damage</li>
-                  <li><b>relentless_endurance</b> — on_damage_taken → heal 1 instead of dying</li>
-                  <li><b>riposte</b> — on_miss → reaction attack</li>
-                  <li><b>polearm_master</b> — on_enter_area → reaction attack</li>
-                </ul>
-              </div>
-
-              {/* Save Version */}
-              <div>
-                <div className="sec-label">💾 Engine Status</div>
-                <div style={{ fontSize: 11, color: "#9C92B8" }}>
-                  Save version: v3 · Domain modules: 36 · Engine adapters: ✅ Active
-                </div>
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 4 }}>
-                  Engine ทำงานร่วมกับ legacy DnDSolo.tsx ผ่าน engineAdapters.ts — ทุก domain สามารถ introspect ผ่าน DOMAINS metadata table
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MAP MODAL */}
-      {mapOpen && (
-        <div className="sheet-overlay" onClick={() => setMapOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🗺️ แผนที่</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setMapOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ overflow: "auto" }}>
-              {!map || Object.keys(map.nodes).length === 0 ? (
-                <div style={{ fontSize: 13, color: "#8A7F9E", textAlign: "center", padding: 30 }}>ยังไม่มีสถานที่บนแผนที่ — ออกสำรวจเพื่อค้นพบโลก</div>
-              ) : (() => {
-                const nodes = Object.entries(map.nodes);
-                const CELL = 92, PAD = 60;
-                const xs = nodes.map(([, n]: any) => n.x), ys = nodes.map(([, n]: any) => n.y);
-                const minX = Math.min(...xs), minY = Math.min(...ys);
-                const W = (Math.max(...xs) - minX + 1) * CELL + PAD * 2;
-                const H = (Math.max(...ys) - minY + 1) * CELL + PAD * 2;
-                const px = (n: any) => (n.x - minX) * CELL + PAD;
-                const py = (n: any) => (n.y - minY) * CELL + PAD;
-                return (
-                  <svg width={Math.max(W, 300)} height={Math.max(H, 200)} style={{ display: "block", margin: "0 auto" }}>
-                    {map.edges.map(([a, b]: any, i: number) => {
-                      const na = map.nodes[a], nb = map.nodes[b];
-                      if (!na || !nb) return null;
-                      return <line key={i} x1={px(na)} y1={py(na)} x2={px(nb)} y2={py(nb)} stroke="#4A3F6E" strokeWidth="2.5" strokeDasharray="5 4" />;
-                    })}
-                    {nodes.map(([id, n]: any) => {
-                      const cur = id === map.current;
-                      return (
-                        <g key={id}>
-                          {cur && <circle cx={px(n)} cy={py(n)} r="26" fill="none" stroke="#E0A83E" strokeWidth="2.5" opacity="0.9" />}
-                          <circle cx={px(n)} cy={py(n)} r="20" fill={cur ? "#3A2F5C" : "#221C38"} stroke={cur ? "#E0A83E" : "#3A3054"} strokeWidth="1.5" />
-                          <text x={px(n)} y={py(n) + 6} textAnchor="middle" fontSize="17">{MAP_ICON[n.type] || "📍"}</text>
-                          <text x={px(n)} y={py(n) + 38} textAnchor="middle" fontSize="11" fill={cur ? "#E0A83E" : "#C9BFE0"} fontFamily="Sarabun" fontWeight={cur ? "700" : "500"}>{n.name}</text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                );
-              })()}
-              <div style={{ fontSize: 11, color: "#8A7F9E", textAlign: "center", marginTop: 8 }}>
-                🏘️ เมือง · 🏠 อาคาร · ▦ ห้อง · 🕳️ ดันเจี้ยน · 🌲 ป่า/ถนน — วงทองคือตำแหน่งปัจจุบัน
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MAP MODAL (component: game/MapModal) */}
+      <MapModal open={mapOpen} onClose={() => setMapOpen(false)} map={map} />
 
       {/* DUNGEON MAP MODAL — Domain 36: top-down room layout with fog-of-war */}
       {dungeonMapOpen && dungeonBlueprint && dungeonRun && (
@@ -5197,232 +2801,14 @@ export default function DnDSolo() {
       )}
 
       {/* COMBAT PANEL */}
-      {combat && (
-        <div style={{ borderTop: "1px solid #6E3448", background: "#1A0F1C", padding: "10px 14px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <span className="dnd-display" style={{ color: "#C74B44", fontSize: 14 }}>⚔ ต่อสู้ · รอบที่ {combat.round}</span>
-            <span style={{ fontSize: 11, color: "#8A7F9E" }}>🏃 เคลื่อนที่: {combat.movementLeft || 0} ฟุต</span>
-          </div>
-
-          {/* TACTICAL BATTLE GRID */}
-          {combat.grid && combat.playerPos && (
-            <div style={{ marginBottom: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {/* Battle grid SVG */}
-              <div className="combat-grid-wrap" style={{ flex: "1 1 320px", minWidth: 280 }}>
-                <svg viewBox={`0 0 ${combat.grid.w * 28} ${combat.grid.h * 28}`} style={{ width: "100%", maxWidth: 380, background: "#0F0A18", border: "1px solid #3A3054", borderRadius: 8 }}>
-                  {/* Grid lines */}
-                  {Array.from({ length: combat.grid.w + 1 }).map((_, i) => (
-                    <line key={"v"+i} x1={i * 28} y1={0} x2={i * 28} y2={combat.grid.h * 28} stroke="#2A2244" strokeWidth="0.5" />
-                  ))}
-                  {Array.from({ length: combat.grid.h + 1 }).map((_, i) => (
-                    <line key={"h"+i} x1={0} y1={i * 28} x2={combat.grid.w * 28} y2={i * 28} stroke="#2A2244" strokeWidth="0.5" />
-                  ))}
-                  {/* Clickable squares for movement */}
-                  {Array.from({ length: combat.grid.h }).map((_, ry) =>
-                    Array.from({ length: combat.grid.w }).map((_, rx) => {
-                      const isPlayer = combat.playerPos.x === rx && combat.playerPos.y === ry;
-                      const enemyAt = combat.enemies.find((e: any) => e.hpNow > 0 && combat.enemyPositions[e.uid]?.x === rx && combat.enemyPositions[e.uid]?.y === ry);
-                      const deadEnemyAt = combat.enemies.find((e: any) => e.hpNow <= 0 && combat.enemyPositions[e.uid]?.x === rx && combat.enemyPositions[e.uid]?.y === ry);
-                      const dist = gridDistance(combat.playerPos, { x: rx, y: ry });
-                      const canMove = !isPlayer && !enemyAt && dist * 5 <= (combat.movementLeft || 0) && dist > 0 && !deadEnemyAt;
-                      return (
-                        <g key={`sq-${rx}-${ry}`}>
-                          {/* Highlight movement range */}
-                          {canMove && (
-                            <rect x={rx * 28 + 1} y={ry * 28 + 1} width={26} height={26} fill="#1E3A2A" stroke="#3B6E5E" strokeWidth="0.5" opacity="0.6" style={{ cursor: "pointer" }}
-                              onClick={() => !thinking && !downed && playerCombatAction("move", `${rx},${ry}`)} />
-                          )}
-                          {/* Player token */}
-                          {isPlayer && (
-                            <g>
-                              <circle cx={rx * 28 + 14} cy={ry * 28 + 14} r={11} fill="#4A7FB5" stroke="#7FB5E0" strokeWidth="2" />
-                              <text x={rx * 28 + 14} y={ry * 28 + 18} textAnchor="middle" fontSize="11" fill="#fff" fontWeight="700">{c.name[0]}</text>
-                            </g>
-                          )}
-                          {/* Enemy token */}
-                          {enemyAt && (
-                            <g>
-                              <circle cx={rx * 28 + 14} cy={ry * 28 + 14} r={11} fill="#B53A3A" stroke="#E0766D" strokeWidth="2" />
-                              <text x={rx * 28 + 14} y={ry * 28 + 18} textAnchor="middle" fontSize="10" fill="#fff" fontWeight="700">{enemyAt.th[0]}</text>
-                              {/* HP bar under enemy */}
-                              <rect x={rx * 28 + 4} y={ry * 28 + 24} width={20} height={3} fill="#3A1A1A" />
-                              <rect x={rx * 28 + 4} y={ry * 28 + 24} width={Math.max(0, 20 * (enemyAt.hpNow / enemyAt.hp))} height={3} fill={enemyAt.hpNow / enemyAt.hp > 0.5 ? "#7FA85C" : enemyAt.hpNow / enemyAt.hp > 0.25 ? "#E0A83E" : "#C74B44"} />
-                            </g>
-                          )}
-                          {/* Dead enemy */}
-                          {deadEnemyAt && (
-                            <text x={rx * 28 + 14} y={ry * 28 + 18} textAnchor="middle" fontSize="14" opacity="0.4">💀</text>
-                          )}
-                        </g>
-                      );
-                    })
-                  )}
-                </svg>
-                <div style={{ fontSize: 10, color: "#6B6284", marginTop: 4, textAlign: "center" }}>
-                  พื้นเขียว = เคลื่อนที่ได้ · ฟ้า = คุณ · แดง = ศัตรู (กดพื้นเขียวเพื่อเคลื่อนที่)
-                </div>
-              </div>
-
-              {/* Initiative tracker — horizontal timeline strip */}
-              <div style={{ flex: "0 1 200", minWidth: 120 }}>
-                <div style={{ fontSize: 11, color: "#B9A96A", fontWeight: 700, marginBottom: 4 }}> Initiative</div>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {combat.initOrder && combat.initOrder.map((init: any, i: number) => {
-                  const isCurrent = i === combat.currentInitIdx;
-                  const isDead = !init.isPlayer && combat.enemies.find((e: any) => e.uid === init.uid)?.hpNow <= 0;
-                  const enemy = !init.isPlayer ? combat.enemies.find((e: any) => e.uid === init.uid) : null;
-                  const hpPct = enemy ? Math.max(0, (enemy.hpNow / enemy.hp) * 100) : 100;
-                  const hpColor = hpPct > 50 ? "#7FA85C" : hpPct > 25 ? "#E0A83E" : "#C74B44";
-                  return (
-                    <div key={init.uid} style={{
-                      display: "flex", flexDirection: "column", alignItems: "center",
-                      padding: "4px 6px", borderRadius: 6, fontSize: 11, minWidth: 44, minHeight: 44,
-                      justifyContent: "center",
-                      background: isCurrent ? "#3A2F5C" : isDead ? "#1A1018" : "#1E1830",
-                      border: isCurrent ? "2px solid #E0A83E" : "1px solid transparent",
-                      opacity: isDead ? 0.4 : 1, position: "relative",
-                      boxShadow: isCurrent ? "0 0 8px rgba(224,168,62,0.4)" : "none",
-                    }}>
-                      <span style={{ color: isCurrent ? "#E0A83E" : isDead ? "#8A7F9E" : "#C9BFE0", fontSize: 10 }}>
-                        {isCurrent ? "▶" : ""}{init.isPlayer ? "🧙" : "👹"}
-                      </span>
-                      <span style={{ color: "#8A7F9E", fontSize: 9, maxWidth: 50, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{init.name}</span>
-                      <span style={{ color: "#6B6284", fontSize: 9 }}>{init.init}</span>
-                      {isDead && <span style={{ fontSize: 8 }}>💀</span>}
-                      {/* Mini HP bar for enemies */}
-                      {enemy && !isDead && (
-                        <div style={{ width: "100%", height: 3, background: "#241E38", borderRadius: 2, marginTop: 2 }}>
-                          <div style={{ width: hpPct + "%", height: "100%", background: hpColor, borderRadius: 2, transition: "width 0.3s" }} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <CombatEnemyList
-            enemies={combat.enemies}
-            selectedTargetId={combatTargetId}
-            onSelectTarget={(uid) => setCombatTargetId(uid)}
-            thinking={thinking}
-            downed={downed}
-          />
-          {/* Task #14: companion card — the sidekick auto-assists at end of your turn */}
-          {c.sidekick && SIDEKICK_BASES[c.sidekick.baseKey] && (() => {
-            const skBlock = buildSidekick(SIDEKICK_BASES[c.sidekick.baseKey], c.sidekick.klass, Math.max(1, Math.min(10, c.sidekick.level || c.level || 1)));
-            return (
-              <div className="companion-card" style={{ border: "1px solid #3A3054", borderRadius: 8, padding: "8px 10px", margin: "6px 0", background: "rgba(58,47,92,0.25)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 13, color: "#C9BFE0", fontWeight: 700 }}>🐕 {skBlock.name}</span>
-                  <span style={{ fontSize: 11, color: "#8A7F9E" }}>{c.sidekick.klass} · Lv.{skBlock.level}</span>
-                </div>
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 2 }}>
-                  AC {skBlock.ac} · to-hit +{skBlock.attack.toHit} · {skBlock.attack.damageDice}
-                  {skBlock.attack.damageBonus >= 0 ? `+${skBlock.attack.damageBonus}` : skBlock.attack.damageBonus}
-                  {skBlock.attacksPerAction > 1 ? ` ×${skBlock.attacksPerAction}` : ""} · โจมตีอัตโนมัติเมื่อจบเทิร์นคุณ
-                </div>
-              </div>
-            );
-          })()}
-          {downed ? (
-            <button className="btn btn-red" style={{ width: "100%", padding: 13 }} disabled={thinking} onClick={() => playerCombatAction("deathsave")}>
-              💀 ทอย Death Saving Throw ({c.deathSaves.s}✓ / {c.deathSaves.f}✗)
-            </button>
-          ) : combatMenu === "spell" ? (
-            <div>
-              <div style={{ fontSize: 11, color: "#8A7F9E", marginBottom: 6 }}>กดเวทเพื่อร่ายที่ระดับพื้นฐาน</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6, maxHeight: 280, overflowY: "auto" }}>
-                {knownSpellsList.length === 0 && <div style={{ fontSize: 12, color: "#8A7F9E" }}>ยังไม่ได้เรียนเวท. เปิดสมุดเวทมนตร์ (📜 → เวทมนตร์) เพื่อเรียน</div>}
-                {knownSpellsList.map((idx: string) => {
-                  // We don't know the level until we fetch. Cast at lowest available slot.
-                  return (
-                    <button key={idx} className="btn" style={{ textAlign: "left", padding: "6px 10px" }} disabled={thinking} onClick={() => {
-                      // Need to fetch spell to know its level, then check slots. Simplify: cast at level 1 (or 0 for cantrip).
-                      // Better: fetch first.
-                      setThinking(true);
-                      (async () => {
-                        try {
-                          const sp = await fetchSpell(idx, 1, c.level);
-                          if (!sp) { setLog((prev) => [...prev, entrySystem("⚠️ Spell not found")]); return; }
-                          const slotLv = sp.level === 0 ? 0 : Math.max(sp.level, 1);
-                          // Legality (known/prepared + slot availability) is enforced
-                          // authoritatively by the engine (canCast2024) inside
-                          // castSRDSpell, which blocks with a Thai message + no slot spent.
-                          playerCombatAction("spell", `${idx}@${slotLv}`);
-                        } finally { setThinking(false); }
-                      })();
-                    }}>
-                      ✨ <b>{idx.split("-").map((w:string)=>w.charAt(0).toUpperCase()+w.slice(1)).join(" ")}</b>
-                    </button>
-                  );
-                })}
-                <button className="btn" onClick={() => setCombatMenu("")}>← กลับ</button>
-              </div>
-            </div>
-          ) : combatMenu === "item" ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {combatItems.length === 0 && <div style={{ fontSize: 13, color: "#8A7F9E", gridColumn: "1 / -1" }}>No usable combat items</div>}
-              {combatItems.map((it: string, i: number) => (
-                <button key={it + i} className="btn" disabled={thinking} onClick={() => playerCombatAction("item", it)}>🧪 {it}</button>
-              ))}
-              <button className="btn" onClick={() => setCombatMenu("")}>← กลับ</button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {/* UX fix: Primary actions always visible */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack", combatTargetId)}>⚔️ โจมตี ({meleeW.th})</button>
-                {rangedW && <button className="btn btn-gold" disabled={thinking} onClick={() => playerCombatAction("attack_ranged", combatTargetId)}>🏹 ยิง ({rangedW.th})</button>}
-                {cls.caster && <button className="btn" disabled={thinking} onClick={() => setCombatMenu("spell")}>✨ ร่ายเวท</button>}
-                <button className="btn" disabled={thinking || combatItems.length === 0} onClick={() => setCombatMenu("item")}>🧪 ไอเทม ({combatItems.length})</button>
-              </div>
-              {/* Task #14: GWM/Sharpshooter −5/+10 power-attack toggle (only shown if the feat is held) */}
-              {hasPowerAttackFeat(c.feats || []) && (
-                <button
-                  className={"btn" + (powerAttackOn ? " btn-gold" : "")}
-                  style={{ fontSize: 12, padding: "5px 10px" }}
-                  disabled={thinking}
-                  onClick={() => setPowerAttackOn((v) => !v)}
-                  title="−5 to-hit / +10 damage (อาวุธ Heavy melee สำหรับ GWM, อาวุธ ranged สำหรับ Sharpshooter)"
-                >
-                  🎯 Power Attack −5/+10: {powerAttackOn ? "เปิด" : "ปิด"}
-                </button>
-              )}
-              {/* Secondary actions — class features + tactical */}
-              <details style={{ marginTop: 2 }}>
-                <summary style={{ cursor: "pointer", fontSize: 12, color: "#8A7F9E", padding: "4px 0" }}>การกระทำเพิ่มเติม</summary>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
-                  {hasFeature(c, "second_wind") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.secondWindUsed} onClick={() => playerCombatAction("second_wind")}>🛡️ Second Wind</button>}
-                  {hasFeature(c, "action_surge") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.actionSurgeUsed} onClick={() => playerCombatAction("action_surge")}>⚡ Action Surge</button>}
-                  {hasFeature(c, "rage") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.raging || c.rageUsed >= (c.level >= 6 ? 4 : c.level >= 3 ? 3 : 2)} onClick={() => playerCombatAction("rage")}>🔥 Rage</button>}
-                  {hasFeature(c, "lay_on_hands") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.layOnHandsPool <= 0 || c.hp >= c.maxHp} onClick={() => playerCombatAction("lay_on_hands")}>🤲 LoH ({c.layOnHandsPool})</button>}
-                  {hasFeature(c, "martial_arts") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.kiUsed >= c.level} onClick={() => playerCombatAction("ki_flurry")}>🥋 Flurry (1ki)</button>}
-                  {hasFeature(c, "bardic_inspiration") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.bardicInspirationUsed >= (mod(c.abilities.cha) || 1)} onClick={() => playerCombatAction("bardic_inspiration")}>🎵 Bardic</button>}
-                  {c.heroicInspiration && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("heroic_inspiration")}>⭐ Heroic</button>}
-                  {hasFeature(c, "preserve_life") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking || c.preserveLifeUsed} onClick={() => playerCombatAction("preserve_life")}>🕊️ Preserve</button>}
-                  {hasFeature(c, "sneak_attack") && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("hide")}>🌫️ ซ่อน</button>}
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("dodge")}>🌀 Dodge</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("dash")}>🏃 Dash</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("help")}>🤝 Help</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("ready")}>⏰ Ready</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("search")}>🔍 Search</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("disengage")}>🚶 Disengage</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("grapple")}>🤼 จับตรึง</button>
-                  <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("shove")}>💪 ผลัก/ล้ม</button>
-                  {canDualWield(c) && !combat?.bonusUsed && <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("dual_wield")}>⚔️⚔️ มือนอก</button>}
-                  {(c.worn || []).includes("Ring of Invisibility") && !combat.invisible && (
-                    <button className="btn" style={{ fontSize: 11, padding: "4px 8px" }} disabled={thinking} onClick={() => playerCombatAction("invisible")}>🫥 ล่องหน</button>
-                  )}
-                </div>
-              </details>
-              <button className="btn btn-red" disabled={thinking} onClick={() => playerCombatAction("flee")}>🏃 หนี</button>
-            </div>
-          )}
-        </div>
-      )}
+      <CombatOverlay
+        combat={combat} c={c} cls={cls} meleeW={meleeW} rangedW={rangedW}
+        thinking={thinking} downed={downed}
+        combatMenu={combatMenu} setCombatMenu={setCombatMenu}
+        combatTargetId={combatTargetId} setCombatTargetId={setCombatTargetId}
+        powerAttackOn={powerAttackOn} setPowerAttackOn={setPowerAttackOn}
+        playerCombatAction={playerCombatAction} onCastSpell={castSpellFromMenu}
+        knownSpellsList={knownSpellsList} combatItems={combatItems} />
 
       {/* INPUT */}
       <DMChat

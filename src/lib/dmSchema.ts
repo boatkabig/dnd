@@ -536,6 +536,42 @@ export const DMResponseSchema = z.object({
 export type DMResponse = z.infer<typeof DMResponseSchema>;
 export type ValidUpdates = z.infer<typeof UpdatesSchema>;
 
+/**
+ * Consequence fields inside `updates` — the state changes that represent the
+ * OUTCOME of an action (damage taken, gold/items gained or lost, conditions,
+ * buffs, exhaustion, a triggered rest). When the DM asks for a check/save in the
+ * same response, these must NOT be applied yet: the roll hasn't happened, so
+ * applying them would punish or reward the player before the dice are known and
+ * a successful roll could not undo it. World/narrative fields (quest_add,
+ * npc_attitude, weather, scene_type, time_delta, …) are NOT consequences — they
+ * describe the setup, not the result — so they are deliberately excluded here.
+ */
+export const CONSEQUENCE_UPDATE_KEYS = [
+  "hp_delta", "temp_hp", "gold_delta", "xp_award",
+  "items_add", "items_use", "items_remove", "loot_drop",
+  "conditions_add", "conditions_remove", "buffs_add", "buffs_remove",
+  "exhaustion_delta", "rest_trigger",
+] as const;
+
+/**
+ * Strip consequence fields from a setup response's `updates` when a check/save is
+ * still pending, enforcing prompt rule 2.3 deterministically (an LLM slip can't
+ * bypass it). Returns the object unchanged when it holds no consequences, and
+ * `null` when stripping empties it. Non-object input passes through untouched.
+ */
+export function deferConsequenceUpdates(u: unknown): unknown {
+  if (!u || typeof u !== "object") return u;
+  const consequences = CONSEQUENCE_UPDATE_KEYS as readonly string[];
+  const kept: Record<string, unknown> = {};
+  let strippedAny = false;
+  for (const [k, v] of Object.entries(u as Record<string, unknown>)) {
+    if (consequences.includes(k)) { strippedAny = true; continue; }
+    kept[k] = v;
+  }
+  if (!strippedAny) return u;
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
 export interface ValidationResult {
   success: boolean;
   data?: DMResponse;

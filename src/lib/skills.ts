@@ -383,7 +383,8 @@ export function analyzeIntent(
 
   // Detect ability from keywords
   let ability: Ability = "str";
-  if (/แอบ|ซ่อน|เงียบ|stealth|hide|sneak/.test(lower)) ability = "dex";
+  if (/ล้วง|ลัก|ขโมย|ฉก|pickpocket|steal|งัด|แกะ|มือสัมผัส|sleight/.test(lower)) ability = "dex";
+  else if (/แอบ|ซ่อน|เงียบ|stealth|hide|sneak/.test(lower)) ability = "dex";
   else if (/ปีน|ยก|ดัน|พัง|ผลัก|climb|lift|push|break/.test(lower)) ability = "str";
   else if (/จำ|วิเคราะห์|คำนวณ|remember|analyze|investigate/.test(lower)) ability = "int";
   else if (/สังเกต|ฟัง|ดม|เห็น|perceive|hear|sense/.test(lower)) ability = "wis";
@@ -392,10 +393,12 @@ export function analyzeIntent(
 
   // Detect skill from keywords
   let skill: string | undefined;
-  if (/แอบ|ซ่อน|เงียบ/.test(lower)) skill = "stealth";
+  // Pickpocketing / lifting an item off a person or surface = Sleight of Hand (DEX),
+  // NOT Stealth. Checked before stealth so "ย่องไปขโมย" resolves to the theft skill.
+  if (/ล้วง|ลัก|ขโมย|ฉก|pickpocket|steal|งัด|แกะ|มือสัมผัส|sleight/.test(lower)) skill = "sleight_of_hand";
+  else if (/แอบ|ซ่อน|เงียบ/.test(lower)) skill = "stealth";
   else if (/ปีน|กระโดด|วิ่ง/.test(lower)) skill = "athletics";
   else if (/กายกรรม|ทรงตัว|กระโดดข้าม/.test(lower)) skill = "acrobatics";
-  else if (/งัด|แกะ|มือสัมผัส|sleight/.test(lower)) skill = "sleight_of_hand";
   else if (/เวทมนตร์|arcana|เสียมนตร์/.test(lower)) skill = "arcana";
   else if (/ประวัติ|history|โบราณ/.test(lower)) skill = "history";
   else if (/สืบ|ค้นหา|ตรวจสอบ|investigate/.test(lower)) skill = "investigation";

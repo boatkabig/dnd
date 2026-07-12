@@ -11,7 +11,7 @@ import { getExtendedFeatures } from "@/lib/featuresExtended";
 import type { NormalizedSpell } from "@/lib/srd";
 import {
   rollFormula, hasFeature, skillMod, saveMod, attackMod, sneakDice,
-} from "../DnDSolo";
+} from "@/lib/characterStats";
 import { SRD_OK } from "@/lib/dndSoloShared";
 
 export interface CharacterSheetProps {
