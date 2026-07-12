@@ -6,7 +6,7 @@ import {
   DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
   BACKGROUNDS, RACES, CLASSES, FEATURES,
   CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
-  MAP_ICON, wornHas,
+  wornHas,
   applyDamageModifiers, passivePerception, rateEncounterDifficulty,
   gameTimeToString, getLightLevelForHour, grappleCheck, canDualWield,
   ALIGNMENTS, LANGUAGES, ORIGIN_FEATS, WEAPON_MASTERIES,
@@ -82,6 +82,8 @@ import SubclassModal from "@/components/game/SubclassModal";
 import ReprepareModal from "@/components/game/ReprepareModal";
 import CompanionModal from "@/components/game/CompanionModal";
 import ShopModal from "@/components/game/ShopModal";
+import AiDmHelperModal from "@/components/game/AiDmHelperModal";
+import MapModal from "@/components/game/MapModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -3851,153 +3853,11 @@ export default function DnDSolo() {
         </div>
       )}
 
-      {/* AI DM HELPER MODAL — shows AI DM Layer state (Domain 31-35) */}
-      {dmHelperOpen && c && (
-        <div className="sheet-overlay" onClick={() => setDmHelperOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🤖 AI DM Helper</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setDmHelperOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
-              {/* Dialogue Intent */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">🔍 Intent Analysis (Domain 31)</div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Last intent: <b style={{ color: "#E0A83E" }}>{lastIntent || "—"}</b>
-                </div>
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 4 }}>
-                  Engine วิเคราะห์ input ของผู้เล่นเพื่อช่วย AI DM ปรับน้ำเสียง (greeting/negotiate/persuade/intimidate/deceive/trade/etc.)
-                </div>
-              </div>
+      {/* AI DM HELPER MODAL (component: game/AiDmHelperModal) */}
+      <AiDmHelperModal open={dmHelperOpen && !!c} onClose={() => setDmHelperOpen(false)} level={c?.level ?? 1} lastIntent={lastIntent} narrativeEngine={narrativeEngine} />
 
-              {/* Narrative State */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">📖 Narrative State (Domain 33)</div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Arc phase: <b style={{ color: "#E0A83E" }}>{narrativeEngine?.arc.currentPhase || "—"}</b>
-                </div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Current tension: <b style={{ color: "#E0A83E" }}>{narrativeEngine?.pacing.currentTension || "—"}</b>
-                </div>
-                <div style={{ fontSize: 13, color: "#C9BFE0" }}>
-                  Recommended next: <b style={{ color: "#7FA85C" }}>{narrativeEngine?.pacing.recommendedNextTension || "—"}</b>
-                </div>
-                <div style={{ fontSize: 11, color: "#9C92B8", marginTop: 4 }}>
-                  Scenes since rest: {narrativeEngine?.pacing.scenesSinceRest || 0} · since combat: {narrativeEngine?.pacing.scenesSinceCombat || 0} · since revelation: {narrativeEngine?.pacing.scenesSinceRevelation || 0}
-                </div>
-                {narrativeEngine?.pacing.pacingNotes && narrativeEngine.pacing.pacingNotes.length > 0 && (
-                  <div style={{ fontSize: 11, color: "#B9A96A", marginTop: 4 }}>
-                    💡 {narrativeEngine.pacing.pacingNotes.join(" · ")}
-                  </div>
-                )}
-              </div>
-
-              {/* Encounter Difficulty */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">⚔️ Encounter Difficulty (Domain 34)</div>
-                <div style={{ fontSize: 12, color: "#C9BFE0", marginBottom: 4 }}>
-                  Lv.{c.level} XP thresholds (solo play):
-                </div>
-                {(() => {
-                  const t = getDifficultyThresholds(c.level);
-                  return (
-                    <div style={{ fontSize: 11, color: "#9C92B8", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-                      <div>Trivial: <b style={{ color: "#8A7F9E" }}>{t.trivial}</b></div>
-                      <div>Low: <b style={{ color: "#7FA85C" }}>{t.low}</b></div>
-                      <div>Moderate: <b style={{ color: "#E0A83E" }}>{t.moderate}</b></div>
-                      <div>High: <b style={{ color: "#E0734A" }}>{t.high}</b></div>
-                      <div>Impossible: <b style={{ color: "#C74B44" }}>{t.impossible}</b></div>
-                      <div>Soft daily: <b style={{ color: "#B9A96A" }}>{t.high * 4}</b></div>
-                    </div>
-                  );
-                })()}
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 6 }}>
-                  ใช้ตารางนี้เพื่อเลือก CR มอนสเตอร์ — engine จะคำนวณ difficulty อัตโนมัติตอน combat เริ่ม
-                </div>
-              </div>
-
-              {/* EventBus Activity */}
-              <div style={{ marginBottom: 14 }}>
-                <div className="sec-label">⚡ EventBus + Features (Domain 28)</div>
-                <div style={{ fontSize: 11, color: "#9C92B8" }}>
-                  Engine ปล่อย events ทุกครั้งที่มีการกระทำ (on_attack, on_hit, on_damage, on_cast_spell, on_turn_start/end)
-                </div>
-                <div style={{ fontSize: 11, color: "#C9BFE0", marginTop: 4 }}>
-                  Features ที่ trigger อัตโนมัติผ่าน EventBus:
-                </div>
-                <ul style={{ fontSize: 11, color: "#9C92B8", paddingLeft: 18, marginTop: 2 }}>
-                  <li><b>poison_weapon</b> — on_hit → apply poisoned</li>
-                  <li><b>savage_attacker</b> — on_hit → +1d6 damage</li>
-                  <li><b>relentless_endurance</b> — on_damage_taken → heal 1 instead of dying</li>
-                  <li><b>riposte</b> — on_miss → reaction attack</li>
-                  <li><b>polearm_master</b> — on_enter_area → reaction attack</li>
-                </ul>
-              </div>
-
-              {/* Save Version */}
-              <div>
-                <div className="sec-label">💾 Engine Status</div>
-                <div style={{ fontSize: 11, color: "#9C92B8" }}>
-                  Save version: v3 · Domain modules: 36 · Engine adapters: ✅ Active
-                </div>
-                <div style={{ fontSize: 11, color: "#8A7F9E", marginTop: 4 }}>
-                  Engine ทำงานร่วมกับ legacy DnDSolo.tsx ผ่าน engineAdapters.ts — ทุก domain สามารถ introspect ผ่าน DOMAINS metadata table
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MAP MODAL */}
-      {mapOpen && (
-        <div className="sheet-overlay" onClick={() => setMapOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🗺️ แผนที่</span>
-              <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setMapOpen(false)}>✕</button>
-            </div>
-            <div className="sheet-body" style={{ overflow: "auto" }}>
-              {!map || Object.keys(map.nodes).length === 0 ? (
-                <div style={{ fontSize: 13, color: "#8A7F9E", textAlign: "center", padding: 30 }}>ยังไม่มีสถานที่บนแผนที่ — ออกสำรวจเพื่อค้นพบโลก</div>
-              ) : (() => {
-                const nodes = Object.entries(map.nodes);
-                const CELL = 92, PAD = 60;
-                const xs = nodes.map(([, n]: any) => n.x), ys = nodes.map(([, n]: any) => n.y);
-                const minX = Math.min(...xs), minY = Math.min(...ys);
-                const W = (Math.max(...xs) - minX + 1) * CELL + PAD * 2;
-                const H = (Math.max(...ys) - minY + 1) * CELL + PAD * 2;
-                const px = (n: any) => (n.x - minX) * CELL + PAD;
-                const py = (n: any) => (n.y - minY) * CELL + PAD;
-                return (
-                  <svg width={Math.max(W, 300)} height={Math.max(H, 200)} style={{ display: "block", margin: "0 auto" }}>
-                    {map.edges.map(([a, b]: any, i: number) => {
-                      const na = map.nodes[a], nb = map.nodes[b];
-                      if (!na || !nb) return null;
-                      return <line key={i} x1={px(na)} y1={py(na)} x2={px(nb)} y2={py(nb)} stroke="#4A3F6E" strokeWidth="2.5" strokeDasharray="5 4" />;
-                    })}
-                    {nodes.map(([id, n]: any) => {
-                      const cur = id === map.current;
-                      return (
-                        <g key={id}>
-                          {cur && <circle cx={px(n)} cy={py(n)} r="26" fill="none" stroke="#E0A83E" strokeWidth="2.5" opacity="0.9" />}
-                          <circle cx={px(n)} cy={py(n)} r="20" fill={cur ? "#3A2F5C" : "#221C38"} stroke={cur ? "#E0A83E" : "#3A3054"} strokeWidth="1.5" />
-                          <text x={px(n)} y={py(n) + 6} textAnchor="middle" fontSize="17">{MAP_ICON[n.type] || "📍"}</text>
-                          <text x={px(n)} y={py(n) + 38} textAnchor="middle" fontSize="11" fill={cur ? "#E0A83E" : "#C9BFE0"} fontFamily="Sarabun" fontWeight={cur ? "700" : "500"}>{n.name}</text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                );
-              })()}
-              <div style={{ fontSize: 11, color: "#8A7F9E", textAlign: "center", marginTop: 8 }}>
-                🏘️ เมือง · 🏠 อาคาร · ▦ ห้อง · 🕳️ ดันเจี้ยน · 🌲 ป่า/ถนน — วงทองคือตำแหน่งปัจจุบัน
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MAP MODAL (component: game/MapModal) */}
+      <MapModal open={mapOpen} onClose={() => setMapOpen(false)} map={map} />
 
       {/* DUNGEON MAP MODAL — Domain 36: top-down room layout with fog-of-war */}
       {dungeonMapOpen && dungeonBlueprint && dungeonRun && (
