@@ -14,7 +14,9 @@
  *     death saves {0,0} (not Stable).
  *   - Massive damage: if the damage overflow past 0 HP >= max HP, instant death.
  *   - Damage while already at 0 HP (not dead): +1 death-save failure
- *     (+2 on a critical hit).
+ *     (+2 on a critical hit), even if the damage is fully absorbed by tempHp.
+ *   - Damage while already at 0 HP whose raw amount >= max HP: instant death
+ *     (checked against the damage taken, not the tempHp-reduced remainder).
  *   - Healing from 0 HP to >=1 HP: clears death saves, removes "unconscious".
  *
  * Deferred (not implemented here — see spec): 1d4-hour auto-recovery timer,
@@ -45,11 +47,11 @@ export interface DamageResult {
 const UNCONSCIOUS = "unconscious";
 
 function addCondition(conditions: string[], condition: string): string[] {
-  return conditions.includes(condition) ? conditions : [...conditions, condition];
+  return conditions.includes(condition) ? [...conditions] : [...conditions, condition];
 }
 
 function removeCondition(conditions: string[], condition: string): string[] {
-  return conditions.includes(condition) ? conditions.filter((c) => c !== condition) : conditions;
+  return conditions.includes(condition) ? conditions.filter((c) => c !== condition) : [...conditions];
 }
 
 /**
@@ -67,7 +69,7 @@ export function applyDamage(
       hp: character.hp,
       tempHp: character.tempHp,
       deathSaves: { ...character.deathSaves },
-      conditions: character.conditions,
+      conditions: [...character.conditions],
       dead: character.dead,
       justDowned: false,
       instantDeath: false,
@@ -84,20 +86,27 @@ export function applyDamage(
   }
 
   // Already down at 0 HP (unconscious, not dead): further damage adds death-save
-  // failure(s) instead of reducing HP further. Fully-absorbed-by-tempHp hits (no
-  // HP damage actually dealt) don't count.
+  // failure(s) instead of reducing HP further — even a hit fully absorbed by
+  // tempHp still counts as "taking damage" for this purpose.
   if (character.hp <= 0) {
-    if (remaining <= 0) {
+    // Instant death: a hit whose raw damage amount >= max HP kills a character
+    // already at 0 HP outright, regardless of tempHp absorption (2024 RAW:
+    // damage *taken* is what's checked, not the tempHp-reduced remainder).
+    if (amount >= character.maxHp && character.maxHp > 0) {
       return {
-        hp: character.hp,
+        hp: 0,
         tempHp,
         deathSaves: { ...character.deathSaves },
-        conditions: character.conditions,
-        dead: character.dead,
+        conditions: [...character.conditions],
+        dead: true,
         justDowned: false,
-        instantDeath: false,
+        instantDeath: true,
       };
     }
+
+    // Any damage taken at 0 HP fails a death save, even if fully absorbed by
+    // tempHp (2024 RAW: "if you take any damage" — absorption still counts as
+    // taking damage per official ruling).
     const failInc = opts.critical ? 2 : 1;
     const failures = character.deathSaves.f + failInc;
     const dead = failures >= 3;
@@ -105,7 +114,7 @@ export function applyDamage(
       hp: 0,
       tempHp,
       deathSaves: { s: character.deathSaves.s, f: failures },
-      conditions: character.conditions,
+      conditions: [...character.conditions],
       dead,
       justDowned: false,
       instantDeath: false,
@@ -121,7 +130,7 @@ export function applyDamage(
       hp: newHpRaw,
       tempHp,
       deathSaves: { ...character.deathSaves },
-      conditions: character.conditions,
+      conditions: [...character.conditions],
       dead: false,
       justDowned: false,
       instantDeath: false,
@@ -135,7 +144,7 @@ export function applyDamage(
       hp: 0,
       tempHp,
       deathSaves: { ...character.deathSaves },
-      conditions: character.conditions,
+      conditions: [...character.conditions],
       dead: true,
       justDowned: false,
       instantDeath: true,
@@ -172,7 +181,7 @@ export function applyHeal(character: HpCharacterState, amount: number): HealResu
     return {
       hp: character.hp,
       deathSaves: { ...character.deathSaves },
-      conditions: character.conditions,
+      conditions: [...character.conditions],
       dead: character.dead,
       revived: false,
     };
@@ -194,7 +203,7 @@ export function applyHeal(character: HpCharacterState, amount: number): HealResu
   return {
     hp,
     deathSaves: { ...character.deathSaves },
-    conditions: character.conditions,
+    conditions: [...character.conditions],
     dead: false,
     revived: false,
   };

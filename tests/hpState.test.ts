@@ -97,11 +97,34 @@ describe("applyDamage — damage while already at 0 HP (unconscious, not dead)",
     expect(result.dead).toBe(true);
   });
 
-  it("damage fully absorbed by tempHp while at 0 HP does not add a failure", () => {
+  it("damage fully absorbed by tempHp while at 0 HP still adds one death-save failure", () => {
     const result = applyDamage(downed({ tempHp: 5, deathSaves: { s: 0, f: 0 } }), 3);
     expect(result.tempHp).toBe(2);
-    expect(result.deathSaves).toEqual({ s: 0, f: 0 });
+    expect(result.deathSaves).toEqual({ s: 0, f: 1 });
     expect(result.hp).toBe(0);
+    expect(result.dead).toBe(false);
+  });
+});
+
+describe("applyDamage — instant death at 0 HP (damage >= max HP)", () => {
+  it("damage equal to max HP kills instantly", () => {
+    const result = applyDamage(downed({ maxHp: 20, deathSaves: { s: 0, f: 0 } }), 20);
+    expect(result.dead).toBe(true);
+    expect(result.instantDeath).toBe(true);
+    expect(result.hp).toBe(0);
+  });
+
+  it("damage one below max HP is a normal failure, not instant death", () => {
+    const result = applyDamage(downed({ maxHp: 20, deathSaves: { s: 0, f: 0 } }), 19);
+    expect(result.dead).toBe(false);
+    expect(result.instantDeath).toBe(false);
+    expect(result.deathSaves).toEqual({ s: 0, f: 1 });
+  });
+
+  it("instant death still applies even when tempHp fully absorbs the hit", () => {
+    const result = applyDamage(downed({ maxHp: 20, tempHp: 50, deathSaves: { s: 0, f: 0 } }), 20);
+    expect(result.dead).toBe(true);
+    expect(result.instantDeath).toBe(true);
   });
 });
 
@@ -158,5 +181,21 @@ describe("applyHeal — no-ops", () => {
     const result = applyHeal(alive({ hp: 10 }), 0);
     expect(result.hp).toBe(10);
     expect(result.revived).toBe(false);
+  });
+});
+
+describe("conditions array is returned as a fresh copy, never aliased to the input", () => {
+  it("applyDamage does not return the same conditions array reference", () => {
+    const character = alive({ conditions: ["prone"] });
+    const result = applyDamage(character, 3);
+    expect(result.conditions).not.toBe(character.conditions);
+    expect(result.conditions).toEqual(["prone"]);
+  });
+
+  it("applyHeal does not return the same conditions array reference", () => {
+    const character = alive({ conditions: ["prone"] });
+    const result = applyHeal(character, 3);
+    expect(result.conditions).not.toBe(character.conditions);
+    expect(result.conditions).toEqual(["prone"]);
   });
 });
