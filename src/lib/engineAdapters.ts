@@ -420,7 +420,7 @@ export function listFeatureTriggers(): ReadonlyArray<FeatureTriggerDef> {
  * 4. GAME STATE ADAPTER — wrap legacy save/load with versioning
  * ============================================================ */
 
-export const SAVE_VERSION = 5; // v5: sessionZeroConfig campaign charter (Task #16 solo-UX layer)
+export const SAVE_VERSION = 6; // v6: Story Notes narrative continuity collection
 
 export interface LegacySave {
   c: any; // character
@@ -437,6 +437,8 @@ export interface LegacySave {
   /** Task #16 solo Session-Zero charter (SessionZeroConfig) — kept `any` here to
    *  avoid a cross-module import in this adapter; DnDSolo normalizes it on load. */
   sessionZeroConfig?: any;
+  /** Story Notes v2 narrative layer. Never authoritative game state. */
+  storyNotes?: any[];
   dungeonBlueprint?: any;
   dungeonRun?: any;
   version?: number;
@@ -475,6 +477,11 @@ export function migrateLegacySave(raw: any): LegacySave {
       situation: { location: "", hook: "", bondNpc: { name: "", relationship: "" } },
       version: 1,
     };
+  }
+  if (v < 6) {
+    // v5 → v6: add the separate, narrative-only Story Notes collection.
+    // This is additive: old saves retain every existing authoritative field.
+    out.storyNotes = out.storyNotes || [];
   }
   out.version = SAVE_VERSION;
   return out;
