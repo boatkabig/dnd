@@ -74,6 +74,7 @@ import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
 import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
 import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
 import { gainXP, applyFeatGrantsToChar } from "@/lib/leveling";
+import { runSidekickAssist } from "@/lib/combatResolve";
 import SessionZeroModal from "@/components/game/SessionZeroModal";
 import OracleModal from "@/components/game/OracleModal";
 import QuestJournalModal from "@/components/game/QuestJournalModal";
@@ -96,7 +97,7 @@ import {
 import { getSpellcastingRule, canReprepareOnLongRest, reprepareSpells } from "@/lib/magic";
 import { computeLongRestRecovery, computeShortRestHeal, restoreSlotsToMax } from "@/lib/engine/rest";
 import {
-  buildSidekick, sidekickTurnIntent, resolveSidekickAttack,
+  buildSidekick,
   SIDEKICK_BASES, type SidekickClass,
 } from "@/lib/engine/sidekick";
 // 1c: hand-rolled game store — APPLY_DM_UPDATES is the atomic DM-update vector
@@ -2440,7 +2441,7 @@ export default function DnDSolo() {
       }
       // Task #14: sidekick assist acts at the END of the player's turn, before
       // the enemies. Its damage routes through hitEnemy (bridge-owned HP).
-      runSidekickAssist(cb, cc, entries);
+      runSidekickAssist(cb, cc, (t) => entries.push(entrySystem(t)), combatTargetId);
       const skEnd = checkCombatEnd(cb, cc, entries);
       cc = skEnd.cc;
       if (skEnd.ended) {
@@ -3126,52 +3127,6 @@ export default function DnDSolo() {
     const finalLog = [...log, ...entries];
     setC(cc); setLog(finalLog); setRecruitOpen(false);
     persist(cc, scene, finalLog, combat, history);
-  }
-
-  /**
-   * Run the sidekick's automatic assist turn. The engine (sidekick.ts) owns the
-   * stat block, the deterministic turn-intent ladder, and the attack resolution;
-   * this only rolls the injected dice and routes damage through hitEnemy so the
-   * combat bridge stays the single owner of enemy HP. Companion HP is not
-   * tracked (assist-only, enemies target the player) — a deliberately light
-   * integration. No-op when there is no sidekick or no living enemy.
-   */
-  function runSidekickAssist(cb: any, cc: any, entries: any[]) {
-    const sk = cc?.sidekick;
-    if (!sk || !cb || !Array.isArray(cb.enemies)) return;
-    const base = SIDEKICK_BASES[sk.baseKey];
-    if (!base) return;
-    const living = cb.enemies.filter((e: any) => e.hpNow > 0);
-    if (living.length === 0) return;
-    const block = buildSidekick(base, sk.klass, Math.max(1, Math.min(10, sk.level || cc.level || 1)));
-    const intent = sidekickTurnIntent(block, {
-      selfHpFraction: 1, // untracked HP → treat as healthy (assist-only)
-      woundedAllyHpFraction: cc.maxHp > 0 ? cc.hp / cc.maxHp : null,
-      enemyInReach: true,
-      hasSpellSlot: !!block.spellcasting,
-      canHeal: false, // this light wiring only performs offensive assists
-    });
-    if (intent.action !== "attack" && intent.action !== "cast_attack") {
-      entries.push(entrySystem(`🐕 ${base.name}: ${intent.reason}`));
-      return;
-    }
-    const target = living.find((e: any) => e.uid === combatTargetId) || living[0];
-    for (let i = 0; i < block.attacksPerAction; i++) {
-      if (target.hpNow <= 0) break;
-      const d20 = d(20);
-      const res = resolveSidekickAttack(block, {
-        targetAc: target.ac,
-        d20,
-        damageDiceTotal: rollFormula(block.attack.damageDice).total,
-        critDiceTotal: rollFormula(block.attack.damageDice).total,
-      });
-      if (res.hit) {
-        hitEnemy(cb, target, res.damage);
-        entries.push(entrySystem(`🐕 ${base.name} ${intent.action === "cast_attack" ? "ร่ายเวทใส่" : "โจมตี"} ${target.th}: ${res.crit ? "CRIT! " : ""}${res.damage} dmg → ${target.hpNow <= 0 ? "ล้ม!" : `${target.hpNow} HP`}`));
-      } else {
-        entries.push(entrySystem(`🐕 ${base.name} โจมตี ${target.th} พลาด (d20=${d20})`));
-      }
-    }
   }
 
   /* -------- new game flow -------- */
