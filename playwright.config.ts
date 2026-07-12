@@ -19,6 +19,10 @@ export default defineConfig({
     headless: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    // Allow pointing at a pre-installed browser (e.g. a sandbox where the pinned
+    // Playwright browser build differs from what's baked in). CI leaves PW_CHROME
+    // unset and uses Playwright's own managed browsers.
+    ...(process.env.PW_CHROME ? { launchOptions: { executablePath: process.env.PW_CHROME } } : {}),
   },
   projects: [
     {
