@@ -9,7 +9,7 @@ import {
 } from "../src/lib/engineAdapters";
 
 /**
- * Persistence robustness: lock in the v1→v5 save migrations (migrateLegacySave)
+ * Persistence robustness: lock in the v1→v6 save migrations (migrateLegacySave)
  * and a save→load round-trip through the versioned localStorage layer.
  *
  * Runs under vitest's node environment (no DOM), so we install a minimal
@@ -35,7 +35,7 @@ const DEFAULT_SESSION_ZERO = {
   version: 1,
 };
 
-describe("migrateLegacySave: v1 → v5", () => {
+describe("migrateLegacySave: v1 → v6", () => {
   it("migrates a bare v1 save (no version) to the current version", () => {
     const v1: any = {
       c: { name: "Aria", hp: 10, gold: 15 },
@@ -46,7 +46,7 @@ describe("migrateLegacySave: v1 → v5", () => {
     const out = migrateLegacySave(v1);
 
     expect(out.version).toBe(SAVE_VERSION);
-    expect(SAVE_VERSION).toBe(5);
+    expect(SAVE_VERSION).toBe(6);
     // v1→v2: map + history added
     expect(out.map).toEqual({ nodes: {}, edges: [], current: null });
     expect(out.history).toEqual([]);
@@ -61,6 +61,8 @@ describe("migrateLegacySave: v1 → v5", () => {
     expect(out.campaignMemory).toEqual({ facts: [], sessionNumber: 1, version: 1 });
     // v4→v5: session-zero charter
     expect(out.sessionZeroConfig).toEqual(DEFAULT_SESSION_ZERO);
+    // v5→v6: separate, narrative-only Story Notes collection
+    expect(out.storyNotes).toEqual([]);
     // original data preserved
     expect(out.c.name).toBe("Aria");
     expect(out.c.gold).toBe(15);
@@ -93,7 +95,7 @@ describe("migrateLegacySave: v1 → v5", () => {
 
   it("is idempotent on an already-current save", () => {
     const current: any = {
-      version: 5,
+      version: 6,
       c: { name: "Cael", buffs: [{ name: "Haste" }] },
       scene: "keep",
       log: [],
@@ -104,14 +106,17 @@ describe("migrateLegacySave: v1 → v5", () => {
       quests: [],
       campaignMemory: { facts: [{ id: "f1", text: "met the king" }], sessionNumber: 2, version: 1 },
       sessionZeroConfig: { ...DEFAULT_SESSION_ZERO, tone: "horror" },
+      storyNotes: [{ id: "n1", title: "A secret" }],
     };
     const out = migrateLegacySave(current);
-    expect(out.version).toBe(5);
+    expect(out.version).toBe(6);
     // pre-existing campaign memory is not clobbered
     expect(out.campaignMemory.sessionNumber).toBe(2);
     expect(out.campaignMemory.facts).toEqual([{ id: "f1", text: "met the king" }]);
     // pre-existing session-zero charter is not clobbered
     expect(out.sessionZeroConfig.tone).toBe("horror");
+    // pre-existing Story Notes are not clobbered
+    expect(out.storyNotes).toEqual([{ id: "n1", title: "A secret" }]);
   });
 
   it("back-fills the v5 session-zero charter for a v4 save", () => {
@@ -135,6 +140,45 @@ describe("migrateLegacySave: v1 → v5", () => {
     expect(out.campaignMemory).toEqual({ facts: [], sessionNumber: 1, version: 1 });
   });
 
+  it("back-fills an empty Story Notes collection for a v5 save", () => {
+    const v5: any = {
+      version: 5,
+      c: { name: "Nia", buffs: [] },
+      scene: "gate",
+      log: [],
+      combat: null,
+      map: { nodes: {}, edges: [], current: null },
+      history: [],
+      gameTime: { day: 1, hour: 8 },
+      quests: [],
+      campaignMemory: { facts: [], sessionNumber: 1, version: 1 },
+      sessionZeroConfig: DEFAULT_SESSION_ZERO,
+    };
+    const out = migrateLegacySave(v5);
+
+    expect(out.version).toBe(6);
+    expect(out.storyNotes).toEqual([]);
+    expect(out.sessionZeroConfig).toEqual(DEFAULT_SESSION_ZERO);
+  });
+  it("preserves a Story Notes collection already present in a v5 save", () => {
+    const out = migrateLegacySave({
+      version: 5,
+      c: { name: "Oren", buffs: [] },
+      scene: "road",
+      log: [],
+      combat: null,
+      map: { nodes: {}, edges: [], current: null },
+      history: [],
+      gameTime: { day: 1, hour: 8 },
+      quests: [],
+      campaignMemory: { facts: [], sessionNumber: 1, version: 1 },
+      sessionZeroConfig: DEFAULT_SESSION_ZERO,
+      storyNotes: [{ id: "note-1", title: "Keep this thread" }],
+    });
+
+    expect(out.version).toBe(6);
+    expect(out.storyNotes).toEqual([{ id: "note-1", title: "Keep this thread" }]);
+  });
   it("passes through null/undefined without throwing", () => {
     expect(migrateLegacySave(null as any)).toBeNull();
     expect(migrateLegacySave(undefined as any)).toBeUndefined();
