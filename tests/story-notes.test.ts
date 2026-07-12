@@ -5,6 +5,7 @@ import {
   buildNarrativeContext,
   createStoryNotes,
   findStoryNote,
+  normalizeStoryNotes,
   removeStoryNote,
   selectRelevantStoryNotes,
   upsertStoryNote,
@@ -39,6 +40,24 @@ describe("Story Notes CRUD / upsert", () => {
     expect(findStoryNote(updated, initial.id)).toMatchObject({ title: "Recovered shipment", status: "resolved" });
     expect(removeStoryNote(updated, initial.id)).toEqual([]);
     expect(removeStoryNote(updated, "unknown")).toEqual(updated);
+  });
+});
+
+describe("normalizeStoryNotes (Wave 2 review finding 1 — load path)", () => {
+  it("rescues undefined into [] — this is the load-path half of the fix: a native v6 save leaves migrateLegacySave's storyNotes undefined (see persistence.test.ts), so DnDSolo's load path must call normalizeStoryNotes rather than trust the migration", () => {
+    expect(normalizeStoryNotes(undefined)).toEqual([]);
+  });
+
+  it("rescues null and non-array garbage into []", () => {
+    expect(normalizeStoryNotes(null)).toEqual([]);
+    expect(normalizeStoryNotes("not an array")).toEqual([]);
+    expect(normalizeStoryNotes({})).toEqual([]);
+  });
+
+  it("keeps well-formed notes and drops malformed entries from a mixed array", () => {
+    const good = note({ id: "good" });
+    const result = normalizeStoryNotes([good, { id: "bad", title: "missing fields" }, null, 42]);
+    expect(result).toEqual([good]);
   });
 });
 

@@ -78,6 +78,7 @@ import { runSidekickAssist, resolveDeathSave, checkCombatEnd, runEnemyPhase, app
 import SessionZeroModal from "@/components/game/SessionZeroModal";
 import OracleModal from "@/components/game/OracleModal";
 import QuestJournalModal from "@/components/game/QuestJournalModal";
+import StoryNotesModal from "@/components/game/StoryNotesModal";
 import AsiModal from "@/components/game/AsiModal";
 import SubclassModal from "@/components/game/SubclassModal";
 import ReprepareModal from "@/components/game/ReprepareModal";
@@ -124,12 +125,16 @@ import {
 } from "@/lib/engine/oracle";
 import {
   createCampaignMemory, normalizeCampaignMemory, appendFact, startNewSession,
-  summarizeMemory, type CampaignMemory, type FactKind,
+  type CampaignMemory, type FactKind,
 } from "@/lib/engine/campaignMemory";
 import {
-  createDefaultSessionZero, normalizeSessionZero, summarizeSessionZero,
+  createDefaultSessionZero, normalizeSessionZero,
   hasStartingSituation, isDefaultSessionZero, type SessionZeroConfig,
 } from "@/lib/engine/sessionZero";
+import {
+  createStoryNotes, normalizeStoryNotes, upsertStoryNote, removeStoryNote,
+  buildNarrativeContext, type StoryNote,
+} from "@/lib/engine/storyNotes";
 import { resolveExplorationTurn } from "@/lib/engine/exploration";
 import { bargainOutcome } from "@/lib/engine/economy";
 // Shared with game/* components (CharacterCreation, CharacterSheet, AdventureLog) —
@@ -225,6 +230,11 @@ export default function DnDSolo() {
   const [sessionZeroConfig, setSessionZeroConfig] = useState<SessionZeroConfig>(() => createDefaultSessionZero());
   const sessionZeroRef = useRef<SessionZeroConfig>(sessionZeroConfig);
   const [sessionZeroOpen, setSessionZeroOpen] = useState(false);
+  // Story Notes v2 — narrative-only continuity layer, separate from CampaignMemory
+  // facts and never authoritative game state (src/lib/engine/storyNotes.ts).
+  const [storyNotes, setStoryNotes] = useState<StoryNote[]>(() => createStoryNotes());
+  const storyNotesRef = useRef<StoryNote[]>(storyNotes);
+  const [storyNotesOpen, setStoryNotesOpen] = useState(false);
   const [szLineInput, setSzLineInput] = useState("");
   const [szVeilInput, setSzVeilInput] = useState("");
   // Domain 35: Content Management state
@@ -283,12 +293,20 @@ export default function DnDSolo() {
   useEffect(() => { dungeonRunRef.current = dungeonRun; }, [dungeonRun]);
   useEffect(() => { campaignMemoryRef.current = campaignMemory; }, [campaignMemory]);
   useEffect(() => { sessionZeroRef.current = sessionZeroConfig; }, [sessionZeroConfig]);
+  useEffect(() => { storyNotesRef.current = storyNotes; }, [storyNotes]);
 
-  // Every DM call must carry campaign memory + the Session-Zero charter so
-  // recorded facts/tone stay consistent even when chat history is truncated.
+  // Every DM call must carry campaign memory + the Session-Zero charter + Story
+  // Notes so continuity stays consistent even when chat history is truncated.
   // Centralized here so no buildSystemPrompt call site can forget them.
+  // buildNarrativeContext is the single, delimited, injection-safe funnel (Story
+  // Notes v2 Wave 2) — all 6 callDM sites go through buildPrompt → this.
   function buildPrompt(c: any, pacing?: any) {
-    return buildSystemPrompt(c, pacing, summarizeMemory(campaignMemoryRef.current), summarizeSessionZero(sessionZeroRef.current));
+    const narrativeContext = buildNarrativeContext({
+      campaignMemory: campaignMemoryRef.current,
+      sessionZeroConfig: sessionZeroRef.current,
+      storyNotes: storyNotesRef.current,
+    });
+    return buildSystemPrompt(c, pacing, narrativeContext);
   }
 
   const [srdStatus, setSrdStatus] = useState<"checking" | "online" | "offline">("checking");
@@ -331,6 +349,7 @@ export default function DnDSolo() {
       dungeonRun: dungeonRunRef.current,
       campaignMemory: campaignMemoryRef.current,
       sessionZeroConfig: sessionZeroRef.current,
+      storyNotes: storyNotesRef.current,
     });
   }, [quests]);
 
@@ -341,6 +360,26 @@ export default function DnDSolo() {
     const next = appendFact(campaignMemoryRef.current, { kind, id, name, detail, at: Date.now() });
     campaignMemoryRef.current = next;
     setCampaignMemory(next);
+  }, []);
+
+  // Story Notes v2 Wave 2: id + updatedAt are stamped here (UI edge), mirroring
+  // rememberFact above — upsertStoryNote/removeStoryNote stay pure. Narrative-only:
+  // never touches HP/slots/position/quest state.
+  const upsertNote = useCallback((input: Omit<StoryNote, "updatedAt" | "id"> & { id?: string }) => {
+    const note: StoryNote = {
+      ...input,
+      id: input.id || `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      updatedAt: Date.now(),
+    };
+    const next = upsertStoryNote(storyNotesRef.current, note);
+    storyNotesRef.current = next;
+    setStoryNotes(next);
+  }, []);
+
+  const removeNote = useCallback((id: string) => {
+    const next = removeStoryNote(storyNotesRef.current, id);
+    storyNotesRef.current = next;
+    setStoryNotes(next);
   }, []);
 
   // Phase 5: ask the solo oracle. RNG (Math.random) lives HERE at the UI edge;
@@ -2438,6 +2477,13 @@ export default function DnDSolo() {
     const restoredSz = normalizeSessionZero((save as any).sessionZeroConfig);
     sessionZeroRef.current = restoredSz;
     setSessionZeroConfig(restoredSz);
+    // Story Notes v2 Wave 2 (review finding 1): normalize on load rather than trust
+    // the migration guard — a "native v6" save already carries version:6 with
+    // storyNotes left undefined by saveGame, so migrateLegacySave's `if (v<6)` never
+    // fires. normalizeStoryNotes(undefined) -> [] rescues that case.
+    const restoredNotes = normalizeStoryNotes((save as any).storyNotes);
+    storyNotesRef.current = restoredNotes;
+    setStoryNotes(restoredNotes);
     setC(cc); setScene(save.scene); setLog(save.log || []); setCombat(save.combat || null); setHistory(save.history || []); setMap(mp);
     idRef.current = Math.max(0, ...(save.log || []).map((e: any) => e.id || 0));
     setPhase(cc && cc.dead ? "dead" : "play");
@@ -2455,6 +2501,9 @@ export default function DnDSolo() {
     const freshSz = createDefaultSessionZero();
     sessionZeroRef.current = freshSz;
     setSessionZeroConfig(freshSz);
+    const freshNotes = createStoryNotes();
+    storyNotesRef.current = freshNotes;
+    setStoryNotes(freshNotes);
     setHasSave(false); setC(null); setLog([]); setCombat(null); setHistory([]); setScene(""); setMap(null);
     setDungeonBlueprint(null); setDungeonRun(null);
     setPhase("menu");
@@ -2743,6 +2792,10 @@ export default function DnDSolo() {
                 📦 Content Manager — import/export homebrew
               </button>
               <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
+                onClick={() => { setStoryNotesOpen(true); setMoreMenuOpen(false); }}>
+                📝 Story Notes — บันทึกเรื่องราวต่อเนื่อง
+              </button>
+              <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left", padding: "12px 14px" }}
                 onClick={() => { setRecruitOpen(true); setMoreMenuOpen(false); }}>
                 🐕 สหายร่วมทาง {c?.sidekick ? `— ${SIDEKICK_BASES[c.sidekick.baseKey]?.name}` : "— รับสหายช่วยรบ"}
               </button>
@@ -2785,6 +2838,9 @@ export default function DnDSolo() {
 
       {/* QUEST JOURNAL MODAL */}
       <QuestJournalModal open={questJournalOpen} onClose={() => setQuestJournalOpen(false)} quests={quests} />
+
+      {/* STORY NOTES MODAL — Story Notes v2 Wave 2 (narrative-only, src/lib/engine/storyNotes.ts) */}
+      <StoryNotesModal open={storyNotesOpen} onClose={() => setStoryNotesOpen(false)} notes={storyNotes} onUpsert={upsertNote} onRemove={removeNote} />
 
       {/* SHOP MODAL — D&D 5e economy (component: game/ShopModal) */}
       <ShopModal open={shopOpen && !!c && !combat} c={c} tab={shopTab} setTab={setShopTab} search={shopSearch} setSearch={setShopSearch} bargainedPrices={bargainedPrices} onBuy={shopBuy} onBargain={shopBargain} onSell={shopSell} onClose={() => setShopOpen(false)} />
