@@ -374,13 +374,15 @@ export default function DnDSolo() {
     const next = upsertStoryNote(storyNotesRef.current, note);
     storyNotesRef.current = next;
     setStoryNotes(next);
-  }, []);
+    persist(cRef.current, scene, logDataRef.current, combatRef.current, history);
+  }, [scene, history, persist]);
 
   const removeNote = useCallback((id: string) => {
     const next = removeStoryNote(storyNotesRef.current, id);
     storyNotesRef.current = next;
     setStoryNotes(next);
-  }, []);
+    persist(cRef.current, scene, logDataRef.current, combatRef.current, history);
+  }, [scene, history, persist]);
 
   // Phase 5: ask the solo oracle. RNG (Math.random) lives HERE at the UI edge;
   // the engine (askOracle/rollRandomEvent) is pure and takes the injected roll.
