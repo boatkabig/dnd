@@ -4,8 +4,8 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
   DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
-  BACKGROUNDS, RACES, CLASSES, FEATURES, WEAPONS, weaponByName, ARMOR,
-  MAGIC_ITEMS, CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
+  BACKGROUNDS, RACES, CLASSES, FEATURES,
+  CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
   MAP_ICON, wornHas,
   applyDamageModifiers, passivePerception, rateEncounterDifficulty,
   gameTimeToString, getLightLevelForHour, grappleCheck, canDualWield,
@@ -81,6 +81,7 @@ import AsiModal from "@/components/game/AsiModal";
 import SubclassModal from "@/components/game/SubclassModal";
 import ReprepareModal from "@/components/game/ReprepareModal";
 import CompanionModal from "@/components/game/CompanionModal";
+import ShopModal from "@/components/game/ShopModal";
 // Phase 2: Extended class features Lv.1-20
 import { getExtendedFeatures, hasASIAtLevel } from "@/lib/featuresExtended";
 // Phase 4: progression engine — subclass features + feat effects
@@ -124,7 +125,7 @@ import {
   hasStartingSituation, isDefaultSessionZero, type SessionZeroConfig,
 } from "@/lib/engine/sessionZero";
 import { resolveExplorationTurn } from "@/lib/engine/exploration";
-import { sellPrice as sellPriceOf, bargainOutcome } from "@/lib/engine/economy";
+import { bargainOutcome } from "@/lib/engine/economy";
 // Shared with game/* components (CharacterCreation, CharacterSheet, AdventureLog) —
 // lives in lib/ to avoid a circular import back into this file.
 import { d, makeCharacter, SRD_OK, setSrdOk } from "@/lib/dndSoloShared";
@@ -2875,6 +2876,29 @@ export default function DnDSolo() {
    * solo player gets an exploration loop without an LLM round-trip. RNG (d20 +
    * d100s) lives HERE at the UI edge; the engine (resolveExplorationTurn) is pure.
    */
+  /* -------- Shop handlers (extracted from the inline ShopModal onClicks) -------- */
+  function shopBuy(label: string, price: number, invItem: string, bargainKey?: string) {
+    if (c.gold < price) return;
+    const nc = { ...c, gold: c.gold - price, inventory: [...c.inventory, invItem] };
+    setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${label} — ${price} gp → เหลือ ${nc.gold} gp`)]);
+    persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${label} — ${price} gp`)], null, history);
+    // A bargained price is spent once used — a fresh negotiation is needed next time.
+    if (bargainKey) setBargainedPrices((prev) => { const next = { ...prev }; delete next[bargainKey]; return next; });
+  }
+  function shopBargain(key: string, basePrice: number, label: string) {
+    // D&D 5e Bargaining: Persuasion check vs a price-scaled DC. Pure economy engine
+    // owns the rule; the d20 roll (RNG) is injected here at the UI edge.
+    const r = rollD20(skillMod(c, "persuasion"));
+    const { dc: bargainDC, success, discountPct: discount, price: newPrice } = bargainOutcome(r.total, basePrice);
+    setLog([...log, entrySystem(`🗣️ เจรจา ${label}: Persuasion ${r.total} vs DC ${bargainDC} → ${success ? `สำเร็จ! ลด ${discount}% → ${newPrice} gp` : `ล้มเหลว! ราคาเพิ่ม ${Math.abs(discount)}% → ${newPrice} gp`}`)]);
+    setBargainedPrices((prev) => ({ ...prev, [key]: newPrice }));
+  }
+  function shopSell(item: string, index: number, sellPrice: number) {
+    const nc = { ...c, gold: c.gold + sellPrice, inventory: c.inventory.filter((_: string, j: number) => j !== index) };
+    setC(nc); setLog([...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp → รวม ${nc.gold} gp`)]);
+    persist(nc, scene, [...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp`)], null, history);
+  }
+
   function exploreAction() {
     if (thinking || combat) return;
     const d20 = () => Math.floor(Math.random() * 20) + 1;
@@ -3663,208 +3687,8 @@ export default function DnDSolo() {
       {/* QUEST JOURNAL MODAL */}
       <QuestJournalModal open={questJournalOpen} onClose={() => setQuestJournalOpen(false)} quests={quests} />
 
-      {/* SHOP MODAL — D&D 5e economy: buy/sell weapons, armor, magic items, consumables */}
-      {shopOpen && c && !combat && (
-        <div className="sheet-overlay" onClick={() => setShopOpen(false)}>
-          <div className="sheet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 650 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px" }}>
-              <span className="dnd-display" style={{ fontSize: 18, color: "#E0A83E" }}>🏪 ร้านค้า</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 14, color: "#B9A96A" }}>💰 {c.gold} gp</span>
-                <button className="btn" style={{ padding: "4px 12px" }} onClick={() => setShopOpen(false)}>✕</button>
-              </div>
-            </div>
-            <div className="sheet-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
-              {/* Tabs */}
-              <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-                {(["weapons", "armor", "magic", "consumables", "sell"] as const).map(tab => (
-                  <button key={tab} className={"btn" + (shopTab === tab ? " btn-gold" : "")} style={{ flex: 1, fontSize: 11, padding: "5px" }}
-                    onClick={() => setShopTab(tab)}>
-                    {tab === "weapons" ? "⚔️ อาวุธ" : tab === "armor" ? "🛡️ เกราะ" : tab === "magic" ? "✨ ของวิเศษ" : tab === "consumables" ? "🧪 ยา" : "📤 ขายของ"}
-                  </button>
-                ))}
-              </div>
-              {/* Search box */}
-              <input className="input-main" placeholder="🔍 ค้นหา..." value={shopSearch}
-                onChange={(e) => setShopSearch(e.target.value)}
-                style={{ marginBottom: 10, fontSize: 13, padding: "8px 12px" }} />
-
-              {/* Buy Weapons */}
-              {shopTab === "weapons" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(WEAPONS).filter(([, w]: any) => (w.type === "simple" || w.type === "martial")).filter(([key, w]: any) => !shopSearch || w.th.toLowerCase().includes(shopSearch.toLowerCase()) || key.includes(shopSearch.toLowerCase())).map(([key, w]: any) => {
-                    // Calculate price with reputation discount (D&D 5e: Persuasion can reduce price)
-                    const basePrice = w.price;
-                    const charRep = c.gold > 500 ? 10 : 0; // simple reputation proxy
-                    // A negotiated bargain price (if this item was just haggled over) overrides
-                    // the passive reputation discount — it's the more specific, explicit price.
-                    const finalPrice = bargainedPrices[key] ?? Math.max(1, Math.floor(basePrice * (1 - charRep / 100)));
-                    return (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{w.th}</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 4 }}>{w.dmg} {w.abil === "dex" ? "DEX" : "STR"}{w.versatileDmg ? ` (2H: ${w.versatileDmg})` : ""}</span>
-                        {w.mastery && <span style={{ color: "#7FA85C", fontSize: 9, marginLeft: 4 }}>[{w.mastery}]</span>}
-                        <div style={{ color: "#B9A96A" }}>
-                          {finalPrice !== basePrice ? (
-                            <span><s style={{ color: "#6B6284" }}>{basePrice}</s> {finalPrice} gp</span>
-                          ) : (
-                            <span>{basePrice} gp</span>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 3 }}>
-                        <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                          disabled={c.gold < finalPrice}
-                          onClick={() => {
-                            if (c.gold >= finalPrice) {
-                              const nc = { ...c, gold: c.gold - finalPrice, inventory: [...c.inventory, w.th] };
-                              setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${w.th} — ${finalPrice} gp → เหลือ ${nc.gold} gp`)]);
-                              persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${w.th} — ${finalPrice} gp`)], null, history);
-                              // Bargain price is spent once used — a fresh negotiation is needed next time.
-                              setBargainedPrices((prev) => { const next = { ...prev }; delete next[key]; return next; });
-                            }
-                          }}>ซื้อ</button>
-                        <button className="btn" style={{ padding: "3px 6px", fontSize: 9 }}
-                          onClick={() => {
-                            // D&D 5e Bargaining: Persuasion check vs a price-scaled DC.
-                            // Resolved by the pure economy engine (src/lib/engine/economy.ts);
-                            // RNG (the d20 roll) is injected here at the UI edge.
-                            const r = rollD20(skillMod(c, "persuasion"));
-                            const { dc: bargainDC, success, discountPct: discount, price: newPrice } = bargainOutcome(r.total, basePrice);
-                            setLog([...log, entrySystem(`🗣️ เจรจา ${w.th}: Persuasion ${r.total} vs DC ${bargainDC} → ${success ? `สำเร็จ! ลด ${discount}% → ${newPrice} gp` : `ล้มเหลว! ราคาเพิ่ม ${Math.abs(discount)}% → ${newPrice} gp`}`)]);
-                            // Persist the negotiated price so Buy actually charges it.
-                            setBargainedPrices((prev) => ({ ...prev, [key]: newPrice }));
-                          }}>เจรจา</button>
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Buy Armor */}
-              {shopTab === "armor" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(ARMOR).filter(([key, a]: any) => !shopSearch || a.th.toLowerCase().includes(shopSearch.toLowerCase()) || key.includes(shopSearch.toLowerCase())).map(([key, a]: any) => (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{a.th}</span>
-                        <span style={{ color: "#8A7F9E", marginLeft: 4 }}>
-                          {a.acPlus ? `+${a.acPlus} AC` : `AC ${a.acBase}${a.dexBonus ? "+DEX" : ""}${a.maxDex ? `(max ${a.maxDex})` : ""}`}
-                        </span>
-                        <span style={{ color: "#6B6284", fontSize: 9, marginLeft: 4 }}>[{a.type}]</span>
-                        <div style={{ color: "#B9A96A" }}>{a.price} gp</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < a.price}
-                        onClick={() => {
-                          if (c.gold >= a.price) {
-                            const nc = { ...c, gold: c.gold - a.price, inventory: [...c.inventory, a.th] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${a.th} — ${a.price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${a.th} — ${a.price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Buy Magic Items */}
-              {shopTab === "magic" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(MAGIC_ITEMS).filter(([, m]: any) => m.price <= c.gold + 500).filter(([name, m]: any) => !shopSearch || name.toLowerCase().includes(shopSearch.toLowerCase())).map(([name, m]: any) => (
-                    <div key={name} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#E0A83E", fontWeight: 600 }}>{name}</span>
-                        <span style={{ color: "#6B6284", fontSize: 9, marginLeft: 4 }}>[{m.slot}]</span>
-                        <div style={{ color: "#B9A96A" }}>{m.price} gp</div>
-                        <div style={{ color: "#8A7F9E", fontSize: 9 }}>{m.desc?.slice(0, 60)}...</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < m.price}
-                        onClick={() => {
-                          if (c.gold >= m.price) {
-                            const nc = { ...c, gold: c.gold - m.price, inventory: [...c.inventory, name] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${name} — ${m.price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${name} — ${m.price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Buy Consumables */}
-              {shopTab === "consumables" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                  {Object.entries(CONSUMABLES).filter(([key, con]: any) => !shopSearch || (con.th || key).toLowerCase().includes(shopSearch.toLowerCase())).map(([key, con]: any) => (
-                    <div key={key} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ color: "#C9BFE0", fontWeight: 600 }}>{con.th || key}</span>
-                        <div style={{ color: "#8A7F9E", fontSize: 9 }}>{con.heal ? `ฟื้น ${con.heal} HP` : con.cure ? `รักษา ${con.cure}` : "ใช้ใน combat"}</div>
-                        <div style={{ color: "#B9A96A" }}>{con.price || 25} gp</div>
-                      </div>
-                      <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                        disabled={c.gold < (con.price || 25)}
-                        onClick={() => {
-                          const price = con.price || 25;
-                          if (c.gold >= price) {
-                            const nc = { ...c, gold: c.gold - price, inventory: [...c.inventory, key] };
-                            setC(nc); setLog([...log, entrySystem(`🏪 ซื้อ ${con.th || key} — ${price} gp → เหลือ ${nc.gold} gp`)]);
-                            persist(nc, scene, [...log, entrySystem(`🏪 ซื้อ ${con.th || key} — ${price} gp`)], null, history);
-                          }
-                        }}>ซื้อ</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Sell items from inventory (50% of base price) */}
-              {shopTab === "sell" && (
-                <div>
-                  <div style={{ fontSize: 11, color: "#9C92B8", marginBottom: 8 }}>
-                    ขายของจากเป้ (ราคาขาย = 50% ของราคาซื้อ — D&D 5e standard)
-                  </div>
-                  {c.inventory.length === 0 ? (
-                    <div style={{ fontSize: 12, color: "#8A7F9E", textAlign: "center", padding: 20 }}>ไม่มีของในเป้</div>
-                  ) : (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                      {c.inventory.map((item: string, i: number) => {
-                        const wEntry = weaponByName(item) as [string, any] | undefined;
-                        const w = wEntry?.[1];
-                        const armorEntries = Object.entries(ARMOR) as [string, any][];
-                        const armorMatch = armorEntries.find(([, a]) => a.th === item);
-                        const magicMatch = (MAGIC_ITEMS as any)[item];
-                        const conMatch = (CONSUMABLES as any)[item];
-                        const basePrice = w?.price || armorMatch?.[1]?.price || magicMatch?.price || conMatch?.price || 5;
-                        const sellPrice = sellPriceOf(basePrice);
-                        return (
-                          <div key={i} style={{ padding: "6px 8px", background: "#1E1830", border: "1px solid #3A3054", borderRadius: 6, fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <div>
-                              <span style={{ color: "#C9BFE0" }}>{item}</span>
-                              <div style={{ color: "#7FA85C" }}>ขาย {sellPrice} gp</div>
-                            </div>
-                            <button className="btn" style={{ padding: "3px 8px", fontSize: 10 }}
-                              onClick={() => {
-                                const nc = { ...c, gold: c.gold + sellPrice, inventory: c.inventory.filter((_: string, j: number) => j !== i) };
-                                setC(nc); setLog([...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp → รวม ${nc.gold} gp`)]);
-                                persist(nc, scene, [...log, entrySystem(`🏪 ขาย ${item} — +${sellPrice} gp`)], null, history);
-                              }}>ขาย</button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div style={{ marginTop: 10, fontSize: 10, color: "#6B6284", textAlign: "center" }}>
-                D&D 5e Economy — ราคาตาม PHB 2024 · ขายของได้ 50% · เปิดร้านได้ตอนไม่อยู่ใน combat
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* SHOP MODAL — D&D 5e economy (component: game/ShopModal) */}
+      <ShopModal open={shopOpen && !!c && !combat} c={c} tab={shopTab} setTab={setShopTab} search={shopSearch} setSearch={setShopSearch} bargainedPrices={bargainedPrices} onBuy={shopBuy} onBargain={shopBargain} onSell={shopSell} onClose={() => setShopOpen(false)} />
 
       {/* CONTENT MANAGER MODAL — Domain 35: import/export homebrew content */}
       {contentManagerOpen && c && (
