@@ -2118,7 +2118,6 @@ export default function DnDSolo() {
     const heal = computeShortRestHeal(r.total, mod(c.abilities.con));
     const cc: any = {
       ...c,
-      hp: Math.min(c.maxHp, c.hp + heal),
       hitDiceLeft: c.hitDiceLeft - 1,
       secondWindUsed: false,
       actionSurgeUsed: false,
@@ -2126,6 +2125,14 @@ export default function DnDSolo() {
       raging: false,
       lastShortRestHoursAgo: 0, // reset short rest timer
     };
+    // Wave 2: route the Hit-Die heal through the shared adapter so recovering
+    // to >=1 HP also clears deathSaves and strips "unconscious" (previously
+    // healed directly + only reset deathSaves, leaving a stabilized-at-0
+    // player stuck Unconscious forever after a short rest).
+    applyHealTo(cc, heal);
+    // Defensive: at rest and conscious, death saves should be clean regardless
+    // (applyHealTo above already handles the down->revived case).
+    if (cc.hp > 0) cc.deathSaves = { s: 0, f: 0 };
     const entries = [entrySystem(`⛺ พักสั้น (1 ชม.): ทอย Hit Die d${cls.hitDie}=${r.total} → ฟื้น ${heal} HP → ${cc.hp}/${cc.maxHp} · Hit Dice เหลือ ${cc.hitDiceLeft}/${c.level}`)];
     // Advance time by 1 hour via WorldClock adapter
     const newTime = engineAdvanceHours(1);
@@ -2146,8 +2153,6 @@ export default function DnDSolo() {
         entries.push(entrySystem(`📖 Arcane Recovery: คืน spell slot ${recovered.join(", ")}`));
       }
     }
-    // Reset death saves (player is at rest, stable)
-    if (cc.hp > 0) cc.deathSaves = { s: 0, f: 0 };
     // Phase 2: Warlock Pact Magic refreshes on short rest (D&D 2024)
     if (refreshesOnShortRest(cc.cls) && cc.slotsMax && cc.slotsMax.length > 0) {
       cc.slots = restoreSlotsToMax(cc.slotsMax);
