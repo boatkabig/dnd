@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   ABIL_TH, mod, profByLevel, SKILLS, CONDITIONS_TH,
-  DISADV_CONDS, CHECK_DISADV_CONDS, ENEMY_ADV_CONDS, INCAPACITATING_CONDS,
+  DISADV_CONDS, CHECK_DISADV_CONDS, INCAPACITATING_CONDS,
   BACKGROUNDS, RACES, CLASSES, FEATURES,
   CONSUMABLES, BESTIARY, monSave, SLOT_TABLE, HALF_CASTER_SLOTS,
   wornHas,
@@ -23,8 +23,8 @@ import {
   initWorldClockFromLegacy, worldClockToLegacy, getWorldClock, advanceHours as engineAdvanceHours,
   fetchMonsterForCombat, type LegacySave,
   emitAttack, emitHit, emitDamageDealt, emitDamageTaken, emitHeal, emitKill, emitDeath,
-  emitTurnStart, emitTurnEnd, emitCastSpell, emitConditionApplied,
-  queryFeatureTriggers, getTriggeredFeatures, type PendingStateChange,
+  emitTurnStart, emitTurnEnd, emitCastSpell,
+  queryFeatureTriggers, getTriggeredFeatures,
 } from "@/lib/engineAdapters";
 // AI DM Layer (Domain 31-35)
 import {
@@ -33,7 +33,7 @@ import {
 } from "@/lib/dialogue";
 import {
   calculateDifficulty, getDifficultyThresholds, suggestedCR,
-  crToXP, calculateReward, rollRewardItems, type DifficultyLevel,
+  crToXP, type DifficultyLevel,
 } from "@/lib/encounter";
 import {
   createStoryArc, createScene, enterScene, completeScene, updatePacingAfterScene,
@@ -67,14 +67,14 @@ import { callDM } from "@/lib/dmClient";
 import {
   rollFormula, rollD20, migrateChar, getMelee, getRanged, hasFeature,
   skillMod, saveMod, attackMod, hasDisadv, hasCheckDisadv, isIncapacitated,
-  exhaustionPenalty, enemyHasAttackDisadv, attackerHasAdvVs, spellLegalityMessageTh,
-  coverForTarget, sneakDice, hasConcentration, getActiveConcentrationBuff, critThreshold,
+  attackerHasAdvVs, spellLegalityMessageTh,
+  coverForTarget, sneakDice, critThreshold,
 } from "@/lib/characterStats";
 import { emptyMap, applyMapUpdate, applyWorldMap } from "@/lib/mapState";
-import { applyEnemyDamage, hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
+import { hitEnemy, gridDistance, isAdjacent } from "@/lib/combatMath";
 import { tickBuffs, applyBuffToCharacter } from "@/lib/buffs";
 import { gainXP, applyFeatGrantsToChar } from "@/lib/leveling";
-import { runSidekickAssist } from "@/lib/combatResolve";
+import { runSidekickAssist, resolveDeathSave, checkCombatEnd, runEnemyPhase, applyPendingChanges } from "@/lib/combatResolve";
 import SessionZeroModal from "@/components/game/SessionZeroModal";
 import OracleModal from "@/components/game/OracleModal";
 import QuestJournalModal from "@/components/game/QuestJournalModal";
@@ -109,10 +109,9 @@ import DungeonView from "@/components/game/DungeonView";
 import DMChat from "@/components/game/DMChat";
 // 1c-b: bridge-backed combat slice — enemy target picker + the engine attack seam
 import { CombatEnemyList, resolveBridgeAttack, toDamageType } from "@/components/game/CombatView";
-import { buildBridgeState, planMultiattackSequence, getCombatView, moveBy, setMovement, endTurn } from "@/lib/engine/combatBridge";
-import { applyDeathSaveRoll, resolveContestedAction } from "@/lib/engine/combat";
+import { buildBridgeState, planMultiattackSequence, getCombatView, moveBy, setMovement } from "@/lib/engine/combatBridge";
+import { resolveContestedAction } from "@/lib/engine/combat";
 import { checkConcentration, concentrationCheckDC, isConcentrationSpellName, toSpellDisplayName } from "@/lib/engine/effects";
-import { runEnemyTurn, type EnemyAIDeps } from "@/lib/engine/enemyAI";
 // Phase 3: spell-legality (2024) + vision/LOS wiring — engine-owned rules
 import { canCast2024, type SpellLegalityReason } from "@/lib/engine/magic";
 import { coverBetween, attackVisibilityModifier, type Obstacle } from "@/lib/engine/vision";
@@ -360,6 +359,17 @@ export default function DnDSolo() {
   function entryPlayer(text: string) { return { id: nextId(), type: "player", text }; }
   function entrySystem(text: string) { return { id: nextId(), type: "system", text }; }
 
+  // Injected dependency bundle for the extracted combat resolvers (combatResolve.ts):
+  // the component's log-entry factory + id counter, and the two React-facing seams
+  // (player death → setPhase, victory → dungeon-room-clear) they cannot import.
+  function combatDeps() {
+    return {
+      entrySystem, nextId,
+      onDeath: () => setPhase("dead"),
+      onVictoryDungeon: (e: any[]) => handleCombatEndDungeonUpdate(e, true),
+    };
+  }
+
   /** Phase 1: Show DM schema validation warnings to player (transparent about state drift) */
   function logValidationWarnings(res: any, entries: any[]): void {
     const warnings = res?.__validationWarnings;
@@ -382,108 +392,6 @@ export default function DnDSolo() {
       if (enemy && enemy.features) return enemy.features.includes(key);
     }
     return false;
-  }
-
-  // Apply pending state changes produced by feature triggers (data-driven)
-  function applyPendingChanges(changes: PendingStateChange[], cc: any, cb: any, entries: any[]): { cc: any; cb: any } {
-    let nc = cc;
-    let ncb = cb;
-    for (const change of changes) {
-      if (change.payload.narration) entries.push(entrySystem(`✨ ${change.payload.narration}`));
-      switch (change.type) {
-        case "apply_condition": {
-          const cid = change.payload.conditionId!;
-          const dur = change.payload.conditionDuration || 1;
-          if (change.targetId === "player" || change.targetId === nc.id) {
-            if (!nc.conditions.includes(cid)) {
-              nc = { ...nc, conditions: [...nc.conditions, cid] };
-              entries.push(entrySystem(`   → ติดสภาวะ ${cid} (${dur} รอบ) — จาก ${change.sourceFeature}`));
-            }
-          } else {
-            ncb = { ...ncb, enemies: ncb.enemies.map((e: any) => {
-              if (e.uid === change.targetId) {
-                const conds = e.conditions || [];
-                if (!conds.includes(cid)) {
-                  entries.push(entrySystem(`   → ${e.th} ติดสภาวะ ${cid} — จาก ${change.sourceFeature}`));
-                  return { ...e, conditions: [...conds, cid] };
-                }
-              }
-              return e;
-            })};
-          }
-          emitConditionApplied(change.targetId, cid, change.sourceFeature);
-          break;
-        }
-        case "deal_damage": {
-          const dmg = change.payload.damageFormula ? rollFormula(change.payload.damageFormula).total : 0;
-          if (dmg > 0) {
-            let newBridge = ncb.bridge;
-            const newEnemies = ncb.enemies.map((e: any) => {
-              if (e.uid === change.targetId) {
-                const dd = applyEnemyDamage(newBridge, e.uid, dmg, e.hpNow, e.ac, e.th);
-                newBridge = dd.bridge;
-                entries.push(entrySystem(`   → ${e.th} โดน ${dmg} ${change.payload.damageType || ""} (${change.sourceFeature}) → ${dd.hp} HP`));
-                return { ...e, hpNow: dd.hp };
-              }
-              return e;
-            });
-            ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
-            emitDamageDealt("player", change.targetId, dmg, change.payload.damageType);
-          }
-          break;
-        }
-        case "heal": {
-          const heal = change.payload.healFormula ? rollFormula(change.payload.healFormula).total : 0;
-          if (heal > 0 && (change.targetId === "player" || change.targetId === nc.id)) {
-            nc = { ...nc, hp: Math.min(nc.maxHp, nc.hp + heal) };
-            entries.push(entrySystem(`   → ฟื้น ${heal} HP (${change.sourceFeature})`));
-            emitHeal("player", change.targetId, heal);
-          }
-          break;
-        }
-        case "narrate":
-          break;
-        case "reroll_damage": {
-          // B4 fix: Savage Attacker (D&D 2024) — reroll weapon damage dice, keep higher total
-          // The trigger fires after a weapon hit. We need the weapon's damage formula.
-          // Since we don't have access to the weapon here, we store lastDamageRoll on the combat state.
-          // Fallback: if no lastDamageRoll tracked, reroll 1d8 (average weapon die) as approximation
-          const lastRoll = (cb as any)._lastWeaponDamageRoll;
-          let rerollTotal: number;
-          let rerollFormula: string;
-          if (lastRoll && lastRoll.formula) {
-            const reroll = rollFormula(lastRoll.formula);
-            rerollTotal = reroll.total;
-            rerollFormula = lastRoll.formula;
-            // Keep higher of original vs reroll
-            if (rerollTotal > lastRoll.total) {
-              const bonusDmg = rerollTotal - lastRoll.total;
-              let newBridge = ncb.bridge;
-              const newEnemies = ncb.enemies.map((e: any) => {
-                if (e.uid === change.targetId) {
-                  const dd = applyEnemyDamage(newBridge, e.uid, bonusDmg, e.hpNow, e.ac, e.th);
-                  newBridge = dd.bridge;
-                  entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} > ${lastRoll.total} → +${bonusDmg} → ${dd.hp} HP`));
-                  return { ...e, hpNow: dd.hp };
-                }
-                return e;
-              });
-              ncb = { ...ncb, enemies: newEnemies, bridge: newBridge };
-              emitDamageDealt("player", change.targetId, bonusDmg, lastRoll.damageType || "slashing");
-            } else {
-              entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: reroll ${rerollFormula}=${rerollTotal} ≤ ${lastRoll.total} → keep original`));
-            }
-            // Consume the tracked roll (once per turn)
-            (cb as any)._lastWeaponDamageRoll = null;
-          } else {
-            // No tracked roll — skip (shouldn't happen if trigger fires correctly)
-            entries.push(entrySystem(`   ⚔️ ${change.sourceFeature}: no weapon damage to reroll`));
-          }
-          break;
-        }
-      }
-    }
-    return { cc: nc, cb: ncb };
   }
 
   /**
@@ -959,92 +867,6 @@ export default function DnDSolo() {
     return cb;
   }
 
-  // Runs the enemy portion of the initiative-interleaved turn loop. The bridge's
-  // own turn pointer (getCombatView().currentCombatantId) is the SINGLE source of
-  // truth for whose turn it is: each enemy acts in initiative order via enemyTurn,
-  // and the loop yields back to the interactive UI the instant the pointer lands
-  // on the player. Returns the player clone (nc), like the former enemyAttacks
-  // batch did.
-  //   advancePastPlayer=true  → the player's own turn just ended (A/B/C paths):
-  //     advance the bridge past the player before running enemies.
-  //   advancePastPlayer=false → combat start (D/E): the pointer already sits on
-  //     the first combatant, so run from where it is.
-  function runEnemyPhase(cb: any, cc: any, entries: any[], advancePastPlayer: boolean) {
-    let nc = { ...cc, buffs: [...(cc.buffs || [])] };
-    // Recompute AC to include all current buffs (Haste, Shield of Faith, Shield reaction, Slow, etc.)
-    nc.ac = computeAC(nc);
-    const enemyHasAdv = nc.conditions.some((k: string) => ENEMY_ADV_CONDS.includes(k));
-    const aliveEnemies = cb.enemies.filter((e: any) => e.hpNow > 0);
-    // Uncanny Dodge halves only the FIRST hit across all enemies each round. It now
-    // lives on cb so it survives across runEnemyPhase calls (a round's enemy turns
-    // may span more than one call) and resets on each bridge round rollover.
-    if (cb.uncannyUsed === undefined) cb.uncannyUsed = false;
-    // Advance the bridge one turn; reset the round-scoped Uncanny flag whenever the
-    // advance rolls the initiative order back to the top (a new round begins).
-    const advance = () => {
-      const before = getCombatView(cb.bridge).round;
-      cb.bridge = endTurn(cb.bridge).state;
-      if (getCombatView(cb.bridge).round > before) cb.uncannyUsed = false;
-    };
-    if (advancePastPlayer) advance();
-    // Build the injected-deps bundle once — component/module-local functions the
-    // pure engine turn (runEnemyTurn) cannot import (they close over idRef / component scope).
-    const deps: EnemyAIDeps = {
-      attackMod, rollD20, rollFormula, hitEnemy, enemyHasAttackDisadv,
-      exhaustionPenalty, saveMod, hasFeature, hasConcentration,
-      getActiveConcentrationBuff, gridDistance, entrySystem, nextId,
-    };
-    const maxIter = getCombatView(cb.bridge).order.length * 2 + 2;
-    for (let i = 0; i < maxIter; i++) {
-      const view = getCombatView(cb.bridge);
-      const currentId = view.currentCombatantId;
-      const idx = view.order.findIndex((o: any) => o.id === currentId);
-      // Single source of truth: derive the UI's current-turn index from the bridge
-      // pointer — never maintain it in parallel.
-      cb.currentInitIdx = idx;
-      const cur = view.order[idx];
-      if (!cur || cur.isPlayer) break; // yield to the interactive UI
-      const e = cb.enemies.find((x: any) => x.uid === currentId);
-      if (e && e.hpNow > 0) {
-        const res = runEnemyTurn(deps, e, cb, cc, nc, entries, aliveEnemies, enemyHasAdv, cb.uncannyUsed);
-        cb.uncannyUsed = res.uncannyUsed;
-        if (res.stop) break; // player dropped to 0 HP — stop the enemy phase
-      }
-      advance();
-      if (cb.enemies.filter((x: any) => x.hpNow > 0).length === 0) break; // all enemies dead
-    }
-    return nc;
-  }
-
-  function checkCombatEnd(cb: any, cc: any, entries: any[]) {
-    const alive = cb.enemies.filter((e: any) => e.hpNow > 0);
-    if (alive.length === 0) {
-      const totalXP = cb.enemies.reduce((a: number, e: any) => a + (e.xp || 50), 0);
-      const numEnemies = cb.enemies.length;
-      entries.push(entrySystem(`🏆 ชนะ! กำจัดศัตรูทั้งหมดแล้ว`));
-      const nc = gainXP(cc, totalXP, (t) => entries.push(entrySystem(t)));
-      // Phase 1 fix: auto-generate loot from reward tables (instead of relying on LLM freeform)
-      // D&D 2024: calculate difficulty from XP + party level, then roll reward items
-      const difficulty = calculateDifficulty(totalXP, numEnemies, nc.level, 1);
-      const reward = calculateReward(difficulty, totalXP, nc.level);
-      const rolledItems = rollRewardItems(reward);
-      if (reward.gold > 0) {
-        nc.gold = (nc.gold || 0) + reward.gold;
-        entries.push(entrySystem(`💰 +${reward.gold} gp (loot จาก combat — ${difficulty})`));
-      }
-      if (rolledItems.length > 0) {
-        rolledItems.forEach((item: string) => {
-          nc.inventory.push(item);
-          entries.push(entrySystem(`📦 ได้รับ: ${item} (loot จาก combat)`));
-        });
-      }
-      // Domain 36: mark current dungeon room cleared (and boss defeated if applicable)
-      handleCombatEndDungeonUpdate(entries, true);
-      return { ended: true, cc: nc };
-    }
-    return { ended: false, cc };
-  }
-
   /** Phase 1 fix: build pacing object for buildSystemPrompt from narrativeEngine state */
   function getPacingForPrompt(): any {
     if (!narrativeEngine) return null;
@@ -1416,33 +1238,6 @@ export default function DnDSolo() {
     return { cc: nc, cb: ncb, endsTurn };
   }
 
-  // Shared death-save state transition (D&D 5e/2024 dying rules): 3 successes = stable,
-  // 3 failures = dead, nat-20 = revive at 1 HP, nat-1 = 2 failures. The pure dice/math +
-  // HP/dead bookkeeping lives in engine combat.applyDeathSaveRoll; this helper is the
-  // React-facing wrapper (setPhase, log entries) so both the in-combat turn loop
-  // (playerCombatAction) and out-of-combat hazard damage (submitAction) share one code path.
-  function resolveDeathSave(cc: any, entries: any[], inCombat: boolean): { cc: any; state: "unconscious" | "stable" | "dead" | "revived" } {
-    const r = rollD20(0);
-    const prev = { successes: cc.deathSaves.s, failures: cc.deathSaves.f, hp: cc.hp };
-    const result = applyDeathSaveRoll(prev, r.die);
-    const dsr = result.rollResult;
-    const nc = { ...cc, hp: result.hp, deathSaves: { s: result.deathSaves.successes, f: result.deathSaves.failures }, dead: result.dead };
-
-    if (dsr.state === "revived") { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, success: true, extra: "Nat 20! Revived with 1 HP" }); }
-    else if (dsr.successes > prev.successes) { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: true, extra: `Success ${dsr.successes}/3` }); }
-    else { entries.push({ id: nextId(), type: "roll", title: "Death Save", roll: r, dc: 10, success: false, extra: `Failure ${dsr.failures}/3` }); }
-
-    if (result.state === "dead") {
-      entries.push(entrySystem(`☠️ ${nc.name} เสียชีวิต...`));
-      setPhase("dead");
-      return { cc: nc, state: "dead" };
-    }
-    if (result.state === "stable") {
-      entries.push(entrySystem(inCombat ? "อาการคงที่ — ศัตรูทิ้งคุณไว้และจากไป" : "อาการคงที่ — รอดชีวิตอย่างหวุดหวิด"));
-    }
-    return { cc: nc, state: result.state };
-  }
-
   function playerCombatAction(kind: string, payload?: any) {
     const combat0 = combatRef.current;
     const c0 = cRef.current;
@@ -1456,7 +1251,7 @@ export default function DnDSolo() {
     //     wraps engine.combat.rollDeathSave; 3 successes = stable, 3 failures = dead,
     //     nat-20 = revive 1 HP, nat-1 = 2 failures) ---
     if (cc.hp <= 0 && !cc.dead) {
-      const dsResult = resolveDeathSave(cc, entries, true);
+      const dsResult = resolveDeathSave(cc, entries, true, combatDeps());
       cc = dsResult.cc;
       if (dsResult.state === "dead") {
         const finalLog = [...log0, ...entries];
@@ -1491,7 +1286,7 @@ export default function DnDSolo() {
       const proneIdx = cc.conditions.indexOf("prone");
       if (proneIdx >= 0) { cc.conditions.splice(proneIdx, 1); entries.push(entrySystem("🧍 Stood up — no longer Prone")); }
       // enemies act
-      cc = runEnemyPhase(cb, cc, entries, true);
+      cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
       cb.round += 1;
       cb.bonusUsed = false; cb.extraAction = false;
       const finalLog = [...log0, ...entries];
@@ -1840,7 +1635,7 @@ export default function DnDSolo() {
           // Query feature triggers for on_hit (e.g. savage_attacker, poison_weapon)
           const hitTriggers = queryFeatureTriggers("on_hit", "player", target.uid, { weapon: w.th, damage: dmg }, characterHasFeatureById);
           if (hitTriggers.length > 0) {
-            const applied = applyPendingChanges(hitTriggers, cc, cb, entries);
+            const applied = applyPendingChanges(hitTriggers, cc, cb, (t) => entries.push(entrySystem(t)));
             cc = applied.cc; cb = applied.cb;
             // Re-find target after pending changes may have updated enemy list
             const updatedTarget = cb.enemies.find((e: any) => e.uid === target.uid);
@@ -1954,7 +1749,7 @@ export default function DnDSolo() {
           }
           setCombatMenu("");
           // win check
-          let endW = checkCombatEnd(cb, cc, entries);
+          let endW = checkCombatEnd(cb, cc, entries, combatDeps());
           cc = endW.cc;
           if (endW.ended) {
             const finalLog = [...log0, ...entries];
@@ -2007,7 +1802,7 @@ export default function DnDSolo() {
               entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
             }
           }
-          endW = checkCombatEnd(cb, cc, entries);
+          endW = checkCombatEnd(cb, cc, entries, combatDeps());
           cc = endW.cc;
           if (endW.ended) {
             const finalLog = [...log0, ...entries];
@@ -2016,7 +1811,7 @@ export default function DnDSolo() {
             narrateCombatEvent(`[จบ combat] ${cc.name} ชนะ! กำจัด ${cb.enemies.map((e:any)=>e.th).join(", ")}. HP คงเหลือ ${cc.hp}/${cc.maxHp}. บรรยายผลหลังการต่อสู้และอาจให้ loot — อย่าลืมอ้างถึงแผลที่ได้รับและสภาพรอบตัวในฉากเดิม`, cc, scene, finalLog, history);
             return;
           }
-          cc = runEnemyPhase(cb, cc, entries, true);
+          cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
           // Emit turn-end for player + turn-start for new round
           emitTurnEnd("player", cb.round);
           cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
@@ -2375,7 +2170,7 @@ export default function DnDSolo() {
     }
 
     // win check
-    let endW = checkCombatEnd(cb, cc, entries);
+    let endW = checkCombatEnd(cb, cc, entries, combatDeps());
     cc = endW.cc;
     if (endW.ended || fled) {
       const finalLog = [...log0, ...entries];
@@ -2431,7 +2226,7 @@ export default function DnDSolo() {
           entries.push({ id: nextId(), type: "roll", title: `👻 Spirit Guardians → ${t.th} (WIS save DC ${dc})`, roll: sv, dc, success: failed, extra: `${dmg} radiant → ${t.th} ${t.hpNow<=0?"dead!":`${t.hpNow} HP left`}` });
         }
       }
-      endW = checkCombatEnd(cb, cc, entries);
+      endW = checkCombatEnd(cb, cc, entries, combatDeps());
       cc = endW.cc;
       if (endW.ended) {
         const finalLog = [...log0, ...entries];
@@ -2442,7 +2237,7 @@ export default function DnDSolo() {
       // Task #14: sidekick assist acts at the END of the player's turn, before
       // the enemies. Its damage routes through hitEnemy (bridge-owned HP).
       runSidekickAssist(cb, cc, (t) => entries.push(entrySystem(t)), combatTargetId);
-      const skEnd = checkCombatEnd(cb, cc, entries);
+      const skEnd = checkCombatEnd(cb, cc, entries, combatDeps());
       cc = skEnd.cc;
       if (skEnd.ended) {
         const finalLog = [...log0, ...entries];
@@ -2452,7 +2247,7 @@ export default function DnDSolo() {
       }
       // Tick buff durations BEFORE enemies attack (= end of player's turn)
       cc = tickBuffs(cc, (t) => entries.push(entrySystem(t)));
-      cc = runEnemyPhase(cb, cc, entries, true);
+      cc = runEnemyPhase(cb, cc, entries, true, combatDeps());
       cb.round += 1; cb.bonusUsed = false; cb.extraAction = false; cb.movementLeft = cc.speed || 30; cb.hasMoved = false; cb.enemies.forEach((e:any) => e.reactionUsed = false);
       if (cb.bridge) cb.bridge = setMovement(cb.bridge, "player", cb.movementLeft);
       // End of round: rage expires if no attack happened this round
@@ -2759,10 +2554,10 @@ export default function DnDSolo() {
         }
       }
 
-      if (cb && !cb.playerFirst) { cc = runEnemyPhase(cb, cc, entries, false); cb.round += 1; }
+      if (cb && !cb.playerFirst) { cc = runEnemyPhase(cb, cc, entries, false, combatDeps()); cb.round += 1; }
 
       if (cc.hp <= 0 && !cc.dead && !cb) {
-        const dsResult = resolveDeathSave(cc, entries, false);
+        const dsResult = resolveDeathSave(cc, entries, false, combatDeps());
         cc = dsResult.cc;
       }
 
@@ -3177,7 +2972,7 @@ export default function DnDSolo() {
       }
       const finalHist = [...hist, { role: "assistant", content: JSON.stringify(res) }];
       const finalLog = [...entries];
-      if (ncb && !ncb.playerFirst) { nc = runEnemyPhase(ncb, nc, finalLog, false); ncb.round += 1; }
+      if (ncb && !ncb.playerFirst) { nc = runEnemyPhase(ncb, nc, finalLog, false, combatDeps()); ncb.round += 1; }
       setC(nc); setScene(sc); setLog(finalLog); setCombat(ncb); setHistory(finalHist); setMap(mp);
       persist(nc, sc, finalLog, ncb, finalHist);
     } catch (e: any) {
